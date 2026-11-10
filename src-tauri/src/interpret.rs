@@ -402,7 +402,7 @@ fn bitrate_mbps(line: &str) -> Option<f64> {
 
 fn iperf3(lines: &[String]) -> Option<StepResult> {
     if let Some(err) = lines.iter().find(|l| l.contains("iperf3: error")) {
-        let text = if err.contains("busy") {
+        let text = if err.contains("busy") || err.contains("control message") || err.contains("reset by peer") {
             "서버가 다른 사람의 측정을 처리하는 중입니다. 서버 포트를 5202~5210 중 하나로 바꾸거나 다른 서버를 골라 다시 실행하세요."
         } else if err.contains("unable to connect") || err.contains("refused") || err.contains("timed out") {
             "iperf3 서버에 연결하지 못했습니다. 공개 서버라면 포트를 바꾸거나 다른 서버를 고르고, 사내 서버라면 `iperf3 -s`가 실행 중인지와 포트가 열려 있는지 확인하세요."
