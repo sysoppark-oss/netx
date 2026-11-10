@@ -22,6 +22,7 @@ const TOOL_FILES: &[&str] = &[
     include_str!("../../tools/iperf3.json"),
     include_str!("../../tools/winports.json"),
     include_str!("../../tools/portscan.json"),
+    include_str!("../../tools/netmap.json"),
 ];
 
 const RECIPE_FILES: &[&str] = &[
@@ -31,6 +32,7 @@ const RECIPE_FILES: &[&str] = &[
     include_str!("../../recipes/port_hunt.json"),
     include_str!("../../recipes/bandwidth.json"),
     include_str!("../../recipes/quick_capture.json"),
+    include_str!("../../recipes/network_map.json"),
 ];
 
 pub struct Registry {
@@ -142,8 +144,8 @@ mod tests {
     #[test]
     fn embedded_schemas_load_and_pass_self_check() {
         let reg = Registry::load().expect("스키마 로드");
-        assert_eq!(reg.tools().len(), 12);
-        assert_eq!(reg.recipes().len(), 6);
+        assert_eq!(reg.tools().len(), 13);
+        assert_eq!(reg.recipes().len(), 7);
     }
 
     #[test]

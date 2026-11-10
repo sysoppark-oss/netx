@@ -189,3 +189,177 @@ mod tests {
         assert!(portscan(&["127.0.0.1".into()], &|_| {}).await.is_err());
     }
 }
+
+// ------------------------------------------------------------------ netmap
+
+/// 장비가 켜져 있는지와 종류를 짐작하는 데 쓰는 포트
+const MAP_PORTS: &[u16] = &[22, 23, 53, 80, 139, 443, 445, 554, 3389, 5000, 8080, 9100, 62078];
+
+/// 이웃(ARP) 목록에서 읽은 (IP, MAC)
+pub fn parse_neighbors_windows(stdout: &str) -> Vec<(Ipv4Addr, String)> {
+    // "192.168.0.1 AA-BB-CC-DD-EE-FF" 형태의 줄
+    stdout.lines().filter_map(|l| {
+        let mut c = l.split_whitespace();
+        let ip: Ipv4Addr = c.next()?.parse().ok()?;
+        Some((ip, normalize_mac(c.next()?)?))
+    }).collect()
+}
+
+pub fn parse_neighbors_linux(stdout: &str) -> Vec<(Ipv4Addr, String)> {
+    let v: serde_json::Value = serde_json::from_str(stdout).unwrap_or(serde_json::Value::Null);
+    v.as_array().map(|a| a.iter().filter_map(|n| {
+        let ip: Ipv4Addr = n.get("dst")?.as_str()?.parse().ok()?;
+        Some((ip, normalize_mac(n.get("lladdr")?.as_str()?)?))
+    }).collect()).unwrap_or_default()
+}
+
+/// MAC을 "aa:bb:cc:dd:ee:ff"로 맞춘다. 빈 주소, 브로드캐스트, 멀티캐스트는 버린다.
+pub fn normalize_mac(text: &str) -> Option<String> {
+    let hex: String = text.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>().to_lowercase();
+    if hex.len() != 12 || text.chars().any(|c| !(c.is_ascii_hexdigit() || c == '-' || c == ':')) {
+        return None;
+    }
+    let first = u8::from_str_radix(&hex[..2], 16).ok()?;
+    if hex == "000000000000" || hex == "ffffffffffff" || first & 1 == 1 {
+        return None;
+    }
+    Some(hex.as_bytes().chunks(2).map(|p| std::str::from_utf8(p).unwrap_or("")).collect::<Vec<_>>().join(":"))
+}
+
+async fn neighbors() -> Vec<(Ipv4Addr, String)> {
+    if cfg!(target_os = "windows") {
+        const SCRIPT: &str = "$ErrorActionPreference='SilentlyContinue'; Get-NetNeighbor -AddressFamily IPv4 | Where-Object { $_.State -ne 'Unreachable' -and $_.State -ne 'Incomplete' } | ForEach-Object { \"$($_.IPAddress) $($_.LinkLayerAddress)\" }";
+        crate::netinfo::run("powershell.exe", &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", SCRIPT]).await.map(|o| parse_neighbors_windows(&o)).unwrap_or_default()
+    } else {
+        crate::netinfo::run("ip", &["-j", "-4", "neigh"]).await.map(|o| parse_neighbors_linux(&o)).unwrap_or_default()
+    }
+}
+
+/// 내 주소와 길이에서 조사할 대역을 정한다. 너무 넓으면 내 주소가 든 /24로 줄인다.
+pub fn auto_cidr(ip: Ipv4Addr, prefix: u8) -> String {
+    let prefix = if (22..=30).contains(&prefix) { prefix } else { 24 };
+    let mask = u32::MAX << (32 - u32::from(prefix));
+    format!("{}/{prefix}", Ipv4Addr::from(u32::from(ip) & mask))
+}
+
+/// 내부 네트워크 조사. 출력: `NET <대역> GW <게이트웨이|-> ME <내 주소|->` 한 줄과 장비마다 `NODE <ip> <mac|-> <역할> <열린 포트|->`.
+pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> Result<i32, String> {
+    let mut values = argv.iter().filter(|a| *a != "--");
+    let target = values.next().ok_or("대역이 없습니다")?;
+    if values.next().is_some() {
+        return Err("인자가 너무 많습니다".into());
+    }
+    let info = crate::netinfo::current().await;
+    let me: Option<Ipv4Addr> = info.ip.as_deref().and_then(|s| s.parse().ok());
+    let gateway: Option<Ipv4Addr> = info.gateway.as_deref().and_then(|s| s.parse().ok());
+    let cidr = if target == "auto" {
+        let ip = me.ok_or("내 네트워크 주소를 알 수 없습니다. 대역을 직접 적어 주세요.")?;
+        auto_cidr(ip, info.prefix.unwrap_or(24))
+    } else {
+        target.clone()
+    };
+    let hosts = cidr_hosts(&cidr).ok_or("대역 형식이 아닙니다 (예: 192.168.0.0/24)")?;
+    if hosts.is_empty() || hosts.len() > 1022 {
+        return Err("대역이 너무 넓습니다. /22 이상으로 좁혀 주세요.".into());
+    }
+    if !hosts.iter().all(|h| h.is_private() || h.is_loopback() || h.is_link_local()) && target == "auto" {
+        return Err("내 네트워크가 사설 대역이 아닙니다. 조사할 대역을 직접 적어 주세요.".into());
+    }
+    emit(format!("{cidr} 대역의 주소 {}개를 조사합니다. (포트 {}종 연결 시도 + 이웃 목록)", hosts.len(), MAP_PORTS.len()));
+
+    // 연결되거나(열림) 거절당하면(닫힘) 켜져 있는 장비다. 응답이 없으면 알 수 없다.
+    let gate = Arc::new(Semaphore::new(CONCURRENCY));
+    let mut set: JoinSet<(Ipv4Addr, Vec<u16>, bool)> = JoinSet::new();
+    for host in hosts.iter().copied() {
+        let gate = gate.clone();
+        set.spawn(async move {
+            let mut probes: JoinSet<(u16, u8)> = JoinSet::new();
+            for port in MAP_PORTS.iter().copied() {
+                let gate = gate.clone();
+                probes.spawn(async move {
+                    let Ok(_permit) = gate.acquire().await else { return (port, 0) };
+                    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(SocketAddr::new(IpAddr::V4(host), port))).await {
+                        Ok(Ok(_)) => (port, 2),
+                        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => (port, 1),
+                        _ => (port, 0),
+                    }
+                });
+            }
+            let (mut open, mut alive) = (Vec::new(), false);
+            while let Some(r) = probes.join_next().await {
+                match r {
+                    Ok((p, 2)) => {
+                        open.push(p);
+                        alive = true;
+                    }
+                    Ok((_, 1)) => alive = true,
+                    _ => {}
+                }
+            }
+            open.sort_unstable();
+            (host, open, alive)
+        });
+    }
+    let mut found: Vec<(Ipv4Addr, Vec<u16>)> = Vec::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok((host, open, true)) = r {
+            found.push((host, open));
+        }
+    }
+
+    // 연결 시도 뒤에는 같은 망의 장비가 이웃 목록에 올라온다(포트를 다 막은 장비도 포함).
+    let macs = neighbors().await;
+    for (ip, _) in &macs {
+        if hosts.contains(ip) && !found.iter().any(|(h, _)| h == ip) {
+            found.push((*ip, vec![]));
+        }
+    }
+    if let Some(ip) = me.filter(|ip| hosts.contains(ip) && !found.iter().any(|(h, _)| h == ip)) {
+        found.push((ip, vec![]));
+    }
+    found.sort_by_key(|(h, _)| u32::from(*h));
+
+    let show = |ip: Option<Ipv4Addr>| ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
+    emit(format!("NET {cidr} GW {} ME {}", show(gateway), show(me)));
+    for (ip, open) in &found {
+        let mac = macs.iter().find(|(m, _)| m == ip).map(|(_, m)| m.as_str()).unwrap_or("-");
+        let role = if Some(*ip) == me { "me" } else if Some(*ip) == gateway { "gateway" } else { "host" };
+        let ports = if open.is_empty() { "-".to_string() } else { open.iter().map(u16::to_string).collect::<Vec<_>>().join(",") };
+        emit(format!("NODE {ip} {mac} {role} {ports}"));
+    }
+    emit(format!("조사 끝: 장비 {}대를 찾았습니다.", found.len()));
+    Ok(if found.is_empty() { 1 } else { 0 })
+}
+
+#[cfg(test)]
+mod netmap_tests {
+    use super::*;
+
+    #[test]
+    fn neighbor_lists_and_mac_rules() {
+        let w = parse_neighbors_windows("192.168.0.1 AA-BB-CC-DD-EE-FF\r\n192.168.0.255 FF-FF-FF-FF-FF-FF\r\n224.0.0.22 01-00-5E-00-00-16\r\n192.168.0.9 00-00-00-00-00-00\r\nbad line\r\n");
+        assert_eq!(w, [(Ipv4Addr::new(192, 168, 0, 1), "aa:bb:cc:dd:ee:ff".to_string())]);
+        let l = parse_neighbors_linux(r#"[{"dst":"192.0.2.1","dev":"eth0","lladdr":"02:fc:00:00:00:05","state":["REACHABLE"]},{"dst":"192.0.2.9","state":["FAILED"]}]"#);
+        assert_eq!(l, [(Ipv4Addr::new(192, 0, 2, 1), "02:fc:00:00:00:05".to_string())]);
+        assert_eq!(normalize_mac("zz-bb-cc-dd-ee-ff; rm"), None);
+    }
+
+    #[test]
+    fn auto_range_stays_small() {
+        assert_eq!(auto_cidr(Ipv4Addr::new(192, 168, 123, 103), 24), "192.168.123.0/24");
+        assert_eq!(auto_cidr(Ipv4Addr::new(10, 1, 5, 9), 8), "10.1.5.0/24");
+        assert_eq!(auto_cidr(Ipv4Addr::new(172, 20, 5, 9), 22), "172.20.4.0/22");
+    }
+
+    #[tokio::test]
+    async fn maps_a_single_local_address() {
+        let lines = std::sync::Mutex::new(Vec::<String>::new());
+        let emit = |l: String| lines.lock().unwrap().push(l);
+        // 127.0.0.1은 닫힌 포트에 거절로 답하므로 켜져 있는 장비로 잡힌다.
+        assert_eq!(netmap(&["127.0.0.1/32".into()], &emit).await.unwrap(), 0);
+        let out = lines.lock().unwrap().join("\n");
+        assert!(out.contains("NET 127.0.0.1/32 GW "), "{out}");
+        assert!(out.contains("NODE 127.0.0.1 "), "{out}");
+        assert!(netmap(&["10.0.0.0/16".into()], &|_| {}).await.is_err());
+    }
+}

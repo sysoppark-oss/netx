@@ -92,6 +92,7 @@ fn generic_expect(tool: &str) -> Option<&'static str> {
         "ss" => "소켓 목록이 나온다. users 항목에 프로세스 이름과 번호가 보인다.",
         "lsof" => "포트나 파일을 연 프로세스의 이름(COMMAND)과 번호(PID)가 나온다.",
         "iperf3" => "구간마다 Bitrate(전송 속도)가 나오고 마지막 SUM 줄이 평균이다.",
+        "netmap" => "찾은 장비마다 주소, MAC, 열린 포트가 나오고 구성도가 그려진다.",
         "portscan" => "열린 포트가 있는 장비마다 한 줄씩 나온다. 아무것도 없으면 고른 포트가 모두 닫혀 있거나 막혀 있다는 뜻.",
         "winports" => "PROCESS 열이 포트를 쓰는 Windows 프로그램, PID가 프로세스 번호.",
         _ => return None,

@@ -18,6 +18,10 @@ pub fn estimate_secs(tool: &str, argv: &[String]) -> Option<u32> {
         "nc" => value_of(argv, &["-w"])?,
         "curl" => value_of(argv, &["-m", "--max-time"])?,
         "winports" => 4.0,
+        "netmap" => {
+            let hosts = argv.iter().find(|a| *a != "--").and_then(|t| crate::engine::builtin::cidr_hosts(t)).map(|h| h.len()).unwrap_or(254) as f64;
+            (hosts * 13.0 / 256.0).ceil() * 0.8 + 6.0
+        }
         "portscan" => {
             let v: Vec<&String> = argv.iter().filter(|a| *a != "--").collect();
             let hosts = v.first().and_then(|t| crate::engine::builtin::cidr_hosts(t)).map(|h| h.len()).unwrap_or(1) as f64;

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { killProcess, openTarget } from "../lib/backend";
 import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 import { ChartView } from "./Charts";
+import { TopologyView } from "./Topology";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
 const RISK_STYLE: Record<Risk, string> = {
@@ -341,6 +342,7 @@ function ResultView({ result, showFacts, level }: { result: StepResult; showFact
           ))}
         </div>
       )}
+      {result.topology && <TopologyView topology={result.topology} />}
       {result.targets.length > 0 && <TargetList targets={result.targets} allowTerminal={showFacts} />}
       {result.processes.length > 0 && showFacts && <ProcessList processes={result.processes} level={level} />}
     </div>

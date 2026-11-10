@@ -163,6 +163,7 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
         let work = async {
             match job.program.as_str() {
                 "portscan" => builtin::portscan(&job.argv, &emit).await,
+                "netmap" => builtin::netmap(&job.argv, &emit).await,
                 other => Err(format!("내장 도구가 아닙니다: {other}")),
             }
         };

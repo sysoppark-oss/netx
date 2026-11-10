@@ -135,7 +135,7 @@ fn is_loopback(name: &str) -> bool {
     n == "lo" || n.contains("loopback")
 }
 
-async fn run(program: &str, args: &[&str]) -> Option<String> {
+pub(crate) async fn run(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     hide_console_window(&mut cmd);

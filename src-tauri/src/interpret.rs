@@ -59,6 +59,29 @@ pub struct StepResult {
     pub targets: Vec<Target>,
     /// 포트를 쓰고 있는 Windows 프로세스(종료 버튼용)
     pub processes: Vec<Proc>,
+    /// 네트워크 구성도
+    pub topology: Option<Topology>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Topology {
+    pub cidr: String,
+    pub gateway: Option<String>,
+    pub me: Option<String>,
+    pub nodes: Vec<Node>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Node {
+    pub ip: String,
+    pub mac: Option<String>,
+    /// me, gateway, host
+    pub role: String,
+    /// 추정 종류: router, pc, server, printer, camera, phone, network, unknown
+    pub kind: String,
+    pub label: String,
+    pub vendor: String,
+    pub ports: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,7 +93,7 @@ pub struct Proc {
 
 impl StepResult {
     fn new(light: Light, text: impl Into<String>) -> Self {
-        StepResult { light, text: text.into(), facts: vec![], charts: vec![], targets: vec![], processes: vec![] }
+        StepResult { light, text: text.into(), facts: vec![], charts: vec![], targets: vec![], processes: vec![], topology: None }
     }
     fn fact(mut self, label: &str, value: impl Into<String>) -> Self {
         self.facts.push(Fact { label: label.into(), value: value.into() });
@@ -97,6 +120,7 @@ pub fn interpret(program: &str, lines: &[String], status: StepStatus, exit_code:
         "iperf3" => iperf3(lines),
         "winports" => winports(lines),
         "portscan" => portscan(lines),
+        "netmap" => netmap(lines),
         "ss" => listing(lines, "WSL 안에서 이 조건에 맞는 소켓"),
         "lsof" => listing(lines, "WSL 안에서 이 포트를 연 프로세스"),
         "tcpdump" => tcpdump(lines),
@@ -557,6 +581,107 @@ fn portscan(lines: &[String]) -> Option<StepResult> {
     Some(r)
 }
 
+/// MAC 앞 세 자리로 본 제조사(자주 보이는 것만). 둘째 자리의 2번 비트가 켜져 있으면 임의로 만든 주소다.
+fn vendor(mac: &str) -> &'static str {
+    let first = u8::from_str_radix(mac.get(..2).unwrap_or("00"), 16).unwrap_or(0);
+    if first & 2 == 2 {
+        return "임의 MAC(휴대폰·태블릿일 수 있음)";
+    }
+    match mac.get(..8).unwrap_or("") {
+        "00:1a:11" | "3c:5a:b4" | "f4:f5:d8" | "54:60:09" => "Google",
+        "00:03:93" | "00:1c:b3" | "3c:07:54" | "a4:5e:60" | "f0:18:98" | "ac:bc:32" | "d0:03:4b" => "Apple",
+        "00:07:ab" | "00:12:fb" | "00:16:32" | "5c:0a:5b" | "8c:77:12" | "bc:14:85" | "f8:04:2e" | "78:bd:bc" => "Samsung",
+        "00:1e:75" | "00:e0:91" | "10:68:3f" | "58:a2:b5" | "a8:23:fe" | "cc:fa:00" => "LG",
+        "00:08:9f" | "00:26:66" | "64:e5:99" | "88:36:6c" | "90:9f:33" | "70:5d:cc" => "EFM ipTIME",
+        "00:0c:29" | "00:50:56" | "00:05:69" => "VMware",
+        "00:15:5d" => "Microsoft Hyper-V",
+        "08:00:27" => "VirtualBox",
+        "b8:27:eb" | "dc:a6:32" | "e4:5f:01" | "d8:3a:dd" => "Raspberry Pi",
+        "00:00:0c" | "00:1b:54" | "00:25:45" | "58:97:1e" | "f4:cf:e2" => "Cisco",
+        "00:80:77" | "00:1b:a9" | "30:05:5c" | "3c:2a:f4" => "Brother",
+        "00:00:48" | "00:26:ab" | "64:eb:8c" | "ac:18:26" => "Epson",
+        "00:1e:0b" | "3c:d9:2b" | "9c:b6:54" | "f4:39:09" => "HP",
+        "00:00:85" | "00:1e:8f" | "2c:9e:fc" | "f4:81:39" => "Canon",
+        "00:11:32" => "Synology",
+        "50:c7:bf" | "ec:08:6b" | "f4:f2:6d" | "14:cc:20" | "98:da:c4" => "TP-Link",
+        "00:14:d1" | "00:50:ba" | "1c:7e:e5" | "c8:d3:a3" => "D-Link",
+        "00:1f:c6" | "04:d9:f5" | "2c:fd:a1" | "70:4d:7b" => "ASUS",
+        "28:6c:07" | "64:09:80" | "78:11:dc" | "f8:a2:d6" => "Xiaomi",
+        "bc:ad:28" | "c0:56:e3" | "44:19:b6" | "4c:bd:8f" => "Hikvision",
+        "00:1b:21" | "3c:97:0e" | "a0:36:9f" | "f8:b1:56" | "00:1e:67" => "Intel",
+        "00:e0:4c" | "52:54:00" => "Realtek",
+        _ => "",
+    }
+}
+
+/// 열린 포트와 역할로 장비 종류를 짐작한다. (종류, 화면에 보일 이름)
+fn guess_kind(role: &str, ports: &[u16], vendor: &str) -> (&'static str, &'static str) {
+    let has = |p: u16| ports.contains(&p);
+    if role == "gateway" {
+        ("router", "공유기(게이트웨이)")
+    } else if role == "me" {
+        ("pc", "내 PC")
+    } else if has(9100) || matches!(vendor, "Brother" | "Epson" | "Canon") {
+        ("printer", "프린터")
+    } else if has(554) || vendor == "Hikvision" {
+        ("camera", "카메라·녹화기")
+    } else if has(62078) || vendor == "Apple" && ports.is_empty() || vendor.starts_with("임의 MAC") && ports.is_empty() {
+        ("phone", "휴대폰·태블릿")
+    } else if has(3389) || has(445) || has(139) {
+        ("pc", "Windows PC·파일 공유")
+    } else if has(23) || matches!(vendor, "Cisco" | "EFM ipTIME" | "TP-Link" | "D-Link") {
+        ("network", "네트워크 장비")
+    } else if has(22) {
+        ("server", "리눅스·서버")
+    } else if has(80) || has(443) || has(8080) || has(5000) {
+        ("server", "웹 화면이 있는 장비")
+    } else {
+        ("unknown", "종류 모름")
+    }
+}
+
+/// 내부 네트워크 조사: "NET <대역> GW <gw> ME <me>"와 "NODE <ip> <mac> <역할> <포트>"
+fn netmap(lines: &[String]) -> Option<StepResult> {
+    let net = lines.iter().find(|l| l.starts_with("NET "))?;
+    let c: Vec<&str> = net.split_whitespace().collect();
+    let pick = |key: &str| c.iter().position(|w| *w == key).and_then(|i| c.get(i + 1)).filter(|v| **v != "-").map(|v| v.to_string());
+    let cidr = c.get(1)?.to_string();
+    let nodes: Vec<Node> = lines
+        .iter()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.len() != 5 || f[0] != "NODE" || f[1].parse::<std::net::Ipv4Addr>().is_err() {
+                return None;
+            }
+            let mac = (f[2] != "-").then(|| f[2].to_string());
+            let ports: Vec<u16> = f[4].split(',').filter_map(|p| p.parse().ok()).collect();
+            let v = mac.as_deref().map(vendor).unwrap_or("");
+            let (kind, label) = guess_kind(f[3], &ports, v);
+            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports })
+        })
+        .take(1024)
+        .collect();
+    if nodes.is_empty() {
+        return Some(StepResult::new(Light::Yellow, "장비를 찾지 못했습니다. 대역이 맞는지 확인하세요."));
+    }
+    let count = |k: &str| nodes.iter().filter(|n| n.kind == k).count();
+    let targets = nodes
+        .iter()
+        .filter(|n| n.role != "me")
+        .flat_map(|n| n.ports.iter().map(move |p| Target { host: n.ip.clone(), port: *p, service: crate::engine::builtin::service_name(*p).to_string() }))
+        .take(200)
+        .collect();
+    let mut r = StepResult::new(Light::Green, format!("{cidr} 대역에서 장비 {}대를 찾아 구성도를 그렸습니다. 종류는 열린 포트와 MAC으로 짐작한 것입니다.", nodes.len()))
+        .fact("장비", format!("{}대", nodes.len()))
+        .fact("PC", format!("{}대", count("pc")))
+        .fact("프린터", format!("{}대", count("printer")))
+        .fact("휴대폰·태블릿", format!("{}대", count("phone")))
+        .fact("종류 모름", format!("{}대", count("unknown")));
+    r.targets = targets;
+    r.topology = Some(Topology { cidr, gateway: pick("GW"), me: pick("ME"), nodes });
+    Some(r)
+}
+
 /// curl -w로 받은 단계별 누적 시간을 구간별 시간(ms) 막대로 바꾼다.
 fn curl_timing(lines: &[String]) -> Option<Chart> {
     let line = lines.iter().find(|l| l.starts_with("netx_times "))?;
@@ -734,6 +859,19 @@ mod tests {
         let Some(Chart::Bars { bars, .. }) = r.charts.last() else { panic!("단계별 시간 그래프가 없다") };
         assert_eq!(bars.iter().map(|b| b.value).collect::<Vec<_>>(), [10.0, 20.0, 60.0, 310.0, 50.0]);
         assert_eq!(bars[3].light, Light::Yellow);
+    }
+
+    #[test]
+    fn netmap_builds_a_topology() {
+        let r = done("netmap", "192.168.0.0/24 대역의 주소 254개를 조사합니다.\nNET 192.168.0.0/24 GW 192.168.0.1 ME 192.168.0.12\nNODE 192.168.0.1 88:36:6c:00:00:01 gateway 53,80\nNODE 192.168.0.12 - me -\nNODE 192.168.0.30 00:80:77:aa:bb:cc host 80,9100\nNODE 192.168.0.44 da:11:22:33:44:55 host -\nNODE 192.168.0.50 - host 445,3389\n조사 끝: 장비 5대를 찾았습니다.", 0);
+        let t = r.topology.expect("구성도가 있어야 한다");
+        assert_eq!((t.cidr.as_str(), t.gateway.as_deref(), t.me.as_deref()), ("192.168.0.0/24", Some("192.168.0.1"), Some("192.168.0.12")));
+        let kinds: Vec<&str> = t.nodes.iter().map(|n| n.kind.as_str()).collect();
+        assert_eq!(kinds, ["router", "pc", "printer", "phone", "pc"]);
+        assert_eq!(t.nodes[0].vendor, "EFM ipTIME");
+        assert_eq!(t.nodes[2].vendor, "Brother");
+        assert!(r.targets.iter().all(|x| x.host != "192.168.0.12"));
+        assert!(done("netmap", "x", 0).topology.is_none());
     }
 
     #[test]

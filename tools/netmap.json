@@ -1,0 +1,24 @@
+{
+  "tool": "netmap",
+  "title": "내부 네트워크 조사 (내장)",
+  "description": "내 네트워크 대역의 장비를 찾아 주소, MAC, 열린 포트, 추정 종류를 모으고 구성도를 그린다. TCP 연결 시도와 이웃(ARP) 목록만 쓴다. 관리하는 네트워크에서만 사용한다.",
+  "engines": [
+    "builtin"
+  ],
+  "risk": "caution",
+  "categories": [
+    "스캔",
+    "구성도"
+  ],
+  "viz": "subway_topology",
+  "options": [],
+  "positional": [
+    {
+      "name": "target",
+      "type": "target",
+      "label": "대역 (예: 192.168.0.0/24). auto라고 적으면 내 네트워크 대역",
+      "required": true,
+      "min": 22
+    }
+  ]
+}

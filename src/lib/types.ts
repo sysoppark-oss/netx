@@ -209,6 +209,25 @@ export interface StepResult {
   charts: Chart[];
   targets: Target[];
   processes: Proc[];
+  topology: Topology | null;
+}
+
+/** 네트워크 구성도 (src-tauri/src/interpret.rs) */
+export interface TopoNode {
+  ip: string;
+  mac: string | null;
+  role: "me" | "gateway" | "host";
+  kind: string;
+  label: string;
+  vendor: string;
+  ports: number[];
+}
+
+export interface Topology {
+  cidr: string;
+  gateway: string | null;
+  me: string | null;
+  nodes: TopoNode[];
 }
 
 /** 포트를 쓰고 있는 Windows 프로세스 */
