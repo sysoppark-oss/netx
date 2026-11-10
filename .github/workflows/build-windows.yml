@@ -1,0 +1,53 @@
+name: Windows 빌드
+
+# main에 푸시하거나 PR을 열 때마다 Windows 설치 파일을 만든다.
+# 결과물은 Actions 실행 화면의 Artifacts에서 내려받는다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 프론트엔드 의존성 설치
+        run: npm ci
+
+      - name: 백엔드 단위 테스트
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: 설치 파일 빌드
+        run: npm run tauri build
+
+      - name: 설치 파일 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetX-windows-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+          retention-days: 30

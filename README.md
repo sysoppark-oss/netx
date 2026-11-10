@@ -17,3 +17,10 @@
 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
 
 v0.1 개발안: [docs/DEV_PLAN_v0.1.md](docs/DEV_PLAN_v0.1.md)
+
+## 개발 환경
+
+- 필요: Node.js 22, Rust(stable), Windows 10/11 (WebView2 기본 포함)
+- 실행: `npm install` → `npm run tauri dev`
+- 백엔드 테스트: `cd src-tauri && cargo test`
+- 설치 파일: `main`에 푸시하면 GitHub Actions가 Windows 설치 파일(.exe, .msi)을 만듭니다. Actions 실행 화면의 Artifacts에서 내려받습니다.
