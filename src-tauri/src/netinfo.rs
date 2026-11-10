@@ -63,9 +63,12 @@ pub async fn current() -> NetInfo {
     let config = match cache(|c| c.config.clone().filter(|(at, _)| at.elapsed() < CONFIG_TTL)) {
         Some((_, cfg)) => cfg,
         None => {
-            let cfg = read_config().await;
-            cache(|c| c.config = Some((Instant::now(), cfg.clone())));
-            cfg
+            let fresh = read_config().await;
+            cache(|c| {
+                let cfg = keep_last_good(c.config.take().map(|(_, old)| old), fresh);
+                c.config = Some((Instant::now(), cfg.clone()));
+                cfg
+            })
         }
     };
 
@@ -100,6 +103,14 @@ pub async fn current() -> NetInfo {
     }
 }
 
+/// 조회가 잠깐 실패해 빈 값이 오면(PowerShell이 늦게 뜨는 경우 등) 직전 값을 그대로 쓴다.
+fn keep_last_good(previous: Option<Config>, fresh: Config) -> Config {
+    match previous {
+        Some(old) if fresh.ip.is_none() && old.ip.is_some() => old,
+        _ => fresh,
+    }
+}
+
 /// 어댑터의 누적 송수신량. 이름이 맞는 어댑터가 없으면 가장 많이 쓴 어댑터를 고른다.
 fn counters(iface: Option<&str>) -> (Option<u64>, Option<u64>) {
     let mut g = COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
@@ -128,7 +139,7 @@ async fn run(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     hide_console_window(&mut cmd);
-    match tokio::time::timeout(Duration::from_secs(15), cmd.output()).await {
+    match tokio::time::timeout(Duration::from_secs(25), cmd.output()).await {
         Ok(Ok(out)) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         _ => None,
     }
@@ -254,6 +265,15 @@ mod tests {
         assert!(c.ip.is_none() && c.prefix.is_none() && c.gateway.is_none() && c.dns.is_empty());
         assert!(parse_windows("오류").iface.is_none());
         assert!(parse_windows("").iface.is_none());
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_last_good_values() {
+        let good = Config { iface: Some("Wi-Fi".into()), ip: Some("192.168.0.2".into()), ..Config::default() };
+        assert_eq!(keep_last_good(Some(good.clone()), Config::default()).ip.as_deref(), Some("192.168.0.2"));
+        let moved = Config { ip: Some("10.0.0.9".into()), ..Config::default() };
+        assert_eq!(keep_last_good(Some(good), moved).ip.as_deref(), Some("10.0.0.9"));
+        assert!(keep_last_good(None, Config::default()).ip.is_none());
     }
 
     #[test]
