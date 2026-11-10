@@ -7,6 +7,7 @@ import type {
   EnvironmentStatus,
   OutputEvent,
   Recipe,
+  ResultEvent,
   RunStarted,
   Settings,
   SettingsView,
@@ -87,12 +88,14 @@ export async function installTools(): Promise<RunStarted> {
 export function onRunEvents(handlers: {
   output: (ev: OutputEvent) => void;
   step: (ev: StepEvent) => void;
+  result: (ev: ResultEvent) => void;
   done: (runId: number) => void;
 }): () => void {
   if (!isTauri()) return () => {};
   const subs = [
     listen<OutputEvent>("run:output", (e) => handlers.output(e.payload)),
     listen<StepEvent>("run:step", (e) => handlers.step(e.payload)),
+    listen<ResultEvent>("run:result", (e) => handlers.result(e.payload)),
     listen<number>("run:done", (e) => handlers.done(e.payload)),
   ];
   return () => subs.forEach((p) => p.then((off) => off()));
@@ -128,4 +131,10 @@ export async function saveSettings(settings: Settings, apiKey: string | null): P
 
 export async function testLlm(): Promise<string> {
   return invoke<string>("test_llm");
+}
+
+/** 캡처할 수 있는 인터페이스 이름. 맨 앞의 "any"는 전체. */
+export async function listInterfaces(): Promise<string[]> {
+  if (!isTauri()) return ["any"];
+  return invoke<string[]>("list_interfaces");
 }

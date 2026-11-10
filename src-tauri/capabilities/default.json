@@ -22,6 +22,7 @@
     "allow-brief-run",
     "allow-get-settings",
     "allow-save-settings",
-    "allow-test-llm"
+    "allow-test-llm",
+    "allow-list-interfaces"
   ]
 }

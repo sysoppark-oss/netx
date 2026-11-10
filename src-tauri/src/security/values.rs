@@ -38,7 +38,7 @@ impl PositionalSpec {
 
 impl RecipeInput {
     pub fn rule(&self) -> Rule<'_> {
-        Rule { kind: self.kind, min: self.min, max: self.max, values: &[], allow_values: &[], deny_prefix: &[] }
+        Rule { kind: self.kind, min: self.min, max: self.max, values: &self.values, allow_values: &[], deny_prefix: &[] }
     }
 }
 
@@ -109,6 +109,7 @@ pub fn check(rule: &Rule, v: &str) -> Result<Checked, String> {
         ValueType::Url => check_url(v).map(|_| Checked::default()),
         ValueType::Port => parse_port(v).map(|_| Checked::default()),
         ValueType::PortOrRange => check_port_range(v),
+        ValueType::PortRange => check_port_range(v).map(|_| Checked::default()),
         ValueType::Cidr => check_cidr(v, rule),
         ValueType::Target => {
             if v.contains('/') {
@@ -198,8 +199,11 @@ fn check_url(v: &str) -> Result<(), String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err("http 또는 https 주소만 쓸 수 있습니다".into());
     }
-    if url.host_str().is_none_or(str::is_empty) {
-        return Err("URL에 호스트가 없습니다".into());
+    match url.host_str() {
+        None | Some("") => return Err("URL에 호스트가 없습니다".into()),
+        // 호스트가 다른 도구의 인자로도 쓰이므로 옵션처럼 보이는 이름은 받지 않는다.
+        Some(h) if h.starts_with('-') => return Err("URL의 호스트 이름이 올바르지 않습니다".into()),
+        Some(_) => {}
     }
     if !url.username().is_empty() || url.password().is_some() {
         return Err("URL에 계정 정보를 넣을 수 없습니다".into());
@@ -303,7 +307,7 @@ mod tests {
     fn url_rules() {
         assert!(ok(ValueType::Url, "https://example.com/path?q=1"));
         assert!(ok(ValueType::Url, "http://192.168.0.50:8080"));
-        for v in ["file:///etc/passwd", "ftp://example.com", "example.com", "https://user:pw@example.com", "https://exa mple.com", "gopher://x"] {
+        for v in ["file:///etc/passwd", "ftp://example.com", "example.com", "https://user:pw@example.com", "https://exa mple.com", "gopher://x", "https://-K/etc/passwd"] {
             assert!(!ok(ValueType::Url, v), "{v}");
         }
     }

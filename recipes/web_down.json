@@ -7,8 +7,8 @@
     {
       "name": "url",
       "type": "url",
-      "label": "URL",
-      "example": "https://example.com"
+      "label": "주소 (https://는 생략 가능)",
+      "example": "example.com"
     }
   ],
   "keywords": [

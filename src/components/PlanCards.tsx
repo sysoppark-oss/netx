@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Risk, RunState, StepStatus, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
+import type { Light, Risk, RunState, StepResult, StepStatus, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
+import { ChartView } from "./Charts";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
 const RISK_STYLE: Record<Risk, string> = {
@@ -41,6 +42,14 @@ export function PlanCards({ plan, level, run, disabledReason, onRun, onCancel }:
   const [pending, setPending] = useState<number | null | undefined>(undefined);
   const runnable = plan.steps.filter((s) => !s.blocked);
   const busy = run?.active ?? false;
+
+  // 실행 중에는 경과 시간과 진행 표시줄을 갱신한다.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => tick((v) => v + 1), 500);
+    return () => clearInterval(timer);
+  }, [busy]);
   const disabled = busy || disabledReason !== null;
 
   function request(only: number | null) {
@@ -136,6 +145,7 @@ function StepCard({
   const showCommand = level !== "general";
   const state = run?.steps[step.order];
   const lines = run ? run.lines.filter((l) => l.order === step.order) : [];
+  const result = run?.results[step.order];
   const outRef = useRef<HTMLPreElement>(null);
 
   // 새 출력이 오면 맨 아래로 내린다.
@@ -204,7 +214,11 @@ function StepCard({
         </ul>
       )}
 
-      {state && (
+      {state?.status === "running" && <Progress startedAt={state.started_at} estimateSecs={step.estimate_secs} />}
+
+      {result && state?.status !== "running" && <ResultView result={result} showFacts={showCommand} />}
+
+      {state && showCommand && (
         <pre ref={outRef} className="mt-3 max-h-64 overflow-auto rounded-md border border-line bg-void px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap">
           {lines.length === 0 ? (
             <span className="text-dim">{state.status === "running" ? "출력을 기다리는 중…" : "(출력 없음)"}</span>
@@ -233,5 +247,75 @@ function StatusChip({ status, exitCode, elapsedMs }: { status: StepStatus; exitC
       {nonzero && ` (종료 코드 ${exitCode})`}
       {status !== "running" && ` · ${(elapsedMs / 1000).toFixed(1)}초`}
     </span>
+  );
+}
+
+const LIMIT_SECS = 120;
+
+/** 실행 중 진행 표시. 예상 시간을 알면 그에 맞춰 차오르고, 모르면 경과 시간과 제한 시간을 보여 준다. */
+function Progress({ startedAt, estimateSecs }: { startedAt: number; estimateSecs: number | null }) {
+  const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+  const known = estimateSecs !== null;
+  const ratio = known ? Math.min(0.97, elapsed / estimateSecs) : Math.min(1, elapsed / LIMIT_SECS);
+  const over = known && elapsed > estimateSecs + 3;
+  return (
+    <div className="mt-3">
+      <div className="h-1.5 overflow-hidden rounded-full bg-raised">
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 ${known ? "bg-accent" : "animate-pulse bg-accent/60"}`}
+          style={{ width: `${Math.max(2, ratio * 100)}%` }}
+        />
+      </div>
+      <p className="mt-1 flex justify-between text-xs text-dim">
+        <span>
+          {elapsed.toFixed(0)}초 경과
+          {known && !over && ` · 약 ${Math.max(0, Math.ceil(estimateSecs - elapsed))}초 남음`}
+          {over && " · 예상보다 오래 걸리고 있습니다(대상이 응답하지 않을 수 있습니다)"}
+        </span>
+        <span>
+          {known ? `예상 ${estimateSecs}초 · ` : "끝나는 시간을 알 수 없는 작업 · "}최대 {LIMIT_SECS}초에 자동 중단
+        </span>
+      </p>
+    </div>
+  );
+}
+
+const LIGHT_MARK: Record<Light, string> = { green: "🟢", yellow: "🟡", red: "🔴", info: "🔵" };
+const LIGHT_BOX: Record<Light, string> = {
+  green: "border-safe/40 bg-safe/10",
+  yellow: "border-caution/40 bg-caution/10",
+  red: "border-danger/40 bg-danger/10",
+  info: "border-line bg-raised/50",
+};
+
+/** 결과 해설: 한 줄 결론, 핵심 수치, 그래프. */
+function ResultView({ result, showFacts }: { result: StepResult; showFacts: boolean }) {
+  return (
+    <div className={`mt-3 rounded-md border px-3 py-3 ${LIGHT_BOX[result.light]}`}>
+      <p className="flex gap-2 text-sm leading-relaxed">
+        <span className="shrink-0">{LIGHT_MARK[result.light]}</span>
+        <span>
+          <span className="text-dim">결과 </span>
+          {result.text}
+        </span>
+      </p>
+      {showFacts && result.facts.length > 0 && (
+        <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 pl-7 text-xs">
+          {result.facts.map((f, i) => (
+            <div key={i} className="flex gap-1.5">
+              <dt className="text-dim">{f.label}</dt>
+              <dd className="font-mono">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {result.charts.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {result.charts.map((c, i) => (
+            <ChartView key={i} chart={c} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

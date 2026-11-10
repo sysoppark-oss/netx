@@ -79,6 +79,7 @@ pub struct OutputEvent {
 pub struct StepEvent {
     pub run_id: u64,
     pub order: u32,
+    pub program: String,
     pub status: StepStatus,
     pub exit_code: Option<i32>,
     pub elapsed_ms: u64,
@@ -145,7 +146,7 @@ enum Outcome {
 async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, mut cancel: watch::Receiver<bool>) {
     let started = Instant::now();
     let step = |status, exit_code| {
-        sink.step(StepEvent { run_id, order: job.order, status, exit_code, elapsed_ms: started.elapsed().as_millis() as u64 })
+        sink.step(StepEvent { run_id, order: job.order, program: job.program.clone(), status, exit_code, elapsed_ms: started.elapsed().as_millis() as u64 })
     };
 
     if *cancel.borrow() {

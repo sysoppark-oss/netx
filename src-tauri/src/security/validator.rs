@@ -232,6 +232,7 @@ fn finish(cx: Ctx, step: &PlanStep, order: u32, schema: Option<&ToolSchema>, arg
         engines: schema.map(|s| s.engines.clone()).unwrap_or_default(),
         needs_root: schema.is_some_and(|s| s.needs_root),
         streaming: schema.is_some_and(|s| s.streaming),
+        estimate_secs: if cx.blocked { None } else { crate::estimate::estimate_secs(&tool, &argv) },
         tool,
         argv,
         display,

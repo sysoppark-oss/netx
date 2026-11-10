@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::audit::{self, AuditEntry};
 use crate::engine::{self, Job, JobEngine, OutputEvent, Sink, StepEvent};
 use crate::env_check::{self, EnvironmentStatus, Mode};
+use crate::interpret;
 use crate::planner::{self, Briefing, Suggestion};
 use crate::settings::{self, Provider, Settings};
 use crate::setup::{self, ToolStatus};
@@ -83,13 +84,40 @@ const STEP_TIMEOUT_SECS: u32 = 120;
 
 struct TauriSink(AppHandle);
 
+#[derive(Clone, Serialize)]
+struct ResultEvent {
+    run_id: u64,
+    order: u32,
+    result: interpret::StepResult,
+}
+
+/// 실행 중인 단계의 출력(해설용). 단계가 끝나면 비운다.
+static OUTPUTS: std::sync::Mutex<Option<std::collections::HashMap<(u64, u32), Vec<String>>>> = std::sync::Mutex::new(None);
+
+fn with_outputs<R>(f: impl FnOnce(&mut std::collections::HashMap<(u64, u32), Vec<String>>) -> R) -> R {
+    let mut guard = OUTPUTS.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(std::collections::HashMap::new))
+}
+
 impl Sink for TauriSink {
     fn output(&self, ev: OutputEvent) {
         planner::record_output(ev.run_id, ev.order, &ev.line);
+        with_outputs(|m| {
+            let lines = m.entry((ev.run_id, ev.order)).or_default();
+            if lines.len() < 6000 {
+                lines.push(ev.line.clone());
+            }
+        });
         let _ = self.0.emit("run:output", ev);
     }
     fn step(&self, ev: StepEvent) {
         planner::record_step(ev.run_id, ev.order, ev.status, ev.exit_code);
+        // 단계가 끝나면 출력을 해석해 결과 해설을 보낸다.
+        if ev.status != engine::StepStatus::Running {
+            let lines = with_outputs(|m| m.remove(&(ev.run_id, ev.order))).unwrap_or_default();
+            let result = interpret::interpret(&ev.program, &lines, ev.status, ev.exit_code);
+            let _ = self.0.emit("run:result", ResultEvent { run_id: ev.run_id, order: ev.order, result });
+        }
         let _ = self.0.emit("run:step", ev);
     }
     fn done(&self, run_id: u64) {
@@ -278,4 +306,12 @@ pub async fn test_llm(app: AppHandle) -> Result<String, String> {
         return Err("AI 사용 안 함으로 설정되어 있습니다".into());
     }
     planner::test_connection(&settings, settings::api_key().as_deref()).await
+}
+
+/// 캡처할 수 있는 네트워크 인터페이스 이름 목록(WSL 기준). 맨 앞의 "any"는 전체를 뜻한다.
+#[tauri::command]
+pub async fn list_interfaces() -> Vec<String> {
+    let mut names = vec!["any".to_string()];
+    names.extend(setup::list_interfaces().await);
+    names
 }

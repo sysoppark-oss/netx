@@ -8,6 +8,8 @@ mod audit;
 mod commands;
 mod engine;
 mod env_check;
+mod estimate;
+mod interpret;
 mod model;
 mod planner;
 mod recipe;
@@ -43,7 +45,8 @@ pub fn run() {
             commands::brief_run,
             commands::get_settings,
             commands::save_settings,
-            commands::test_llm
+            commands::test_llm,
+            commands::list_interfaces
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

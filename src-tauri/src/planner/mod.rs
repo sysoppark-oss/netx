@@ -496,6 +496,7 @@ mod tests {
             risk: Risk::Safe,
             needs_root: false,
             streaming: false,
+            estimate_secs: None,
             confirm: crate::model::Confirm::None,
             blocked: false,
             issues: vec![],

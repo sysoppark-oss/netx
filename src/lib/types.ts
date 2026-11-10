@@ -57,6 +57,11 @@ export interface RecipeInput {
   type: string;
   label: string;
   example: string | null;
+  values: string[];
+  value_labels: string[];
+  default: string | null;
+  optional: boolean;
+  source: string | null;
 }
 
 export interface Recipe {
@@ -82,6 +87,7 @@ export interface ValidatedStep {
   risk: Risk;
   needs_root: boolean;
   streaming: boolean;
+  estimate_secs: number | null;
   confirm: "none" | "click" | "hello";
   blocked: boolean;
   issues: Issue[];
@@ -139,8 +145,38 @@ export interface RunState {
   run_id: number;
   title: string;
   active: boolean;
-  steps: Record<number, { status: StepStatus; exit_code: number | null; elapsed_ms: number }>;
+  steps: Record<number, { status: StepStatus; exit_code: number | null; elapsed_ms: number; started_at: number }>;
+  results: Record<number, StepResult>;
   lines: OutputLine[];
+}
+
+// ---- 결과 해설 (src-tauri/src/interpret.rs) ----
+
+export type Light = "green" | "yellow" | "red" | "info";
+
+export interface Bar {
+  label: string;
+  value: number;
+  light: Light;
+  note: string;
+}
+
+export type Chart =
+  | { kind: "bars"; title: string; unit: string; bars: Bar[] }
+  | { kind: "line"; title: string; unit: string; points: number[] }
+  | { kind: "gauge"; title: string; unit: string; value: number; max: number };
+
+export interface StepResult {
+  light: Light;
+  text: string;
+  facts: { label: string; value: string }[];
+  charts: Chart[];
+}
+
+export interface ResultEvent {
+  run_id: number;
+  order: number;
+  result: StepResult;
 }
 
 // ---- AI 제안과 브리핑 (src-tauri/src/planner) ----

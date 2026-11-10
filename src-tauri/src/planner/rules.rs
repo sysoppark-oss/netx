@@ -30,7 +30,7 @@ impl Found {
             ValueType::Url => self.url.clone().or_else(|| self.host.as_ref().map(|h| format!("https://{h}"))),
             ValueType::Host => self.host.clone().or_else(|| self.url.as_deref().and_then(url_parts).map(|(h, _)| h)),
             ValueType::Cidr => self.cidr.clone(),
-            ValueType::Port => self.port.clone(),
+            ValueType::Port | ValueType::PortRange | ValueType::PortOrRange => self.port.clone(),
             _ => None,
         }
     }

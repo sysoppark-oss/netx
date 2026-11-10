@@ -66,6 +66,34 @@ pub async fn tool_status() -> Result<Vec<ToolStatus>, String> {
     Ok(names.iter().map(|n| ToolStatus { tool: n.to_string(), installed: found.iter().any(|f| f == n) }).collect())
 }
 
+/// `/sys/class/net`의 인터페이스 이름을 읽는다. 실패하면 빈 목록.
+pub async fn list_interfaces() -> Vec<String> {
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("wsl.exe");
+        c.args(["--exec", "ls", "/sys/class/net"]);
+        c
+    } else {
+        let mut c = Command::new("ls");
+        c.arg("/sys/class/net");
+        c
+    };
+    cmd.stdin(Stdio::null()).kill_on_drop(true);
+    hide_console_window(&mut cmd);
+    match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => parse_interfaces(&String::from_utf8_lossy(&out.stdout)),
+        _ => vec![],
+    }
+}
+
+fn parse_interfaces(stdout: &str) -> Vec<String> {
+    stdout
+        .split_whitespace()
+        .filter(|n| n.len() <= 32 && n.chars().all(|c| c.is_ascii_alphanumeric() || "._-@:".contains(c)))
+        .map(str::to_string)
+        .take(64)
+        .collect()
+}
+
 fn parse_which(stdout: &str) -> Vec<String> {
     stdout.lines().filter_map(|l| l.trim().rsplit('/').next()).filter(|s| !s.is_empty()).map(str::to_string).collect()
 }
@@ -93,6 +121,12 @@ mod tests {
     fn parses_which_output() {
         assert_eq!(parse_which("/usr/bin/ping\n/usr/sbin/tcpdump\n\n"), ["ping", "tcpdump"]);
         assert!(parse_which("").is_empty());
+    }
+
+    #[test]
+    fn parses_interface_names() {
+        assert_eq!(parse_interfaces("eth0\nlo\nwlan0 docker0\n"), ["eth0", "lo", "wlan0", "docker0"]);
+        assert!(parse_interfaces("ls: cannot access '/sys/class/net'; rm -rf").iter().all(|n| !n.contains(';')));
     }
 
     #[test]

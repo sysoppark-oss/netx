@@ -2,20 +2,60 @@
   "id": "quick_capture",
   "icon": "👁️",
   "title": "트래픽 퀵 캡처",
-  "description": "패킷 100개를 빠르게 캡처해 파일로 저장한다.",
+  "description": "조건에 맞는 패킷을 캡처해 파일로 저장한다. 인터페이스, 프로토콜, 포트(범위 가능), 상대 주소로 좁힐 수 있다.",
   "min_level": "junior",
   "inputs": [
     {
       "name": "iface",
       "type": "iface",
       "label": "인터페이스",
-      "example": "eth0"
+      "example": "eth0",
+      "default": "any",
+      "source": "interfaces"
+    },
+    {
+      "name": "proto",
+      "type": "enum",
+      "label": "프로토콜",
+      "values": [
+        "all",
+        "tcp",
+        "udp",
+        "icmp",
+        "arp"
+      ],
+      "value_labels": [
+        "전체",
+        "TCP",
+        "UDP",
+        "ICMP",
+        "ARP"
+      ],
+      "default": "all",
+      "example": "tcp"
     },
     {
       "name": "port",
-      "type": "port",
-      "label": "포트",
-      "example": "443"
+      "type": "port_range",
+      "label": "포트 또는 범위",
+      "example": "21-30",
+      "optional": true
+    },
+    {
+      "name": "host",
+      "type": "host",
+      "label": "상대 주소",
+      "example": "192.168.0.50",
+      "optional": true
+    },
+    {
+      "name": "count",
+      "type": "number",
+      "label": "패킷 수",
+      "example": "100",
+      "default": "100",
+      "min": 1,
+      "max": 100000
     }
   ],
   "keywords": [
@@ -30,18 +70,10 @@
     {
       "tool": "tcpdump",
       "args": [
-        "-i",
-        "{iface}",
-        "-n",
-        "-c",
-        "100",
-        "-w",
-        "capture.pcap",
-        "port",
-        "{port}"
+        "(인터페이스, 프로토콜, 포트, 상대 주소에 따라 조립)"
       ],
-      "reason": "해당 포트를 지나는 패킷 100개를 pcap 파일로 저장한다.",
-      "expect": "작업 폴더에 capture.pcap이 생긴다. Wireshark로 열어 볼 수 있다."
+      "reason": "조건에 맞는 패킷을 정한 개수만큼 pcap 파일로 저장한다.",
+      "expect": "작업 폴더에 capture-(시각).pcap이 생긴다. Wireshark로 열어 볼 수 있다. 패킷이 안 잡히면 조건에 맞는 통신이 없다는 뜻."
     }
   ]
 }

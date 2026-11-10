@@ -47,6 +47,8 @@ pub enum ValueType {
     Url,
     Port,
     PortOrRange,
+    /// 포트 또는 범위. 내 PC 조회처럼 범위가 넓어도 위험하지 않은 곳에 쓴다.
+    PortRange,
     Cidr,
     /// 호스트 또는 CIDR 대역
     Target,
@@ -158,6 +160,20 @@ pub struct RecipeInput {
     pub min: Option<f64>,
     #[serde(default)]
     pub max: Option<f64>,
+    /// 고를 수 있는 값(type이 enum일 때)과 화면에 보일 이름
+    #[serde(default)]
+    pub values: Vec<String>,
+    #[serde(default)]
+    pub value_labels: Vec<String>,
+    /// 비워 두면 쓰는 값
+    #[serde(default)]
+    pub default: Option<String>,
+    /// 비워 둘 수 있는 입력
+    #[serde(default)]
+    pub optional: bool,
+    /// 목록을 실행 중에 채우는 입력(예: "interfaces")
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,6 +266,8 @@ pub struct ValidatedStep {
     pub risk: Risk,
     pub needs_root: bool,
     pub streaming: bool,
+    /// 예상 소요 시간(초). 알 수 없으면 없음.
+    pub estimate_secs: Option<u32>,
     pub confirm: Confirm,
     pub blocked: bool,
     pub issues: Vec<Issue>,

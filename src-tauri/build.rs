@@ -20,6 +20,7 @@ fn main() {
                 "get_settings",
                 "save_settings",
                 "test_llm",
+                "list_interfaces",
             ]),
         ),
     )

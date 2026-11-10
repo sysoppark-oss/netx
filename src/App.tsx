@@ -12,6 +12,7 @@ import {
   getToolStatus,
   getTools,
   installTools,
+  listInterfaces,
   planFromRecipe,
   runAiPlan,
   runRecipe,
@@ -74,6 +75,7 @@ export default function App() {
   const [planRunId, setPlanRunId] = useState<number | null>(null);
   const [brief, setBrief] = useState<BriefState | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
+  const [interfaces, setInterfaces] = useState<string[]>([]);
   const [installRunId, setInstallRunId] = useState<number | null>(null);
   const run = useRun(runId);
   const planRun = useRun(planRunId);
@@ -94,6 +96,7 @@ export default function App() {
     getRecipes().then(setRecipes).catch(() => setRecipes([]));
     getTools().then(setTools).catch(() => setTools([]));
     getSettings().then(setSettings).catch(() => setSettings(null));
+    listInterfaces().then(setInterfaces).catch(() => setInterfaces([]));
     refreshTools();
   }, []);
 
@@ -136,7 +139,9 @@ export default function App() {
   function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
     setAi(null);
     setRecipe(r);
-    setInputs(prefilled);
+    // 기본값이 있는 입력은 미리 채워 둔다.
+    const defaults = Object.fromEntries(r.inputs.filter((i) => i.default).map((i) => [i.name, i.default as string]));
+    setInputs({ ...defaults, ...prefilled });
     setPlan(null);
     setPlanRunId(null);
     setError(null);
@@ -175,7 +180,7 @@ export default function App() {
         if (r && allowed(r.min_level)) {
           pickRecipe(r, res.inputs);
           setNotice(res.note);
-          if (r.inputs.every((i) => res.inputs[i.name])) await makePlan(r, res.inputs);
+          if (r.inputs.every((i) => res.inputs[i.name] || i.optional || i.default)) await makePlan(r, res.inputs);
         } else {
           setNotice("맞는 레시피가 있지만 현재 등급에서는 쓸 수 없습니다.");
         }
@@ -421,22 +426,47 @@ export default function App() {
                   makePlan();
                 }}
               >
-                {recipe.inputs.map((input) => (
-                  <label key={input.name} className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-dim">
-                    {input.label}
-                    <input
-                      value={inputs[input.name] ?? ""}
-                      onChange={(e) => {
-                        setInputs({ ...inputs, [input.name]: e.target.value });
-                        setPlan(null);
-                        setPlanRunId(null);
-                      }}
-                      placeholder={input.example ?? ""}
-                      spellCheck={false}
-                      className="rounded-md border border-line bg-raised px-3 py-2 font-mono text-sm text-ink outline-none placeholder:text-dim/60 focus:border-accent"
-                    />
-                  </label>
-                ))}
+                {recipe.inputs.map((input) => {
+                  const change = (value: string) => {
+                    setInputs({ ...inputs, [input.name]: value });
+                    setPlan(null);
+                    setPlanRunId(null);
+                  };
+                  const field =
+                    "rounded-md border border-line bg-raised px-3 py-2 font-mono text-sm text-ink outline-none placeholder:text-dim/60 focus:border-accent";
+                  // 고를 수 있는 값이 정해진 입력은 목록으로 보여 준다.
+                  const choices =
+                    input.values.length > 0
+                      ? input.values.map((v, i) => ({ value: v, label: input.value_labels[i] ?? v }))
+                      : input.source === "interfaces" && interfaces.length > 0
+                        ? interfaces.map((v) => ({ value: v, label: v === "any" ? "any (전체)" : v }))
+                        : null;
+                  return (
+                    <label key={input.name} className="flex min-w-36 flex-1 flex-col gap-1 text-xs text-dim">
+                      <span>
+                        {input.label}
+                        {input.optional && <span className="ml-1 opacity-60">(선택)</span>}
+                      </span>
+                      {choices ? (
+                        <select value={inputs[input.name] ?? input.default ?? ""} onChange={(e) => change(e.target.value)} className={field}>
+                          {choices.map((c) => (
+                            <option key={c.value} value={c.value}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={inputs[input.name] ?? ""}
+                          onChange={(e) => change(e.target.value)}
+                          placeholder={input.example ?? ""}
+                          spellCheck={false}
+                          className={field}
+                        />
+                      )}
+                    </label>
+                  );
+                })}
                 <button
                   type="submit"
                   className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-semibold whitespace-nowrap text-void"

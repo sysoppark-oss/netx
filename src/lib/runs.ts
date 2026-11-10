@@ -23,7 +23,7 @@ function notify() {
 function get(id: number): RunState {
   let run = runs.get(id);
   if (!run) {
-    run = { run_id: id, title: "", active: true, steps: {}, lines: [] };
+    run = { run_id: id, title: "", active: true, steps: {}, results: {}, lines: [] };
     runs.set(id, run);
     for (const old of [...runs.keys()].slice(0, Math.max(0, runs.size - KEEP_RUNS))) runs.delete(old);
   }
@@ -37,7 +37,14 @@ onRunEvents({
     notify();
   },
   step: (ev) => {
-    get(ev.run_id).steps[ev.order] = { status: ev.status, exit_code: ev.exit_code, elapsed_ms: ev.elapsed_ms };
+    const run = get(ev.run_id);
+    const started_at = run.steps[ev.order]?.started_at ?? Date.now();
+    run.steps[ev.order] = { status: ev.status, exit_code: ev.exit_code, elapsed_ms: ev.elapsed_ms, started_at };
+    if (ev.status === "running") delete run.results[ev.order];
+    notify();
+  },
+  result: (ev) => {
+    get(ev.run_id).results[ev.order] = ev.result;
     notify();
   },
   done: (id) => {
