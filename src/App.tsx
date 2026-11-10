@@ -47,13 +47,13 @@ export default function App() {
             type="submit"
             disabled
             title="AI 제안은 Phase 5에서 연결됩니다"
-            className="rounded-r-md border border-l-0 border-line bg-raised px-4 text-sm text-dim"
+            className="shrink-0 whitespace-nowrap rounded-r-md border border-l-0 border-line bg-raised px-4 text-sm text-dim"
           >
             제안 받기
           </button>
         </form>
 
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm">
           <span className="text-dim">등급</span>
           <select
             value={level}
@@ -174,7 +174,7 @@ function EnvBadge({ env }: { env: EnvironmentStatus | null }) {
   return (
     <span
       title={env.message}
-      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${
+      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-xs ${
         full ? "border-safe/40 text-safe" : "border-caution/40 text-caution"
       }`}
     >

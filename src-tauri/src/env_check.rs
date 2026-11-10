@@ -6,6 +6,7 @@
 //! 보안 원칙: 셸을 거치지 않고, 명령과 인자를 배열로 분리해 호출한다.
 
 use serde::Serialize;
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -39,6 +40,17 @@ pub async fn check() -> EnvironmentStatus {
         };
     }
 
+    // WSL이 없는 PC에서 wsl.exe를 부르면 "아무 키나 누르면 설치" 화면이 뜬다.
+    // 설치를 실수로 시작하지 않도록, 레지스트리에 WSL 배포판 등록 정보가 있을 때만 wsl.exe를 부른다.
+    if !wsl_registered().await {
+        return EnvironmentStatus {
+            mode: Mode::Basic,
+            wsl_installed: false,
+            distros: vec![],
+            message: "WSL2가 설치되어 있지 않습니다. 기본 진단 모드로 실행합니다. 관리자 PowerShell에서 `wsl --install` 후 재부팅하면 전체 진단을 쓸 수 있습니다.".into(),
+        };
+    }
+
     match list_wsl_distros().await {
         Some(distros) if !distros.is_empty() => EnvironmentStatus {
             mode: Mode::Full,
@@ -61,11 +73,30 @@ pub async fn check() -> EnvironmentStatus {
     }
 }
 
+/// HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss 키가 있으면 배포판이 등록된 적이 있다.
+/// reg.exe는 Windows 기본 명령이며, 키가 없으면 실패 코드를 돌려준다.
+async fn wsl_registered() -> bool {
+    let mut cmd = Command::new("reg.exe");
+    cmd.args([
+        "query",
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .kill_on_drop(true);
+    hide_console_window(&mut cmd);
+
+    matches!(timeout(CHECK_TIMEOUT, cmd.status()).await, Ok(Ok(st)) if st.success())
+}
+
 /// `wsl.exe --list --quiet` 결과에서 배포판 이름을 읽는다.
 /// wsl.exe는 UTF-16LE로 출력하므로 따로 해석한다.
 async fn list_wsl_distros() -> Option<Vec<String>> {
     let mut cmd = Command::new("wsl.exe");
-    cmd.args(["--list", "--quiet"]).kill_on_drop(true);
+    cmd.args(["--list", "--quiet"])
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
     hide_console_window(&mut cmd);
 
     let output = timeout(CHECK_TIMEOUT, cmd.output()).await.ok()?.ok()?;
