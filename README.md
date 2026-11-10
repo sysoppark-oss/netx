@@ -15,3 +15,5 @@
 기술 스택: Tauri(Rust) + React, Windows 10/11 + WSL2
 
 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
+
+v0.1 개발안: [docs/DEV_PLAN_v0.1.md](docs/DEV_PLAN_v0.1.md)
