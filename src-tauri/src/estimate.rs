@@ -18,6 +18,13 @@ pub fn estimate_secs(tool: &str, argv: &[String]) -> Option<u32> {
         "nc" => value_of(argv, &["-w"])?,
         "curl" => value_of(argv, &["-m", "--max-time"])?,
         "winports" => 4.0,
+        "portscan" => {
+            let v: Vec<&String> = argv.iter().filter(|a| *a != "--").collect();
+            let hosts = v.first().and_then(|t| crate::engine::builtin::cidr_hosts(t)).map(|h| h.len()).unwrap_or(1) as f64;
+            let ports = v.get(1).and_then(|p| crate::engine::builtin::parse_ports(p).ok()).map(|p| p.len()).unwrap_or(1) as f64;
+            // 닫힌 포트는 제한 시간(0.8초)까지 기다리고, 256개씩 동시에 시도한다.
+            (hosts * ports / 256.0).ceil() * 0.8 + 1.0
+        }
         "dig" | "ss" | "lsof" => 2.0,
         _ => return None,
     };

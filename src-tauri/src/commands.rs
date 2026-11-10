@@ -194,7 +194,7 @@ async fn start_plan(
     if !confirmed && steps.iter().any(|s| s.confirm != crate::model::Confirm::None) {
         return Err("주의 또는 위험 단계가 있습니다. 확인 후 실행하세요.".into());
     }
-    if steps.iter().any(|s| s.engines.first() != Some(&crate::model::Engine::Windows)) {
+    if steps.iter().any(|s| s.engines.first() == Some(&crate::model::Engine::Wsl)) {
         require_wsl().await?;
     }
 
@@ -207,7 +207,11 @@ async fn start_plan(
             argv: s.argv.clone(),
             root: s.needs_root,
             timeout_secs: STEP_TIMEOUT_SECS,
-            engine: if s.engines.first() == Some(&crate::model::Engine::Windows) { JobEngine::Windows } else { JobEngine::Wsl },
+            engine: match s.engines.first() {
+                Some(crate::model::Engine::Windows) => JobEngine::Windows,
+                Some(crate::model::Engine::Builtin) => JobEngine::Builtin,
+                _ => JobEngine::Wsl,
+            },
         })
         .collect();
     let orders = jobs.iter().map(|j| j.order).collect();
@@ -318,6 +322,59 @@ pub async fn list_interfaces() -> Vec<String> {
     names
 }
 
+// ---- 스캔 결과에서 바로 접속 ----
+
+/// 스캔 결과의 장비에 접속해 본다. 웹은 기본 브라우저로, SSH·Telnet은 새 터미널 창으로 연다.
+/// 주소는 IP 형식, 포트는 숫자, 사용자 이름은 정해진 글자만 받는다. 암호는 받지 않는다(터미널 창에서 직접 입력).
+#[tauri::command]
+pub fn open_target(host: String, port: u16, kind: String, user: Option<String>) -> Result<String, String> {
+    let (program, args) = connect_command(&host, port, &kind, user.as_deref())?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&args).stdin(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    if kind != "web" {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+    }
+    cmd.spawn().map_err(|e| format!("열지 못했습니다: {e}"))?;
+    Ok(match kind.as_str() {
+        "web" => "브라우저에서 열었습니다".into(),
+        _ => "새 터미널 창을 열었습니다. 암호는 그 창에서 입력하세요.".into(),
+    })
+}
+
+/// 접속에 쓸 프로그램과 인자. 사용자 입력은 모두 검사한 뒤에만 인자가 된다.
+fn connect_command(host: &str, port: u16, kind: &str, user: Option<&str>) -> Result<(&'static str, Vec<String>), String> {
+    let ip: std::net::IpAddr = host.parse().map_err(|_| "주소가 IP 형식이 아닙니다".to_string())?;
+    if port == 0 {
+        return Err("포트 번호가 올바르지 않습니다".into());
+    }
+    let windows = cfg!(target_os = "windows");
+    match kind {
+        "web" => {
+            let scheme = if matches!(port, 443 | 8443 | 9443) { "https" } else { "http" };
+            let at = match ip {
+                std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+                std::net::IpAddr::V4(v4) => v4.to_string(),
+            };
+            Ok((if windows { "explorer.exe" } else { "xdg-open" }, vec![format!("{scheme}://{at}:{port}/")]))
+        }
+        "ssh" => {
+            let user = user.map(str::trim).filter(|u| !u.is_empty()).ok_or("SSH 사용자 이름을 입력하세요")?;
+            if user.len() > 32 || user.starts_with('-') || !user.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+                return Err("사용자 이름에는 영문, 숫자, '.', '_', '-'만 쓸 수 있습니다".into());
+            }
+            let ssh = vec!["ssh".to_string(), "-p".into(), port.to_string(), "-l".into(), user.to_string(), ip.to_string()];
+            Ok(if windows { ("cmd.exe", [vec!["/k".to_string()], ssh].concat()) } else { ("x-terminal-emulator", [vec!["-e".to_string()], ssh].concat()) })
+        }
+        "telnet" => {
+            let telnet = vec!["telnet".to_string(), ip.to_string(), port.to_string()];
+            Ok(if windows { ("cmd.exe", [vec!["/k".to_string()], telnet].concat()) } else { ("x-terminal-emulator", [vec!["-e".to_string()], telnet].concat()) })
+        }
+        _ => Err("지원하지 않는 접속 방식입니다".into()),
+    }
+}
+
 // ---- 내 네트워크 ----
 
 /// 쓰고 있는 어댑터의 주소, 게이트웨이, DNS, 공인 IP, 누적 송수신량.
@@ -422,6 +479,27 @@ mod tests {
         assert_eq!(plan.steps.iter().map(|x| x.order).collect::<Vec<_>>(), (1..=n as u32).collect::<Vec<_>>());
         assert_eq!(source, "recipe:route_latency+manual");
         assert!(!title.is_empty());
+    }
+
+    #[test]
+    fn connect_command_only_accepts_checked_values() {
+        let (_, a) = connect_command("192.168.0.1", 443, "web", None).unwrap();
+        assert_eq!(a, ["https://192.168.0.1:443/"]);
+        assert_eq!(connect_command("192.168.0.1", 8080, "web", None).unwrap().1, ["http://192.168.0.1:8080/"]);
+        let (_, a) = connect_command("10.0.0.2", 22, "ssh", Some("admin")).unwrap();
+        assert_eq!(a[a.len() - 6..], ["ssh", "-p", "22", "-l", "admin", "10.0.0.2"]);
+        for (host, kind, user) in [
+            ("example.com", "web", None),
+            ("10.0.0.1 & calc", "web", None),
+            ("10.0.0.1", "ssh", None),
+            ("10.0.0.1", "ssh", Some("a b")),
+            ("10.0.0.1", "ssh", Some("-oProxyCommand=calc")),
+            ("10.0.0.1", "ssh", Some("a&calc")),
+            ("10.0.0.1", "rdp", None),
+        ] {
+            assert!(connect_command(host, 22, kind, user).is_err(), "{host} {kind} {user:?}");
+        }
+        assert!(connect_command("10.0.0.1", 0, "web", None).is_err());
     }
 
     #[test]

@@ -25,6 +25,7 @@ fn main() {
                 "check_command",
                 "plan_mixed",
                 "run_mixed",
+                "open_target",
             ]),
         ),
     )

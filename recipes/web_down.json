@@ -55,6 +55,8 @@
         "-s",
         "-m",
         "10",
+        "-w",
+        "\\nnetx_times dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\\n",
         "{url}"
       ],
       "reason": "웹 서버의 응답 코드와 TLS 인증서를 확인한다(L7).",

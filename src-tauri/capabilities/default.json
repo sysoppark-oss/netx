@@ -27,6 +27,7 @@
     "allow-network-info",
     "allow-check-command",
     "allow-plan-mixed",
-    "allow-run-mixed"
+    "allow-run-mixed",
+    "allow-open-target"
   ]
 }

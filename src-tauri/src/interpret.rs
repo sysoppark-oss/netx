@@ -42,17 +42,26 @@ pub enum Chart {
     Gauge { title: String, unit: String, value: f64, max: f64 },
 }
 
+/// 결과에서 바로 접속해 볼 수 있는 대상(열린 포트)
+#[derive(Debug, Clone, Serialize)]
+pub struct Target {
+    pub host: String,
+    pub port: u16,
+    pub service: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StepResult {
     pub light: Light,
     pub text: String,
     pub facts: Vec<Fact>,
     pub charts: Vec<Chart>,
+    pub targets: Vec<Target>,
 }
 
 impl StepResult {
     fn new(light: Light, text: impl Into<String>) -> Self {
-        StepResult { light, text: text.into(), facts: vec![], charts: vec![] }
+        StepResult { light, text: text.into(), facts: vec![], charts: vec![], targets: vec![] }
     }
     fn fact(mut self, label: &str, value: impl Into<String>) -> Self {
         self.facts.push(Fact { label: label.into(), value: value.into() });
@@ -70,11 +79,15 @@ pub fn interpret(program: &str, lines: &[String], status: StepStatus, exit_code:
         "ping" => ping(lines),
         "mtr" => mtr(lines),
         "nc" => nc(lines),
-        "curl" => curl(lines),
+        "curl" => curl(lines).map(|r| match curl_timing(lines) {
+            Some(c) => r.chart(c),
+            None => r,
+        }),
         "dig" => dig(lines, exit_code),
         "fping" => fping(lines),
         "iperf3" => iperf3(lines),
         "winports" => winports(lines),
+        "portscan" => portscan(lines),
         "ss" => listing(lines, "WSL 안에서 이 조건에 맞는 소켓"),
         "lsof" => listing(lines, "WSL 안에서 이 포트를 연 프로세스"),
         "tcpdump" => tcpdump(lines),
@@ -456,7 +469,89 @@ fn winports(lines: &[String]) -> Option<StepResult> {
     owners.dedup();
     let shown = owners.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
     let more = if owners.len() > 5 { format!(" 외 {}개", owners.len() - 5) } else { String::new() };
-    Some(StepResult::new(Light::Info, format!("Windows에서 {shown}{more}이(가) 쓰고 있습니다.")).fact("소켓 수", rows.len().to_string()).fact("프로그램 수", owners.len().to_string()))
+    // 프로그램별 소켓 수
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for c in rows.iter().filter(|c| c.len() >= 4) {
+        match counts.iter_mut().find(|(n, _)| n == c[3]) {
+            Some(e) => e.1 += 1,
+            None => counts.push((c[3].to_string(), 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    let bars: Vec<Bar> = counts.iter().take(12).map(|(n, k)| Bar { label: n.clone(), value: *k as f64, light: Light::Info, note: String::new() }).collect();
+    let mut r = StepResult::new(Light::Info, format!("Windows에서 {shown}{more}이(가) 쓰고 있습니다.")).fact("소켓 수", rows.len().to_string()).fact("프로그램 수", owners.len().to_string());
+    if bars.len() > 1 {
+        r = r.chart(Chart::Bars { title: "프로그램별 소켓 수".into(), unit: "개".into(), bars });
+    }
+    Some(r)
+}
+
+/// 내장 포트 스캔: "192.168.0.1  open  22(SSH) 80(HTTP)"
+fn portscan(lines: &[String]) -> Option<StepResult> {
+    let mut hosts: Vec<(String, Vec<u16>)> = Vec::new();
+    for l in lines {
+        let mut cols = l.split_whitespace();
+        let (Some(host), Some("open")) = (cols.next(), cols.next()) else { continue };
+        if host.parse::<std::net::IpAddr>().is_err() {
+            continue;
+        }
+        let ports: Vec<u16> = cols.filter_map(|p| p.split('(').next()?.parse().ok()).collect();
+        if !ports.is_empty() {
+            hosts.push((host.to_string(), ports));
+        }
+    }
+    if hosts.is_empty() {
+        if !lines.iter().any(|l| l.starts_with("스캔 끝")) {
+            return None;
+        }
+        return Some(StepResult::new(Light::Yellow, "고른 포트가 열려 있는 장비를 찾지 못했습니다. 포트가 닫혀 있거나 방화벽이 막고 있을 수 있습니다."));
+    }
+    hosts.sort_by_key(|(h, _)| h.parse::<std::net::Ipv4Addr>().map(u32::from).unwrap_or(u32::MAX));
+    let total: usize = hosts.iter().map(|(_, p)| p.len()).sum();
+    let bars: Vec<Bar> = hosts
+        .iter()
+        .take(64)
+        .map(|(h, p)| Bar { label: h.clone(), value: p.len() as f64, light: Light::Info, note: p.iter().map(u16::to_string).collect::<Vec<_>>().join(", ") })
+        .collect();
+    let targets: Vec<Target> = hosts
+        .iter()
+        .flat_map(|(h, p)| p.iter().map(move |port| Target { host: h.clone(), port: *port, service: crate::engine::builtin::service_name(*port).to_string() }))
+        .take(200)
+        .collect();
+    let mut r = StepResult::new(Light::Green, format!("장비 {}대에서 열린 포트 {}개를 찾았습니다. 아래 목록에서 바로 접속해 볼 수 있습니다.", hosts.len(), total))
+        .fact("장비", format!("{}대", hosts.len()))
+        .fact("열린 포트", format!("{total}개"))
+        .chart(Chart::Bars { title: "장비별 열린 포트 수".into(), unit: "개".into(), bars });
+    r.targets = targets;
+    Some(r)
+}
+
+/// curl -w로 받은 단계별 누적 시간을 구간별 시간(ms) 막대로 바꾼다.
+fn curl_timing(lines: &[String]) -> Option<Chart> {
+    let line = lines.iter().find(|l| l.starts_with("netx_times "))?;
+    let get = |key: &str| line.split_whitespace().find_map(|kv| kv.strip_prefix(key)?.strip_prefix('=')?.parse::<f64>().ok());
+    let (dns, connect, tls, ttfb, total) = (get("dns")?, get("connect")?, get("tls")?, get("ttfb")?, get("total")?);
+    if total <= 0.0 {
+        return None;
+    }
+    // tls가 0이면 HTTP(암호화 없음)
+    let tls_end = if tls > 0.0 { tls } else { connect };
+    let stages = [
+        ("이름 풀이(DNS)", dns),
+        ("TCP 연결", connect - dns),
+        ("TLS 협상", tls_end - connect),
+        ("서버 응답 대기", ttfb - tls_end),
+        ("내려받기", total - ttfb),
+    ];
+    let bars = stages
+        .iter()
+        .map(|(label, secs)| {
+            let v = (secs.max(0.0) * 1000.0 * 10.0).round() / 10.0;
+            let light = if v >= 1000.0 { Light::Red } else if v >= 300.0 { Light::Yellow } else { Light::Green };
+            Bar { label: label.to_string(), value: v, light, note: String::new() }
+        })
+        .collect();
+    Some(Chart::Bars { title: format!("단계별 걸린 시간 (전체 {:.0}ms)", total * 1000.0), unit: "ms".into(), bars })
 }
 
 fn listing(lines: &[String], what: &str) -> Option<StepResult> {
@@ -593,6 +688,21 @@ mod tests {
         let Chart::Bars { bars, .. } = &r.charts[0] else { panic!() };
         assert_eq!(bars[1].value, 3.10);
         assert_eq!(done("fping", "", 1).light, Light::Yellow);
+    }
+
+    #[test]
+    fn portscan_lists_targets_and_curl_shows_stage_times() {
+        let r = done("portscan", "장비 254대 × 포트 3개에 TCP 연결을 시도합니다.\n192.168.0.20  open  22(SSH) 80(HTTP)\n192.168.0.1  open  80(HTTP) 443(HTTPS) 8081\n스캔 끝: 열린 포트가 있는 장비 2대 / 전체 254대", 0);
+        assert_eq!(r.light, Light::Green);
+        assert_eq!(r.targets.len(), 5);
+        assert_eq!((r.targets[0].host.as_str(), r.targets[0].port, r.targets[0].service.as_str()), ("192.168.0.1", 80, "HTTP"));
+        assert_eq!(r.targets[4].port, 80);
+        assert_eq!(done("portscan", "스캔 끝: 열린 포트가 있는 장비 0대 / 전체 254대", 1).light, Light::Yellow);
+
+        let r = done("curl", "HTTP/2 200 \n\nnetx_times dns=0.010 connect=0.030 tls=0.090 ttfb=0.400 total=0.450", 0);
+        let Some(Chart::Bars { bars, .. }) = r.charts.last() else { panic!("단계별 시간 그래프가 없다") };
+        assert_eq!(bars.iter().map(|b| b.value).collect::<Vec<_>>(), [10.0, 20.0, 60.0, 310.0, 50.0]);
+        assert_eq!(bars[3].light, Light::Yellow);
     }
 
     #[test]

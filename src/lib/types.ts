@@ -207,6 +207,14 @@ export interface StepResult {
   text: string;
   facts: { label: string; value: string }[];
   charts: Chart[];
+  targets: Target[];
+}
+
+/** 결과에서 바로 접속해 볼 수 있는 대상(열린 포트) */
+export interface Target {
+  host: string;
+  port: number;
+  service: string;
 }
 
 export interface ResultEvent {

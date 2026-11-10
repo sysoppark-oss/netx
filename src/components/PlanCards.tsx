@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Light, Risk, RunState, StepResult, StepStatus, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
+import { openTarget } from "../lib/backend";
+import type { Light, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 import { ChartView } from "./Charts";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
@@ -340,6 +341,83 @@ function ResultView({ result, showFacts }: { result: StepResult; showFacts: bool
           ))}
         </div>
       )}
+      {result.targets.length > 0 && <TargetList targets={result.targets} allowTerminal={showFacts} />}
+    </div>
+  );
+}
+
+const WEB_PORTS = new Set([80, 443, 8000, 8080, 8081, 8443, 8888, 9443]);
+
+/** 열린 포트 목록. 웹은 브라우저로, SSH·Telnet은 새 터미널 창으로 바로 접속해 본다. */
+function TargetList({ targets, allowTerminal }: { targets: Target[]; allowTerminal: boolean }) {
+  const [user, setUser] = useState("");
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const hasSsh = allowTerminal && targets.some((t) => t.port === 22 || t.service === "SSH");
+
+  async function open(t: Target, kind: "web" | "ssh" | "telnet") {
+    try {
+      setMessage({ ok: true, text: `${t.host}:${t.port} · ${await openTarget(t.host, t.port, kind, kind === "ssh" ? user : null)}` });
+    } catch (e) {
+      setMessage({ ok: false, text: String(e) });
+    }
+  }
+
+  const button = "rounded border border-line px-2 py-0.5 text-xs hover:border-accent hover:text-accent disabled:text-dim disabled:hover:border-line";
+  return (
+    <div className="mt-3 rounded-md border border-line bg-void px-3 py-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-xs font-semibold">바로 접속해 보기</p>
+        {hasSsh && (
+          <label className="flex items-center gap-1.5 text-xs text-dim">
+            SSH 사용자
+            <input
+              value={user}
+              onChange={(e) => setUser(e.target.value)}
+              placeholder="예: admin"
+              spellCheck={false}
+              className="w-28 rounded border border-line bg-raised px-2 py-0.5 font-mono text-xs text-ink outline-none focus:border-accent"
+            />
+          </label>
+        )}
+        {hasSsh && <span className="text-xs text-dim">암호는 열리는 터미널 창에서 직접 입력합니다.</span>}
+      </div>
+      {message && <p className={`mt-1 text-xs ${message.ok ? "text-safe" : "text-danger"}`}>{message.text}</p>}
+      <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+        {targets.map((t) => {
+          const ssh = t.port === 22 || t.service === "SSH";
+          const telnet = t.port === 23 || t.service === "Telnet";
+          const web = WEB_PORTS.has(t.port) || t.service.startsWith("HTTP");
+          return (
+            <li key={`${t.host}:${t.port}`} className="flex items-center gap-3 text-xs">
+              <span className="w-32 shrink-0 font-mono">{t.host}</span>
+              <span className="w-14 shrink-0 font-mono text-accent">{t.port}</span>
+              <span className="w-20 shrink-0 text-dim">{t.service || "-"}</span>
+              <span className="flex gap-1.5">
+                {(web || (!ssh && !telnet)) && (
+                  <button onClick={() => open(t, "web")} className={button} title="기본 브라우저에서 엽니다">
+                    웹 열기
+                  </button>
+                )}
+                {allowTerminal && ssh && (
+                  <button
+                    onClick={() => open(t, "ssh")}
+                    disabled={user.trim() === ""}
+                    className={button}
+                    title={user.trim() === "" ? "위에 SSH 사용자 이름을 먼저 적으세요" : "새 터미널 창에서 ssh로 접속합니다"}
+                  >
+                    터미널 접속 (SSH)
+                  </button>
+                )}
+                {allowTerminal && telnet && (
+                  <button onClick={() => open(t, "telnet")} className={button} title="새 터미널 창에서 telnet으로 접속합니다. Windows에 Telnet 클라이언트가 켜져 있어야 합니다.">
+                    터미널 접속 (Telnet)
+                  </button>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

@@ -110,6 +110,7 @@ pub fn check(rule: &Rule, v: &str) -> Result<Checked, String> {
         ValueType::Port => parse_port(v).map(|_| Checked::default()),
         ValueType::PortOrRange => check_port_range(v),
         ValueType::PortRange => check_port_range(v).map(|_| Checked::default()),
+        ValueType::PortList => crate::engine::builtin::parse_ports(v).map(|_| Checked::default()),
         ValueType::Cidr => check_cidr(v, rule),
         ValueType::Target => {
             if v.contains('/') {

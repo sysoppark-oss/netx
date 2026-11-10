@@ -1,0 +1,30 @@
+{
+  "tool": "portscan",
+  "title": "열린 포트 찾기 (내장)",
+  "description": "장비 하나 또는 대역의 장비들에 TCP 연결을 시도해 열려 있는 포트를 찾는다. NetX에 내장된 기능이라 WSL 없이도 동작한다. 관리하는 네트워크에서만 사용한다.",
+  "engines": [
+    "builtin"
+  ],
+  "risk": "caution",
+  "categories": [
+    "스캔",
+    "포트"
+  ],
+  "viz": "sonar_radar",
+  "options": [],
+  "positional": [
+    {
+      "name": "target",
+      "type": "target",
+      "label": "대상 주소 또는 대역 (예: 192.168.0.10, 192.168.0.0/24)",
+      "required": true,
+      "min": 20
+    },
+    {
+      "name": "ports",
+      "type": "port_list",
+      "label": "포트 목록 (예: 22,80,443 또는 20-25, 최대 50개)",
+      "required": true
+    }
+  ]
+}

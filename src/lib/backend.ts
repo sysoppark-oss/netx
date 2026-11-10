@@ -169,3 +169,8 @@ export async function runMixed(
 ): Promise<RunStarted> {
   return invoke<RunStarted>("run_mixed", { base, extras, level, confirmed, onlyStep });
 }
+
+/** 스캔 결과의 장비에 접속해 본다. 웹은 브라우저, SSH·Telnet은 새 터미널 창. */
+export async function openTarget(host: string, port: number, kind: "web" | "ssh" | "telnet", user: string | null): Promise<string> {
+  return invoke<string>("open_target", { host, port, kind, user });
+}

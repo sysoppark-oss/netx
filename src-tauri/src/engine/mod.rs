@@ -25,6 +25,7 @@ use tokio::sync::{Notify, watch};
 use crate::env_check::{decode_wsl_output, hide_console_window};
 
 pub mod windows;
+pub mod builtin;
 
 /// 한 단계의 출력 상한. 넘으면 실행을 멈춘다.
 const MAX_LINES: usize = 5000;
@@ -51,6 +52,8 @@ pub enum JobEngine {
     Wsl,
     /// Windows 본체 조회 (PowerShell, 고정된 스크립트)
     Windows,
+    /// NetX 내장 기능 (외부 프로그램 없음)
+    Builtin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -155,11 +158,34 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
     }
     step(StepStatus::Running, None);
 
+    if job.engine == JobEngine::Builtin {
+        let emit = |line: String| sink.output(OutputEvent { run_id, order: job.order, stream: "stdout", line });
+        let work = async {
+            match job.program.as_str() {
+                "portscan" => builtin::portscan(&job.argv, &emit).await,
+                other => Err(format!("내장 도구가 아닙니다: {other}")),
+            }
+        };
+        tokio::select! {
+            r = work => match r {
+                Ok(code) => step(StepStatus::Done, Some(code)),
+                Err(e) => {
+                    sink.output(OutputEvent { run_id, order: job.order, stream: "stderr", line: e });
+                    step(StepStatus::Error, None);
+                }
+            },
+            _ = async { while cancel.changed().await.is_ok() { if *cancel.borrow() { return; } } std::future::pending::<()>().await } => step(StepStatus::Cancelled, None),
+            _ = tokio::time::sleep(Duration::from_secs(u64::from(job.timeout_secs))) => step(StepStatus::Timeout, None),
+        }
+        return;
+    }
+
     // `timeout`의 시간 인자에 고유한 소수부를 붙여, 중지할 때 이 실행만 골라 낼 수 있게 한다.
     let tag = format!("{}.{:06}", job.timeout_secs, NEXT_TAG.fetch_add(1, Ordering::Relaxed) % 1_000_000);
     let command = match job.engine {
         JobEngine::Wsl => Ok(build_command(job, &tag, work_dir)),
         JobEngine::Windows => build_windows_command(job),
+        JobEngine::Builtin => Err("내장 도구는 여기서 실행하지 않습니다".into()),
     };
     let spawned = command.and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
     let mut child = match spawned {
