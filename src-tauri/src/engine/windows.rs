@@ -28,11 +28,9 @@ fn winports_script(port: u16) -> String {
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $port = {port}
 $rows = @()
-$names = @{{ '1' = 'Closed'; '2' = 'Listen'; '3' = 'SynSent'; '4' = 'SynReceived'; '5' = 'Established'; '6' = 'FinWait1'; '7' = 'FinWait2'; '8' = 'CloseWait'; '9' = 'Closing'; '10' = 'LastAck'; '11' = 'TimeWait'; '12' = 'DeleteTCB' }}
 Get-NetTCPConnection -LocalPort $port | ForEach-Object {{
-  $st = "$($_.State)"
-  if (-not $st) {{ $st = "$($_.CimInstanceProperties['State'].Value)" }}
-  if ($names.ContainsKey($st)) {{ $st = $names[$st] }}
+  # 상태 값의 이름은 Windows 판마다 다르게 나올 수 있어, 상대 주소가 있는지로 구분한다.
+  $st = if ($_.RemotePort -eq 0) {{ '수신 대기' }} else {{ "연결됨 $($_.RemoteAddress):$($_.RemotePort)" }}
   $rows += [pscustomobject]@{{ Proto = 'TCP'; Local = "$($_.LocalAddress):$($_.LocalPort)"; State = $st; ProcId = $_.OwningProcess }}
 }}
 Get-NetUDPEndpoint -LocalPort $port | ForEach-Object {{
@@ -42,11 +40,11 @@ if ($rows.Count -eq 0) {{
   "Windows에서 포트 $port 을(를) 쓰는 프로그램이 없습니다."
   exit 0
 }}
-'{{0,-5}} {{1,-28}} {{2,-12}} {{3,-8}} {{4}}' -f 'PROTO', 'LOCAL', 'STATE', 'PID', 'PROCESS'
-$rows | Sort-Object Proto, Local, ProcId -Unique | ForEach-Object {{
+'{{0,-5}} {{1,-28}} {{2,-8}} {{3,-22}} {{4}}' -f 'PROTO', 'LOCAL', 'PID', 'PROCESS', 'STATE'
+$rows | Sort-Object Proto, Local, ProcId, State -Unique | ForEach-Object {{
   $p = Get-Process -Id $_.ProcId
   $name = if ($p) {{ $p.ProcessName }} else {{ '(알 수 없음)' }}
-  '{{0,-5}} {{1,-28}} {{2,-12}} {{3,-8}} {{4}}' -f $_.Proto, $_.Local, $_.State, $_.ProcId, $name
+  '{{0,-5}} {{1,-28}} {{2,-8}} {{3,-22}} {{4}}' -f $_.Proto, $_.Local, $_.ProcId, $name, $_.State
 }}
 "#
     )
