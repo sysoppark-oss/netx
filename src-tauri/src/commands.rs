@@ -11,6 +11,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::audit::{self, AuditEntry};
 use crate::engine::{self, Job, JobEngine, OutputEvent, Sink, StepEvent};
 use crate::env_check::{self, EnvironmentStatus, Mode};
+use crate::planner::{self, Briefing, Suggestion};
+use crate::settings::{self, Provider, Settings};
 use crate::setup::{self, ToolStatus};
 use crate::model::{ExecutionPlan, Level, Recipe, Source, ToolSchema, ValidatedPlan};
 use crate::recipe;
@@ -83,9 +85,11 @@ struct TauriSink(AppHandle);
 
 impl Sink for TauriSink {
     fn output(&self, ev: OutputEvent) {
+        planner::record_output(ev.run_id, ev.order, &ev.line);
         let _ = self.0.emit("run:output", ev);
     }
     fn step(&self, ev: StepEvent) {
+        planner::record_step(ev.run_id, ev.order, ev.status, ev.exit_code);
         let _ = self.0.emit("run:step", ev);
     }
     fn done(&self, run_id: u64) {
@@ -126,11 +130,35 @@ pub async fn run_recipe(
     only_step: Option<u32>,
 ) -> Result<RunStarted, String> {
     let plan = plan_from_recipe(id.clone(), inputs, level)?;
+    let title = Registry::global().recipe(&id).map(|r| r.title.clone()).unwrap_or_default();
+    start_plan(app, plan, &title, &format!("recipe:{id}"), level, confirmed, only_step).await
+}
+
+/// AI가 제안한 계획을 실행한다. 화면은 계획 번호만 보내고, 백엔드가 보관해 둔 원본을 다시 검증한다.
+#[tauri::command]
+pub async fn run_ai_plan(app: AppHandle, plan_id: u64, level: Level, confirmed: bool, only_step: Option<u32>) -> Result<RunStarted, String> {
+    let original = planner::ai_plan(plan_id).ok_or("제안이 만료되었습니다. 다시 제안을 받아 주세요.")?;
+    let plan = validator::validate_plan(Registry::global(), &original, level, Source::Ai, false);
+    let title = if plan.summary.is_empty() { "AI 제안".to_string() } else { plan.summary.clone() };
+    start_plan(app, plan, &title, &format!("ai:{plan_id}"), level, confirmed, only_step).await
+}
+
+async fn start_plan(
+    app: AppHandle,
+    plan: ValidatedPlan,
+    title: &str,
+    source: &str,
+    level: Level,
+    confirmed: bool,
+    only_step: Option<u32>,
+) -> Result<RunStarted, String> {
     let steps: Vec<_> = plan.steps.iter().filter(|s| only_step.is_none_or(|o| o == s.order)).collect();
     if steps.is_empty() {
         return Err("실행할 단계가 없습니다".into());
     }
-    if steps.iter().any(|s| s.blocked) {
+    // 전체 실행에서는 차단된 단계를 건너뛰고, 한 단계만 고른 경우에는 거부한다.
+    let steps: Vec<_> = if only_step.is_some() { steps } else { steps.into_iter().filter(|s| !s.blocked).collect() };
+    if steps.is_empty() || steps.iter().any(|s| s.blocked) {
         return Err("차단된 단계는 실행할 수 없습니다".into());
     }
     if !confirmed && steps.iter().any(|s| s.confirm != crate::model::Confirm::None) {
@@ -154,12 +182,12 @@ pub async fn run_recipe(
         .collect();
     let orders = jobs.iter().map(|j| j.order).collect();
     let run_id = engine::start(jobs, plan.parallel, work_dir, Arc::new(TauriSink(app)));
+    planner::record_start(run_id, title, &steps);
 
-    let source = format!("recipe:{id}");
     for s in &steps {
         audit::log(
             &data_dir,
-            &AuditEntry { time: audit::now(), run_id, level, source: &source, tool: &s.tool, argv: &s.argv, risk: s.risk, root: s.needs_root, confirmed },
+            &AuditEntry { time: audit::now(), run_id, level, source, tool: &s.tool, argv: &s.argv, risk: s.risk, root: s.needs_root, confirmed },
         );
     }
     Ok(RunStarted { run_id, orders })
@@ -192,4 +220,62 @@ pub async fn install_tools(app: AppHandle) -> Result<RunStarted, String> {
     let orders = jobs.iter().map(|j| j.order).collect();
     let run_id = engine::start(jobs, false, work_dir, Arc::new(TauriSink(app)));
     Ok(RunStarted { run_id, orders })
+}
+
+// ---- AI 제안과 브리핑 ----
+
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_local_data_dir().map_err(|e| format!("앱 데이터 폴더를 찾지 못했습니다: {e}"))
+}
+
+/// 상황 설명을 받아 제안을 만든다. AI가 설정되어 있으면 AI 계획을, 아니면 키워드로 찾은 레시피를 돌려준다.
+#[tauri::command]
+pub async fn suggest(app: AppHandle, text: String, level: Level) -> Result<Suggestion, String> {
+    let settings = settings::load(&data_dir(&app)?);
+    Ok(planner::suggest(&text, level, &settings, settings::api_key().as_deref()).await)
+}
+
+/// 끝난 실행의 결과를 AI가 요약하고 판정한다.
+#[tauri::command]
+pub async fn brief_run(app: AppHandle, run_id: u64, level: Level) -> Result<Briefing, String> {
+    let settings = settings::load(&data_dir(&app)?);
+    planner::brief(run_id, level, &settings, settings::api_key().as_deref()).await
+}
+
+#[derive(Serialize)]
+pub struct SettingsView {
+    #[serde(flatten)]
+    pub settings: Settings,
+    /// API 키가 저장되어 있는지. 키 자체는 화면으로 보내지 않는다.
+    pub has_key: bool,
+}
+
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
+    Ok(SettingsView { settings: settings::load(&data_dir(&app)?), has_key: settings::api_key().is_some() })
+}
+
+/// 설정을 저장한다. `api_key`가 없으면 키는 그대로 두고, 빈 문자열이면 지운다.
+#[tauri::command]
+pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>) -> Result<SettingsView, String> {
+    let dir = data_dir(&app)?;
+    settings::save(&dir, &settings)?;
+    if let Some(key) = api_key {
+        let key = key.trim();
+        if key.len() > 500 || key.chars().any(|c| c.is_control()) {
+            return Err("API 키 형식이 올바르지 않습니다".into());
+        }
+        settings::set_api_key(key)?;
+    }
+    get_settings(app)
+}
+
+/// 저장된 설정으로 AI에 짧은 요청을 보내 연결을 확인한다.
+#[tauri::command]
+pub async fn test_llm(app: AppHandle) -> Result<String, String> {
+    let settings = settings::load(&data_dir(&app)?);
+    if settings.provider == Provider::None {
+        return Err("AI 사용 안 함으로 설정되어 있습니다".into());
+    }
+    planner::test_connection(&settings, settings::api_key().as_deref()).await
 }

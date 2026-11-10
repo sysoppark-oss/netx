@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-ai-plan"
+description = "Enables the run_ai_plan command without any pre-configured scope."
+commands.allow = ["run_ai_plan"]
+
+[[permission]]
+identifier = "deny-run-ai-plan"
+description = "Denies the run_ai_plan command without any pre-configured scope."
+commands.deny = ["run_ai_plan"]

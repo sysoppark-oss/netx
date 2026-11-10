@@ -28,8 +28,12 @@ fn winports_script(port: u16) -> String {
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $port = {port}
 $rows = @()
+$names = @{{ '1' = 'Closed'; '2' = 'Listen'; '3' = 'SynSent'; '4' = 'SynReceived'; '5' = 'Established'; '6' = 'FinWait1'; '7' = 'FinWait2'; '8' = 'CloseWait'; '9' = 'Closing'; '10' = 'LastAck'; '11' = 'TimeWait'; '12' = 'DeleteTCB' }}
 Get-NetTCPConnection -LocalPort $port | ForEach-Object {{
-  $rows += [pscustomobject]@{{ Proto = 'TCP'; Local = "$($_.LocalAddress):$($_.LocalPort)"; State = "$($_.State)"; ProcId = $_.OwningProcess }}
+  $st = "$($_.State)"
+  if (-not $st) {{ $st = "$($_.CimInstanceProperties['State'].Value)" }}
+  if ($names.ContainsKey($st)) {{ $st = $names[$st] }}
+  $rows += [pscustomobject]@{{ Proto = 'TCP'; Local = "$($_.LocalAddress):$($_.LocalPort)"; State = $st; ProcId = $_.OwningProcess }}
 }}
 Get-NetUDPEndpoint -LocalPort $port | ForEach-Object {{
   $rows += [pscustomobject]@{{ Proto = 'UDP'; Local = "$($_.LocalAddress):$($_.LocalPort)"; State = '-'; ProcId = $_.OwningProcess }}

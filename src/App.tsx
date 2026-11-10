@@ -1,22 +1,30 @@
 import { useEffect, useRef, useState } from "react";
+import { BriefPanel } from "./components/BriefPanel";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
+import { SettingsDialog } from "./components/SettingsDialog";
 import {
+  briefRun,
   cancelRun,
   getAppInfo,
   getEnvironmentStatus,
   getRecipes,
+  getSettings,
   getToolStatus,
   getTools,
   installTools,
   planFromRecipe,
+  runAiPlan,
   runRecipe,
+  suggest,
 } from "./lib/backend";
 import { useRun } from "./lib/runs";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
+  Briefing,
   EnvironmentStatus,
   Recipe,
+  SettingsView,
   ToolSchema,
   UiMode,
   UserLevel,
@@ -24,7 +32,19 @@ import type {
 } from "./lib/types";
 
 // 화면 배치는 docs/DEV_PLAN_v0.1.md 3장을 따른다.
-// Phase 3: 레시피 → 검증된 제안 카드 → 실행(WSL) → 실시간 출력. AI 제안은 Phase 5.
+// 핵심 루프: 상황 입력(또는 레시피) → 검증된 제안 카드 → 실행 → 실시간 출력 → AI 브리핑·판정
+
+interface AiPlan {
+  planId: number;
+  plan: ValidatedPlan;
+}
+
+interface BriefState {
+  runId: number;
+  loading: boolean;
+  data?: Briefing;
+  error?: string;
+}
 
 export default function App() {
   const [level, setLevel] = useState<UserLevel>("middle");
@@ -34,27 +54,34 @@ export default function App() {
   const [env, setEnv] = useState<EnvironmentStatus | null>(null);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [tools, setTools] = useState<ToolSchema[]>([]);
+  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // 가운데 화면에 띄운 것: AI 제안 또는 레시피
+  const [ai, setAi] = useState<AiPlan | null>(null);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
-  const [tool, setTool] = useState<ToolSchema | null>(null);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<ValidatedPlan | null>(null);
+  const [tool, setTool] = useState<ToolSchema | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+
+  // 실행
   const [rawOpen, setRawOpen] = useState(false);
   const [runId, setRunId] = useState<number | null>(null);
   const [runTitle, setRunTitle] = useState("");
   const [planRunId, setPlanRunId] = useState<number | null>(null);
+  const [brief, setBrief] = useState<BriefState | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [installRunId, setInstallRunId] = useState<number | null>(null);
   const run = useRun(runId);
+  const planRun = useRun(planRunId);
+  const installing = useRun(installRunId)?.active ?? false;
   const rawRef = useRef<HTMLPreElement>(null);
   const rawCount = run?.lines.length ?? 0;
 
-  // 새 출력이 오면 원본 출력 창을 맨 아래로 내린다.
-  useEffect(() => {
-    if (rawRef.current) rawRef.current.scrollTop = rawRef.current.scrollHeight;
-  }, [rawCount, rawOpen]);
-  const planRun = useRun(planRunId);
-  const installing = useRun(installRunId)?.active ?? false;
+  const aiOn = settings !== null && settings.provider !== "none";
 
   const refreshTools = () =>
     getToolStatus()
@@ -66,6 +93,7 @@ export default function App() {
     getEnvironmentStatus().then(setEnv).catch(() => setEnv(null));
     getRecipes().then(setRecipes).catch(() => setRecipes([]));
     getTools().then(setTools).catch(() => setTools([]));
+    getSettings().then(setSettings).catch(() => setSettings(null));
     refreshTools();
   }, []);
 
@@ -74,34 +102,110 @@ export default function App() {
     if (installRunId !== null && !installing) refreshTools();
   }, [installRunId, installing]);
 
-  // 등급이 바뀌면 허용 범위가 달라지므로 계획을 다시 만들게 한다.
+  // 새 출력이 오면 원본 출력 창을 맨 아래로 내린다.
+  useEffect(() => {
+    if (rawRef.current) rawRef.current.scrollTop = rawRef.current.scrollHeight;
+  }, [rawCount, rawOpen]);
+
+  // 등급이 바뀌면 허용 범위가 달라지므로 제안과 계획을 다시 받게 한다.
   useEffect(() => {
     setPlan(null);
+    setAi(null);
     setPlanRunId(null);
     setError(null);
     if (level === "general") setMode("easy");
   }, [level]);
 
+  // 실행이 끝나면 AI에게 요약과 판정을 받는다.
+  const planRunDone = planRun !== null && !planRun.active && Object.keys(planRun.steps).length > 0;
+  useEffect(() => {
+    if (!planRunDone || planRunId === null || !aiOn || brief?.runId === planRunId) return;
+    const id = planRunId;
+    setBrief({ runId: id, loading: true });
+    briefRun(id, level)
+      .then((data) => setBrief({ runId: id, loading: false, data }))
+      .catch((e) => setBrief({ runId: id, loading: false, error: String(e) }));
+  }, [planRunDone, planRunId, aiOn, brief?.runId, level]);
+
   const levelInfo = USER_LEVELS.find((l) => l.id === level)!;
   const showCommands = level !== "general";
   const allowed = (min: UserLevel) => levelRank(level) >= levelRank(min);
+  const shownPlan = ai ? ai.plan : plan;
+  const shownBrief = brief && brief.runId === planRunId ? brief : null;
 
-  function pickRecipe(r: Recipe) {
+  function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
+    setAi(null);
     setRecipe(r);
-    setInputs({});
+    setInputs(prefilled);
     setPlan(null);
     setPlanRunId(null);
     setError(null);
+    setNotice(null);
+  }
+
+  async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs) {
+    if (!r) return;
+    setError(null);
+    setPlanRunId(null);
+    try {
+      setPlan(await planFromRecipe(r.id, values, level));
+    } catch (e) {
+      setPlan(null);
+      setError(String(e));
+    }
+  }
+
+  // 옴니박스: 상황을 보내 제안을 받는다.
+  async function ask() {
+    if (suggesting || situation.trim() === "") return;
+    setSuggesting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await suggest(situation, level);
+      setMode("easy");
+      if (res.kind === "plan") {
+        setRecipe(null);
+        setPlan(null);
+        setPlanRunId(null);
+        setAi({ planId: res.plan_id, plan: res.plan });
+        setNotice(res.note);
+      } else if (res.kind === "recipe") {
+        const r = recipes.find((x) => x.id === res.recipe_id);
+        if (r && allowed(r.min_level)) {
+          pickRecipe(r, res.inputs);
+          setNotice(res.note);
+          if (r.inputs.every((i) => res.inputs[i.name])) await makePlan(r, res.inputs);
+        } else {
+          setNotice("맞는 레시피가 있지만 현재 등급에서는 쓸 수 없습니다.");
+        }
+      } else {
+        setNotice(res.text);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSuggesting(false);
+    }
   }
 
   async function execute(onlyStep: number | null, confirmed: boolean) {
-    if (!recipe) return;
     setError(null);
     try {
-      const started = await runRecipe(recipe.id, inputs, level, confirmed, onlyStep);
+      let started;
+      let title;
+      if (ai) {
+        started = await runAiPlan(ai.planId, level, confirmed, onlyStep);
+        title = ai.plan.summary || "AI 제안";
+      } else if (recipe) {
+        started = await runRecipe(recipe.id, inputs, level, confirmed, onlyStep);
+        title = recipe.title;
+      } else {
+        return;
+      }
       setRunId(started.run_id);
       setPlanRunId(started.run_id);
-      setRunTitle(recipe.title);
+      setRunTitle(title);
     } catch (e) {
       setError(String(e));
     }
@@ -127,17 +231,19 @@ export default function App() {
         ? "도구를 설치하는 중입니다."
         : null;
 
-  async function makePlan() {
-    if (!recipe) return;
-    setError(null);
-    setPlanRunId(null);
-    try {
-      setPlan(await planFromRecipe(recipe.id, inputs, level));
-    } catch (e) {
-      setPlan(null);
-      setError(String(e));
-    }
-  }
+  const cards = shownPlan && (
+    <>
+      {shownBrief && <BriefPanel brief={shownBrief} />}
+      <PlanCards
+        plan={shownPlan}
+        level={level}
+        run={planRun}
+        disabledReason={disabledReason}
+        onRun={execute}
+        onCancel={() => planRunId !== null && cancelRun(planRunId)}
+      />
+    </>
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -148,7 +254,13 @@ export default function App() {
           <span className="text-xs text-dim">v{info?.version ?? "…"}</span>
         </div>
 
-        <form className="flex min-w-0 flex-1" onSubmit={(e) => e.preventDefault()}>
+        <form
+          className="flex min-w-0 flex-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            ask();
+          }}
+        >
           <input
             value={situation}
             onChange={(e) => setSituation(e.target.value)}
@@ -157,15 +269,15 @@ export default function App() {
           />
           <button
             type="submit"
-            disabled
-            title="AI 제안은 Phase 5에서 연결됩니다"
-            className="shrink-0 whitespace-nowrap rounded-r-md border border-l-0 border-line bg-raised px-4 text-sm text-dim"
+            disabled={suggesting || situation.trim() === ""}
+            title={aiOn ? "AI가 도구와 옵션을 제안합니다" : "AI가 연결되지 않아 키워드로 레시피를 찾습니다"}
+            className="shrink-0 rounded-r-md bg-accent px-4 text-sm font-semibold whitespace-nowrap text-void disabled:bg-raised disabled:font-normal disabled:text-dim"
           >
-            제안 받기
+            {suggesting ? "찾는 중…" : "제안 받기"}
           </button>
         </form>
 
-        <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm">
+        <label className="flex shrink-0 items-center gap-2 text-sm whitespace-nowrap">
           <span className="text-dim">등급</span>
           <select
             value={level}
@@ -193,6 +305,17 @@ export default function App() {
           ))}
         </div>
 
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="AI 연결 설정"
+          className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
+            aiOn ? "border-safe/40 text-safe" : "border-line text-dim"
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${aiOn ? "bg-safe" : "bg-dim"}`} />
+          {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
+        </button>
+
         <EnvBadge env={env} />
       </header>
 
@@ -212,7 +335,7 @@ export default function App() {
                         disabled={!ok}
                         title={ok ? r.description : "현재 등급에서는 쓸 수 없습니다"}
                         className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent ${
-                          recipe?.id === r.id ? "bg-raised" : ""
+                          !ai && recipe?.id === r.id ? "bg-raised" : ""
                         }`}
                       >
                         <span className="text-base">{r.icon}</span>
@@ -252,6 +375,9 @@ export default function App() {
           {error && (
             <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
           )}
+          {notice && (
+            <p className="mx-auto mb-5 max-w-3xl rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-sm">{notice}</p>
+          )}
           {missing.length > 0 && (
             <div className="mx-auto mb-5 flex max-w-3xl items-center gap-4 rounded-md border border-caution/50 bg-caution/10 px-4 py-3 text-sm">
               <p className="flex-1">
@@ -268,7 +394,20 @@ export default function App() {
               </button>
             </div>
           )}
-          {mode === "easy" && recipe ? (
+
+          {mode === "easy" && ai ? (
+            <div className="mx-auto max-w-3xl">
+              <p className="text-xs font-semibold text-accent">AI 제안</p>
+              <h1 className="mt-1 text-xl font-semibold">{ai.plan.summary || "진단 계획"}</h1>
+              {ai.plan.target && (
+                <p className="mt-1 text-sm text-dim">
+                  대상 <span className="font-mono text-ink">{ai.plan.target}</span>
+                </p>
+              )}
+              <p className="mt-2 text-xs text-dim">AI가 만든 계획입니다. 명령과 이유를 확인한 뒤 실행하세요.</p>
+              {cards}
+            </div>
+          ) : mode === "easy" && recipe ? (
             <div className="mx-auto max-w-3xl">
               <h1 className="text-xl font-semibold">
                 {recipe.icon} {recipe.title}
@@ -305,17 +444,7 @@ export default function App() {
                   계획 보기
                 </button>
               </form>
-
-              {plan && (
-                <PlanCards
-                  plan={plan}
-                  level={level}
-                  run={planRun}
-                  disabledReason={disabledReason}
-                  onRun={execute}
-                  onCancel={() => planRunId !== null && cancelRun(planRunId)}
-                />
-              )}
+              {cards}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -323,7 +452,7 @@ export default function App() {
                 <p className="text-2xl font-semibold">무엇이 문제인가요?</p>
                 <p className="mt-3 text-sm leading-relaxed text-dim">
                   {mode === "easy"
-                    ? "왼쪽에서 상황 레시피를 고르면, 실행할 도구와 옵션 조합이 이유·예상 결과와 함께 표시됩니다."
+                    ? "위 입력창에 상황을 적고 [제안 받기]를 누르거나, 왼쪽에서 상황 레시피를 고르세요. 실행할 도구와 옵션 조합이 이유·예상 결과와 함께 표시됩니다."
                     : "왼쪽에서 도구를 고르면 오른쪽에 쓸 수 있는 옵션이 표시됩니다."}
                 </p>
                 <p className="mt-6 text-xs text-dim">
@@ -334,7 +463,7 @@ export default function App() {
           )}
         </main>
 
-        {/* 우측: 옵션 패널 (Phase 2에서는 목록 보기만) */}
+        {/* 우측: 옵션 패널 (목록 보기) */}
         {showCommands && mode === "expert" && (
           <aside className="w-96 shrink-0 overflow-y-auto border-l border-line bg-panel p-4">
             {tool ? <OptionList tool={tool} /> : <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>}
@@ -348,29 +477,34 @@ export default function App() {
           <div className="flex items-center gap-3 border-b border-line px-5 py-2 font-mono text-sm">
             <span className="text-accent">$</span>
             <span className="truncate text-dim">
-              {plan && mode === "easy" ? plan.steps.map((s) => s.display).join("  ·  ") : "실행할 명령이 여기에 조립됩니다"}
+              {shownPlan && mode === "easy"
+                ? shownPlan.steps.map((s) => s.display).join("  ·  ")
+                : "실행할 명령이 여기에 조립됩니다"}
             </span>
           </div>
         )}
-        <div className="flex items-center justify-between px-5 py-2 text-sm">
-          <span className="flex items-center gap-3 text-dim">
+        <div className="flex items-center justify-between gap-4 px-5 py-2 text-sm">
+          <span className="flex min-w-0 items-center gap-3 text-dim">
             {run ? (
               <>
-                <span className={run.active ? "text-accent" : ""}>
+                <span className={`shrink-0 ${run.active ? "text-accent" : ""}`}>
                   {runTitle} · {run.active ? "실행 중…" : "실행 끝"} · 출력 {run.lines.length}줄
                 </span>
                 {run.active && (
-                  <button onClick={() => cancelRun(run.run_id)} className="rounded border border-danger/50 px-2 py-0.5 text-xs text-danger">
+                  <button onClick={() => cancelRun(run.run_id)} className="shrink-0 rounded border border-danger/50 px-2 py-0.5 text-xs text-danger">
                     ■ 중지
                   </button>
                 )}
+                {shownBrief?.data && <span className="truncate text-ink">{shownBrief.data.headline}</span>}
               </>
+            ) : aiOn ? (
+              "실행이 끝나면 AI 브리핑과 판정이 표시됩니다"
             ) : (
-              "AI 브리핑과 판정이 이곳에 표시됩니다"
+              "AI를 연결하면 실행 결과의 요약과 판정을 볼 수 있습니다 (우측 위 AI 꺼짐)"
             )}
           </span>
           {showCommands && (
-            <button onClick={() => setRawOpen((v) => !v)} className="text-xs text-dim hover:text-ink">
+            <button onClick={() => setRawOpen((v) => !v)} className="shrink-0 text-xs text-dim hover:text-ink">
               원본 출력 {rawOpen ? "접기 ▾" : "펼치기 ▴"}
             </button>
           )}
@@ -388,6 +522,10 @@ export default function App() {
           </pre>
         )}
       </footer>
+
+      {settingsOpen && settings && (
+        <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
+      )}
     </div>
   );
 }

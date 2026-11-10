@@ -16,6 +16,12 @@
     "allow-run-recipe",
     "allow-cancel-run",
     "allow-tool-status",
-    "allow-install-tools"
+    "allow-install-tools",
+    "allow-run-ai-plan",
+    "allow-suggest",
+    "allow-brief-run",
+    "allow-get-settings",
+    "allow-save-settings",
+    "allow-test-llm"
   ]
 }

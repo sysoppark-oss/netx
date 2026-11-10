@@ -9,9 +9,11 @@ mod commands;
 mod engine;
 mod env_check;
 mod model;
+mod planner;
 mod recipe;
 mod registry;
 mod security;
+mod settings;
 mod setup;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -35,7 +37,13 @@ pub fn run() {
             commands::run_recipe,
             commands::cancel_run,
             commands::tool_status,
-            commands::install_tools
+            commands::install_tools,
+            commands::run_ai_plan,
+            commands::suggest,
+            commands::brief_run,
+            commands::get_settings,
+            commands::save_settings,
+            commands::test_llm
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

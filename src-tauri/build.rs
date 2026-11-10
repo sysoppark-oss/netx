@@ -14,6 +14,12 @@ fn main() {
                 "cancel_run",
                 "tool_status",
                 "install_tools",
+                "run_ai_plan",
+                "suggest",
+                "brief_run",
+                "get_settings",
+                "save_settings",
+                "test_llm",
             ]),
         ),
     )

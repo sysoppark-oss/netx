@@ -3,11 +3,15 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppInfo,
+  Briefing,
   EnvironmentStatus,
   OutputEvent,
   Recipe,
   RunStarted,
+  Settings,
+  SettingsView,
   StepEvent,
+  Suggestion,
   ToolSchema,
   ToolStatus,
   UserLevel,
@@ -92,4 +96,36 @@ export function onRunEvents(handlers: {
     listen<number>("run:done", (e) => handlers.done(e.payload)),
   ];
   return () => subs.forEach((p) => p.then((off) => off()));
+}
+
+export async function suggest(text: string, level: UserLevel): Promise<Suggestion> {
+  if (!isTauri()) return { kind: "message", text: "브라우저 미리보기에서는 제안을 받을 수 없습니다." };
+  return invoke<Suggestion>("suggest", { text, level });
+}
+
+export async function runAiPlan(
+  planId: number,
+  level: UserLevel,
+  confirmed: boolean,
+  onlyStep: number | null,
+): Promise<RunStarted> {
+  return invoke<RunStarted>("run_ai_plan", { planId, level, confirmed, onlyStep });
+}
+
+export async function briefRun(runId: number, level: UserLevel): Promise<Briefing> {
+  return invoke<Briefing>("brief_run", { runId, level });
+}
+
+export async function getSettings(): Promise<SettingsView> {
+  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, has_key: false };
+  return invoke<SettingsView>("get_settings");
+}
+
+/** apiKey가 null이면 저장된 키를 그대로 두고, 빈 문자열이면 지운다. */
+export async function saveSettings(settings: Settings, apiKey: string | null): Promise<SettingsView> {
+  return invoke<SettingsView>("save_settings", { settings, apiKey });
+}
+
+export async function testLlm(): Promise<string> {
+  return invoke<string>("test_llm");
 }

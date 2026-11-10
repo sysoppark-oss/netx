@@ -142,3 +142,30 @@ export interface RunState {
   steps: Record<number, { status: StepStatus; exit_code: number | null; elapsed_ms: number }>;
   lines: OutputLine[];
 }
+
+// ---- AI 제안과 브리핑 (src-tauri/src/planner) ----
+
+export type Suggestion =
+  | { kind: "plan"; plan_id: number; plan: ValidatedPlan; note: string | null }
+  | { kind: "recipe"; recipe_id: string; inputs: Record<string, string>; note: string }
+  | { kind: "message"; text: string };
+
+export interface Briefing {
+  headline: string;
+  verdict: "normal" | "problem" | "unclear";
+  findings: { order: number; light: "green" | "yellow" | "red"; text: string }[];
+  next: string;
+}
+
+export type Provider = "none" | "ollama" | "openai";
+
+export interface Settings {
+  provider: Provider;
+  base_url: string;
+  model: string;
+  redact: boolean;
+}
+
+export interface SettingsView extends Settings {
+  has_key: boolean;
+}
