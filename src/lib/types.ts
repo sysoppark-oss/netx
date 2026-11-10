@@ -41,6 +41,15 @@ export interface OptionSpec {
   risk: Risk;
   group: string | null;
   values: string[];
+  min_level: UserLevel | null;
+}
+
+export interface PositionalSpec {
+  name: string;
+  type: string;
+  label: string;
+  required: boolean;
+  variadic: boolean;
 }
 
 export interface ToolSchema {
@@ -50,6 +59,7 @@ export interface ToolSchema {
   needs_root: boolean;
   min_level: UserLevel;
   options: OptionSpec[];
+  positional: PositionalSpec[];
 }
 
 export interface RecipeInput {
@@ -62,6 +72,9 @@ export interface RecipeInput {
   default: string | null;
   optional: boolean;
   source: string | null;
+  hint: string | null;
+  suggestions: string[];
+  suggestion_labels: string[];
 }
 
 export interface Recipe {
@@ -93,6 +106,29 @@ export interface ValidatedStep {
   issues: Issue[];
   reason: string | null;
   expect: string | null;
+  manual: boolean;
+  explain: { token: string; label: string }[];
+}
+
+/** 직접 추가한 명령이 붙는 바탕 계획 */
+export type Base =
+  | { kind: "recipe"; id: string; inputs: Record<string, string> }
+  | { kind: "ai"; plan_id: number }
+  | { kind: "none" };
+
+// ---- 내 네트워크 (src-tauri/src/netinfo.rs) ----
+
+export interface NetInfo {
+  iface: string | null;
+  ip: string | null;
+  prefix: number | null;
+  gateway: string | null;
+  dns: string[];
+  link: string | null;
+  public_ip: string | null;
+  rx_bytes: number | null;
+  tx_bytes: number | null;
+  at_ms: number;
 }
 
 export interface ValidatedPlan {

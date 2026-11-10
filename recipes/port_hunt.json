@@ -8,7 +8,8 @@
       "name": "port",
       "type": "port_range",
       "label": "포트 번호 또는 범위",
-      "example": "8080"
+      "example": "8080",
+      "hint": "1~65535. 하나만(443) 또는 범위(21-30)로 적습니다."
     },
     {
       "name": "proto",
@@ -17,15 +18,20 @@
       "values": [
         "all",
         "tcp",
-        "udp"
+        "udp",
+        "sctp",
+        "dccp"
       ],
       "value_labels": [
         "TCP와 UDP",
         "TCP만",
-        "UDP만"
+        "UDP만",
+        "SCTP (WSL만)",
+        "DCCP (WSL만)"
       ],
       "default": "all",
-      "example": "all"
+      "example": "all",
+      "hint": "Windows 본체는 TCP와 UDP만 조회할 수 있습니다. SCTP와 DCCP는 WSL(리눅스) 안에서만 찾습니다."
     }
   ],
   "keywords": [

@@ -10,7 +10,9 @@ mod engine;
 mod env_check;
 mod estimate;
 mod interpret;
+mod manual;
 mod model;
+mod netinfo;
 mod planner;
 mod recipe;
 mod registry;
@@ -46,7 +48,11 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::test_llm,
-            commands::list_interfaces
+            commands::list_interfaces,
+            commands::network_info,
+            commands::check_command,
+            commands::plan_mixed,
+            commands::run_mixed
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

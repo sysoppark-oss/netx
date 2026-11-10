@@ -12,10 +12,12 @@ use crate::audit::{self, AuditEntry};
 use crate::engine::{self, Job, JobEngine, OutputEvent, Sink, StepEvent};
 use crate::env_check::{self, EnvironmentStatus, Mode};
 use crate::interpret;
+use crate::manual;
+use crate::netinfo::{self, NetInfo};
 use crate::planner::{self, Briefing, Suggestion};
 use crate::settings::{self, Provider, Settings};
 use crate::setup::{self, ToolStatus};
-use crate::model::{ExecutionPlan, Level, Recipe, Source, ToolSchema, ValidatedPlan};
+use crate::model::{ExecutionPlan, Level, Recipe, Risk, Source, ToolSchema, ValidatedPlan, ValidatedStep};
 use crate::recipe;
 use crate::registry::Registry;
 use crate::security::validator;
@@ -314,4 +316,125 @@ pub async fn list_interfaces() -> Vec<String> {
     let mut names = vec!["any".to_string()];
     names.extend(setup::list_interfaces().await);
     names
+}
+
+// ---- 내 네트워크 ----
+
+/// 쓰고 있는 어댑터의 주소, 게이트웨이, DNS, 공인 IP, 누적 송수신량.
+#[tauri::command]
+pub async fn network_info() -> NetInfo {
+    netinfo::current().await
+}
+
+// ---- 직접 추가한 명령 ----
+
+/// 한 계획에 직접 추가할 수 있는 명령 수
+const MAX_EXTRAS: usize = 10;
+
+/// 직접 추가한 명령이 붙는 바탕 계획.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Base {
+    Recipe { id: String, inputs: BTreeMap<String, String> },
+    Ai { plan_id: u64 },
+    None,
+}
+
+fn manual_step(text: &str, order: u32, level: Level) -> Result<ValidatedStep, String> {
+    if level == Level::General {
+        return Err("일반사용자 등급에서는 명령을 직접 입력할 수 없습니다".into());
+    }
+    let step = manual::to_step(text)?;
+    let mut v = validator::validate_step(Registry::global(), &step, order, level, Source::Manual);
+    v.manual = true;
+    Ok(v)
+}
+
+/// 직접 적은 명령 한 줄을 검증한다. 실행하지는 않는다. 위험도, 옵션 풀이, 예상 시간과 결과를 돌려준다.
+#[tauri::command]
+pub fn check_command(text: String, level: Level) -> Result<ValidatedStep, String> {
+    manual_step(&text, 1, level)
+}
+
+/// 바탕 계획(레시피 또는 AI 제안) 뒤에 직접 추가한 명령을 붙인 계획. (계획, 제목, 감사 로그용 출처)
+fn build_mixed(base: Base, extras: &[String], level: Level) -> Result<(ValidatedPlan, String, String), String> {
+    if extras.len() > MAX_EXTRAS {
+        return Err(format!("직접 추가할 수 있는 명령은 {MAX_EXTRAS}개까지입니다"));
+    }
+    let reg = Registry::global();
+    let (mut plan, title, source) = match base {
+        Base::Recipe { id, inputs } => {
+            let plan = plan_from_recipe(id.clone(), inputs, level)?;
+            let title = reg.recipe(&id).map(|r| r.title.clone()).unwrap_or_default();
+            (plan, title, format!("recipe:{id}"))
+        }
+        Base::Ai { plan_id } => {
+            let original = planner::ai_plan(plan_id).ok_or("제안이 만료되었습니다. 다시 제안을 받아 주세요.")?;
+            let plan = validator::validate_plan(reg, &original, level, Source::Ai, false);
+            let title = if plan.summary.is_empty() { "AI 제안".to_string() } else { plan.summary.clone() };
+            (plan, title, format!("ai:{plan_id}"))
+        }
+        Base::None => {
+            let empty = ExecutionPlan { intent: "manual".into(), summary: "직접 명령".into(), target: None, steps: vec![] };
+            (validator::validate_plan(reg, &empty, level, Source::Manual, false), "직접 명령".to_string(), "manual".to_string())
+        }
+    };
+    for text in extras {
+        let order = plan.steps.len() as u32 + 1;
+        plan.steps.push(manual_step(text, order, level)?);
+    }
+    plan.risk = plan.steps.iter().map(|s| s.risk).max().unwrap_or(Risk::Safe);
+    plan.blocked = plan.steps.is_empty() || plan.steps.iter().any(|s| s.blocked);
+    let source = if extras.is_empty() || source == "manual" { source } else { format!("{source}+manual") };
+    Ok((plan, title, source))
+}
+
+/// 바탕 계획에 직접 추가한 명령을 붙여 검증한다. 실행하지는 않는다.
+#[tauri::command]
+pub fn plan_mixed(base: Base, extras: Vec<String>, level: Level) -> Result<ValidatedPlan, String> {
+    build_mixed(base, &extras, level).map(|(plan, _, _)| plan)
+}
+
+/// 바탕 계획과 직접 추가한 명령을 함께 실행한다. 화면이 보낸 글에서 계획을 다시 만들고 다시 검증한다.
+#[tauri::command]
+pub async fn run_mixed(app: AppHandle, base: Base, extras: Vec<String>, level: Level, confirmed: bool, only_step: Option<u32>) -> Result<RunStarted, String> {
+    let (plan, title, source) = build_mixed(base, &extras, level)?;
+    start_plan(app, plan, &title, &source, level, confirmed, only_step).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn extras_are_appended_after_the_recipe_and_marked_manual() {
+        let base = Base::Recipe { id: "route_latency".into(), inputs: [("target".to_string(), "8.8.8.8".to_string())].into() };
+        let (plan, title, source) = build_mixed(base, &s(&["ping -c 4 8.8.8.8", "dig example.com"]), Level::Middle).unwrap();
+        let n = plan.steps.len();
+        assert!(n >= 3);
+        assert!(!plan.blocked);
+        assert!(plan.steps[..n - 2].iter().all(|x| !x.manual));
+        assert!(plan.steps[n - 2..].iter().all(|x| x.manual));
+        assert_eq!(plan.steps.iter().map(|x| x.order).collect::<Vec<_>>(), (1..=n as u32).collect::<Vec<_>>());
+        assert_eq!(source, "recipe:route_latency+manual");
+        assert!(!title.is_empty());
+    }
+
+    #[test]
+    fn manual_only_plan_and_gates() {
+        let (plan, _, source) = build_mixed(Base::None, &s(&["ping -c 2 1.1.1.1"]), Level::Junior).unwrap();
+        assert_eq!((plan.steps.len(), plan.blocked, source.as_str()), (1, false, "manual"));
+        assert!(build_mixed(Base::None, &[], Level::Middle).unwrap().0.blocked, "빈 계획은 실행할 수 없다");
+        assert!(build_mixed(Base::None, &s(&["ping 1.1.1.1"]), Level::General).is_err());
+        assert!(build_mixed(Base::None, &s(&["ping 1.1.1.1 | sh"]), Level::Op).is_err());
+        assert!(build_mixed(Base::None, &s(&["rm -rf /"]), Level::Op).unwrap().0.blocked);
+        assert!(build_mixed(Base::None, &vec!["ping 1.1.1.1".to_string(); 11], Level::Op).is_err());
+        // 레시피 권한은 직접 추가한 단계로 번지지 않는다: 초급의 주의 옵션은 차단된다.
+        let v = check_command("tcpdump -i eth0 -w x.pcap".into(), Level::Junior).unwrap();
+        assert!(v.blocked);
+    }
 }

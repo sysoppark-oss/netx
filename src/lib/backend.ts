@@ -3,6 +3,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppInfo,
+  Base,
+  NetInfo,
+  ValidatedStep,
   Briefing,
   EnvironmentStatus,
   OutputEvent,
@@ -137,4 +140,32 @@ export async function testLlm(): Promise<string> {
 export async function listInterfaces(): Promise<string[]> {
   if (!isTauri()) return ["any"];
   return invoke<string[]>("list_interfaces");
+}
+
+/** 내 네트워크 정보. 앱 밖에서는 null. */
+export async function networkInfo(): Promise<NetInfo | null> {
+  if (!isTauri()) return null;
+  return invoke<NetInfo>("network_info");
+}
+
+/** 직접 적은 명령 한 줄을 검증한다(실행하지 않음). */
+export async function checkCommand(text: string, level: UserLevel): Promise<ValidatedStep> {
+  if (!isTauri()) throw "브라우저 미리보기에서는 검증할 수 없습니다. NetX 앱에서 실행하세요.";
+  return invoke<ValidatedStep>("check_command", { text, level });
+}
+
+/** 바탕 계획에 직접 추가한 명령을 붙여 검증한다. */
+export async function planMixed(base: Base, extras: string[], level: UserLevel): Promise<ValidatedPlan> {
+  if (!isTauri()) throw "브라우저 미리보기에서는 계획을 만들 수 없습니다. NetX 앱에서 실행하세요.";
+  return invoke<ValidatedPlan>("plan_mixed", { base, extras, level });
+}
+
+export async function runMixed(
+  base: Base,
+  extras: string[],
+  level: UserLevel,
+  confirmed: boolean,
+  onlyStep: number | null,
+): Promise<RunStarted> {
+  return invoke<RunStarted>("run_mixed", { base, extras, level, confirmed, onlyStep });
 }

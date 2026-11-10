@@ -502,6 +502,8 @@ mod tests {
             issues: vec![],
             reason: Some("응답 코드 확인".into()),
             expect: Some("200이면 정상".into()),
+            manual: false,
+            explain: vec![],
         };
         record_start(run_id, "웹 장애 진단", &[&step]);
 

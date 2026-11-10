@@ -2,13 +2,60 @@
   "id": "bandwidth",
   "icon": "🚀",
   "title": "대역폭 측정",
-  "description": "iperf3 서버와 사이의 실제 전송 속도를 측정한다.",
+  "description": "iperf3 서버와 사이의 실제 전송 속도를 측정한다. 공개 서버를 목록에서 고르거나, 사내 iperf3 서버 주소를 직접 적을 수 있다.",
   "inputs": [
     {
       "name": "server",
       "type": "host",
-      "label": "iperf3 서버",
-      "example": "192.168.0.10"
+      "label": "측정 서버",
+      "example": "192.168.0.10",
+      "default": "speedtest.tyo11.jp.leaseweb.net",
+      "suggestions": [
+        "speedtest.tyo11.jp.leaseweb.net",
+        "89.187.160.1",
+        "speedtest.hkg12.hk.leaseweb.net",
+        "84.17.57.129",
+        "speedtest.sin1.sg.leaseweb.net",
+        "sgp.proof.ovh.net",
+        "89.187.162.1",
+        "speedtest.lax12.us.leaseweb.net",
+        "speedtest.fra1.de.leaseweb.net"
+      ],
+      "suggestion_labels": [
+        "일본 도쿄 · Leaseweb (10G)",
+        "일본 도쿄 · DataPacket (10G)",
+        "홍콩 · Leaseweb (10G)",
+        "홍콩 · DataPacket (10G)",
+        "싱가포르 · Leaseweb (10G)",
+        "싱가포르 · OVH (1G)",
+        "싱가포르 · DataPacket (10G)",
+        "미국 로스앤젤레스 · Leaseweb (10G)",
+        "독일 프랑크푸르트 · Leaseweb (10G)"
+      ],
+      "hint": "공개 서버는 인터넷 회선 속도를, 사내 서버(직접 입력)는 내부 구간 속도를 잽니다. 공개 서버 목록 출처: iperf3serverlist.net"
+    },
+    {
+      "name": "port",
+      "type": "port",
+      "label": "서버 포트",
+      "example": "5201",
+      "default": "5201",
+      "hint": "기본 5201. '서버가 사용 중'이라고 나오면 5202~5210으로 바꿔 보세요."
+    },
+    {
+      "name": "direction",
+      "type": "enum",
+      "label": "방향",
+      "values": [
+        "download",
+        "upload"
+      ],
+      "value_labels": [
+        "다운로드 (서버 → 내 PC)",
+        "업로드 (내 PC → 서버)"
+      ],
+      "default": "download",
+      "example": "download"
     },
     {
       "name": "secs",
@@ -17,7 +64,8 @@
       "example": "10",
       "default": "10",
       "min": 1,
-      "max": 120
+      "max": 120,
+      "hint": "1~120초"
     }
   ],
   "keywords": [
@@ -33,17 +81,10 @@
     {
       "tool": "iperf3",
       "args": [
-        "-c",
-        "{server}",
-        "-t",
-        "{secs}",
-        "-P",
-        "4",
-        "--connect-timeout",
-        "5000"
+        "(서버, 포트, 방향, 시간에 따라 조립)"
       ],
       "reason": "정한 시간 동안 연결 4개로 낼 수 있는 최대 전송 속도를 측정한다. 서버에 5초 안에 연결되지 않으면 바로 끝낸다.",
-      "expect": "SUM 줄의 Bitrate가 실제 대역폭. 회선 속도보다 크게 낮으면 구간 문제."
+      "expect": "SUM 줄의 Bitrate가 실제 대역폭. 가입한 회선 속도보다 크게 낮으면 구간 문제. 먼 나라 서버일수록 낮게 나온다."
     }
   ]
 }

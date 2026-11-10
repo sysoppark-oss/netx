@@ -31,6 +31,24 @@
       ]
     },
     {
+      "flag": "-S",
+      "type": "boolean",
+      "label": "SCTP 소켓만",
+      "group": "종류",
+      "aliases": [
+        "--sctp"
+      ]
+    },
+    {
+      "flag": "-d",
+      "type": "boolean",
+      "label": "DCCP 소켓만",
+      "group": "종류",
+      "aliases": [
+        "--dccp"
+      ]
+    },
+    {
       "flag": "-w",
       "type": "boolean",
       "label": "RAW 소켓",

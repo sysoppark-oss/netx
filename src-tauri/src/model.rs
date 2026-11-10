@@ -174,6 +174,14 @@ pub struct RecipeInput {
     /// 목록을 실행 중에 채우는 입력(예: "interfaces")
     #[serde(default)]
     pub source: Option<String>,
+    /// 입력칸 아래에 늘 보이는 안내
+    #[serde(default)]
+    pub hint: Option<String>,
+    /// 골라 쓸 수 있는 추천 값(직접 입력도 가능)과 화면에 보일 이름
+    #[serde(default)]
+    pub suggestions: Vec<String>,
+    #[serde(default)]
+    pub suggestion_labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +281,16 @@ pub struct ValidatedStep {
     pub issues: Vec<Issue>,
     pub reason: Option<String>,
     pub expect: Option<String>,
+    /// 사용자가 직접 추가한 단계
+    pub manual: bool,
+    /// 옵션별 풀이(옵션, 뜻)
+    pub explain: Vec<Explain>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Explain {
+    pub token: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

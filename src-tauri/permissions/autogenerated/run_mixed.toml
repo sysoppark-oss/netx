@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-mixed"
+description = "Enables the run_mixed command without any pre-configured scope."
+commands.allow = ["run_mixed"]
+
+[[permission]]
+identifier = "deny-run-mixed"
+description = "Denies the run_mixed command without any pre-configured scope."
+commands.deny = ["run_mixed"]

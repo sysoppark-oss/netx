@@ -8,7 +8,8 @@
       "name": "url",
       "type": "url",
       "label": "주소 (https://는 생략 가능)",
-      "example": "example.com"
+      "example": "example.com",
+      "hint": "https:// 없이 주소만 적어도 됩니다. 포트가 다르면 주소:포트"
     }
   ],
   "keywords": [

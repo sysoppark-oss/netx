@@ -221,6 +221,7 @@ pub fn validate_step(reg: &Registry, step: &PlanStep, order: u32, level: Level, 
 
 fn finish(cx: Ctx, step: &PlanStep, order: u32, schema: Option<&ToolSchema>, argv: Vec<String>) -> ValidatedStep {
     let tool = schema.map(|s| s.tool.clone()).unwrap_or_else(|| clip(&step.tool, 40));
+    let explain_src = argv.clone();
     let display = std::iter::once(tool.clone()).chain(argv.iter().map(|a| quote(a))).collect::<Vec<_>>().join(" ");
     let confirm = match (cx.blocked, cx.risk) {
         (true, _) | (false, Risk::Safe) => Confirm::None,
@@ -242,7 +243,45 @@ fn finish(cx: Ctx, step: &PlanStep, order: u32, schema: Option<&ToolSchema>, arg
         issues: cx.issues,
         reason: step.reason.as_deref().map(|t| clip(t, 500)),
         expect: step.expect.as_deref().map(|t| clip(t, 500)),
+        manual: false,
+        explain: schema.map(|s| explain(s, &explain_src)).unwrap_or_default(),
     }
+}
+
+/// 옵션마다 뜻을 붙인다(화면 풀이용). 실행에는 쓰지 않는다.
+pub fn explain(schema: &ToolSchema, argv: &[String]) -> Vec<Explain> {
+    let find = |flag: &str| schema.options.iter().find(|o| o.flag == flag || o.aliases.iter().any(|a| a == flag));
+    let mut out: Vec<Explain> = Vec::new();
+    let mut push = |token: &str, label: &str| {
+        if !out.iter().any(|e| e.token == token) && out.len() < 24 {
+            out.push(Explain { token: token.to_string(), label: label.to_string() });
+        }
+    };
+    for (i, tok) in argv.iter().enumerate() {
+        if tok == "--" {
+            break;
+        }
+        if !(tok.starts_with('-') || tok.starts_with('+')) || tok.len() < 2 {
+            continue;
+        }
+        let name = tok.split_once('=').map(|(n, _)| n).unwrap_or(tok);
+        if let Some(spec) = find(name) {
+            let shown = match (spec.kind, tok.contains('='), argv.get(i + 1)) {
+                (ValueType::Boolean, _, _) | (_, true, _) => tok.clone(),
+                (_, false, Some(v)) if !spec.optional_value || !v.starts_with('-') => format!("{tok} {v}"),
+                _ => tok.clone(),
+            };
+            push(&shown, &spec.label);
+        } else if tok.starts_with('-') && !tok.starts_with("--") {
+            // 묶어 쓴 짧은 옵션: -tulpn
+            for ch in tok[1..].chars() {
+                if let Some(spec) = find(&format!("-{ch}")) {
+                    push(&format!("-{ch}"), &spec.label);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// 옵션 하나를 적용한다: 등급, 값 검사, 위험도.

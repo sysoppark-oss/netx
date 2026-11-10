@@ -21,6 +21,10 @@ fn main() {
                 "save_settings",
                 "test_llm",
                 "list_interfaces",
+                "network_info",
+                "check_command",
+                "plan_mixed",
+                "run_mixed",
             ]),
         ),
     )

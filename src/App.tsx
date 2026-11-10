@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { AddStep } from "./components/AddStep";
 import { BriefPanel } from "./components/BriefPanel";
+import { NetBar } from "./components/NetBar";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -13,15 +15,15 @@ import {
   getTools,
   installTools,
   listInterfaces,
-  planFromRecipe,
-  runAiPlan,
-  runRecipe,
+  planMixed,
+  runMixed,
   suggest,
 } from "./lib/backend";
 import { useRun } from "./lib/runs";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
+  Base,
   Briefing,
   EnvironmentStatus,
   Recipe,
@@ -39,6 +41,9 @@ interface AiPlan {
   planId: number;
   plan: ValidatedPlan;
 }
+
+/** 한 계획에 직접 추가할 수 있는 명령 수 (백엔드 MAX_EXTRAS와 같다) */
+const MAX_EXTRAS = 10;
 
 interface BriefState {
   runId: number;
@@ -64,6 +69,11 @@ export default function App() {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<ValidatedPlan | null>(null);
   const [tool, setTool] = useState<ToolSchema | null>(null);
+  // 직접 추가한 명령과 "직접 명령" 화면
+  const [extras, setExtras] = useState<string[]>([]);
+  const [manualMode, setManualMode] = useState(false);
+  // 추천 목록 대신 직접 입력을 고른 입력칸
+  const [custom, setCustom] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -114,9 +124,13 @@ export default function App() {
   useEffect(() => {
     setPlan(null);
     setAi(null);
+    setExtras([]);
     setPlanRunId(null);
     setError(null);
-    if (level === "general") setMode("easy");
+    if (level === "general") {
+      setMode("easy");
+      setManualMode(false);
+    }
   }, [level]);
 
   // 실행이 끝나면 AI에게 요약과 판정을 받는다.
@@ -133,11 +147,21 @@ export default function App() {
   const levelInfo = USER_LEVELS.find((l) => l.id === level)!;
   const showCommands = level !== "general";
   const allowed = (min: UserLevel) => levelRank(level) >= levelRank(min);
-  const shownPlan = ai ? ai.plan : plan;
+  const shownPlan = plan ?? ai?.plan ?? null;
+  const base: Base | null = ai
+    ? { kind: "ai", plan_id: ai.planId }
+    : recipe
+      ? { kind: "recipe", id: recipe.id, inputs }
+      : manualMode
+        ? { kind: "none" }
+        : null;
   const shownBrief = brief && brief.runId === planRunId ? brief : null;
 
   function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
     setAi(null);
+    setManualMode(false);
+    setExtras([]);
+    setCustom({});
     setRecipe(r);
     // 기본값이 있는 입력은 미리 채워 둔다.
     const defaults = Object.fromEntries(r.inputs.filter((i) => i.default).map((i) => [i.name, i.default as string]));
@@ -148,16 +172,48 @@ export default function App() {
     setNotice(null);
   }
 
-  async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs) {
+  async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs, added: string[] = extras) {
     if (!r) return;
     setError(null);
     setPlanRunId(null);
     try {
-      setPlan(await planFromRecipe(r.id, values, level));
+      setPlan(await planMixed({ kind: "recipe", id: r.id, inputs: values }, added, level));
     } catch (e) {
       setPlan(null);
       setError(String(e));
     }
+  }
+
+  // 직접 추가한 명령이 바뀌면 계획을 다시 검증해 보여 준다.
+  async function changeExtras(next: string[]) {
+    if (!base) return;
+    setError(null);
+    setPlanRunId(null);
+    try {
+      if (base.kind === "none" && next.length === 0) setPlan(null);
+      else setPlan(await planMixed(base, next, level));
+      setExtras(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function openManual() {
+    setAi(null);
+    setRecipe(null);
+    setPlan(null);
+    setExtras([]);
+    setPlanRunId(null);
+    setError(null);
+    setNotice(null);
+    setManualMode(true);
+  }
+
+  // 직접 추가한 단계를 뺀다. 직접 추가한 단계는 계획 맨 뒤에 차례로 붙어 있다.
+  function removeStep(order: number) {
+    if (!shownPlan) return;
+    const firstManual = shownPlan.steps.length - extras.length + 1;
+    changeExtras(extras.filter((_, i) => i !== order - firstManual));
   }
 
   // 옴니박스: 상황을 보내 제안을 받는다.
@@ -171,6 +227,8 @@ export default function App() {
       setMode("easy");
       if (res.kind === "plan") {
         setRecipe(null);
+        setManualMode(false);
+        setExtras([]);
         setPlan(null);
         setPlanRunId(null);
         setAi({ planId: res.plan_id, plan: res.plan });
@@ -197,17 +255,9 @@ export default function App() {
   async function execute(onlyStep: number | null, confirmed: boolean) {
     setError(null);
     try {
-      let started;
-      let title;
-      if (ai) {
-        started = await runAiPlan(ai.planId, level, confirmed, onlyStep);
-        title = ai.plan.summary || "AI 제안";
-      } else if (recipe) {
-        started = await runRecipe(recipe.id, inputs, level, confirmed, onlyStep);
-        title = recipe.title;
-      } else {
-        return;
-      }
+      if (!base) return;
+      const started = await runMixed(base, extras, level, confirmed, onlyStep);
+      const title = ai ? ai.plan.summary || "AI 제안" : recipe ? recipe.title : "직접 명령";
       setRunId(started.run_id);
       setPlanRunId(started.run_id);
       setRunTitle(title);
@@ -246,8 +296,12 @@ export default function App() {
         disabledReason={disabledReason}
         onRun={execute}
         onCancel={() => planRunId !== null && cancelRun(planRunId)}
+        onRemove={removeStep}
       />
     </>
+  );
+  const addStep = base && (shownPlan || manualMode) && (
+    <AddStep tools={tools} level={level} count={extras.length} max={MAX_EXTRAS} onAdd={(text) => changeExtras([...extras, text])} />
   );
 
   return (
@@ -324,6 +378,8 @@ export default function App() {
         <EnvBadge env={env} />
       </header>
 
+      <NetBar />
+
       <div className="flex min-h-0 flex-1">
         {/* 좌측 패널 */}
         <aside className="w-60 shrink-0 overflow-y-auto border-r border-line bg-panel p-3">
@@ -350,6 +406,21 @@ export default function App() {
                   );
                 })}
               </ul>
+              {level !== "general" && (
+                <>
+                  <h2 className="mt-4 mb-2 px-1 text-xs font-semibold text-dim">직접 하기</h2>
+                  <button
+                    onClick={openManual}
+                    title="도구와 옵션을 직접 정해서 실행합니다. 실행 전에 검증으로 위험도와 예상을 볼 수 있습니다."
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised ${
+                      manualMode && !ai && !recipe ? "bg-raised" : ""
+                    }`}
+                  >
+                    <span className="text-base">⌨️</span>
+                    <span className="flex-1">직접 명령</span>
+                  </button>
+                </>
+              )}
             </>
           ) : (
             <>
@@ -411,6 +482,16 @@ export default function App() {
               )}
               <p className="mt-2 text-xs text-dim">AI가 만든 계획입니다. 명령과 이유를 확인한 뒤 실행하세요.</p>
               {cards}
+              {addStep}
+            </div>
+          ) : mode === "easy" && manualMode ? (
+            <div className="mx-auto max-w-3xl">
+              <h1 className="text-xl font-semibold">⌨️ 직접 명령</h1>
+              <p className="mt-1 text-sm text-dim">
+                도구와 옵션을 직접 정해서 실행합니다. 등록된 도구와 허용된 옵션만 쓸 수 있고, 모든 명령은 실행 전에 검증을 거칩니다.
+              </p>
+              {cards}
+              {addStep}
             </div>
           ) : mode === "easy" && recipe ? (
             <div className="mx-auto max-w-3xl">
@@ -420,7 +501,7 @@ export default function App() {
               <p className="mt-1 text-sm text-dim">{recipe.description}</p>
 
               <form
-                className="mt-5 flex flex-wrap items-end gap-3"
+                className="mt-5 flex flex-wrap items-start gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
                   makePlan();
@@ -441,40 +522,76 @@ export default function App() {
                       : input.source === "interfaces" && interfaces.length > 0
                         ? interfaces.map((v) => ({ value: v, label: v === "any" ? "any (전체)" : v }))
                         : null;
+                  const suggested = input.suggestions.length > 0;
+                  const value = inputs[input.name] ?? input.default ?? "";
+                  const typing = suggested && (custom[input.name] || (value !== "" && !input.suggestions.includes(value)));
                   return (
-                    <label key={input.name} className="flex min-w-36 flex-1 flex-col gap-1 text-xs text-dim">
+                    <label
+                      key={input.name}
+                      className={`flex flex-col gap-1 text-xs text-dim ${suggested ? "min-w-full" : "min-w-36 flex-1"}`}
+                    >
                       <span>
                         {input.label}
                         {input.optional && <span className="ml-1 opacity-60">(선택)</span>}
                       </span>
                       {choices ? (
-                        <select value={inputs[input.name] ?? input.default ?? ""} onChange={(e) => change(e.target.value)} className={field}>
+                        <select value={value} onChange={(e) => change(e.target.value)} className={field}>
                           {choices.map((c) => (
                             <option key={c.value} value={c.value}>
                               {c.label}
                             </option>
                           ))}
                         </select>
+                      ) : suggested ? (
+                        <div className="flex gap-2">
+                          <select
+                            value={typing ? "" : value}
+                            onChange={(e) => {
+                              setCustom({ ...custom, [input.name]: e.target.value === "" });
+                              change(e.target.value);
+                            }}
+                            className={`${field} min-w-0 flex-1`}
+                          >
+                            {input.suggestions.map((v, i) => (
+                              <option key={v} value={v}>
+                                {input.suggestion_labels[i] ? `${input.suggestion_labels[i]} · ${v}` : v}
+                              </option>
+                            ))}
+                            <option value="">직접 입력…</option>
+                          </select>
+                          {typing && (
+                            <input
+                              value={value}
+                              onChange={(e) => change(e.target.value)}
+                              placeholder={input.example ?? ""}
+                              spellCheck={false}
+                              autoFocus
+                              className={`${field} min-w-0 flex-1`}
+                            />
+                          )}
+                        </div>
                       ) : (
                         <input
                           value={inputs[input.name] ?? ""}
                           onChange={(e) => change(e.target.value)}
-                          placeholder={input.example ?? ""}
+                          placeholder={input.example ? `예: ${input.example}` : ""}
                           spellCheck={false}
                           className={field}
                         />
                       )}
+                      {input.hint && <span className="leading-relaxed opacity-80">{input.hint}</span>}
                     </label>
                   );
                 })}
                 <button
                   type="submit"
-                  className="shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-semibold whitespace-nowrap text-void"
+                  className="mt-5 shrink-0 rounded-md bg-accent px-4 py-2 text-sm font-semibold whitespace-nowrap text-void"
                 >
                   계획 보기
                 </button>
               </form>
               {cards}
+              {addStep}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center">

@@ -34,10 +34,12 @@ interface Props {
   /** onlyStep이 null이면 전체 실행 */
   onRun: (onlyStep: number | null, confirmed: boolean) => void;
   onCancel: () => void;
+  /** 직접 추가한 단계를 뺀다 */
+  onRemove?: (order: number) => void;
 }
 
 /** 검증을 통과한 계획을 제안 카드로 보여 주고 실행한다. */
-export function PlanCards({ plan, level, run, disabledReason, onRun, onCancel }: Props) {
+export function PlanCards({ plan, level, run, disabledReason, onRun, onCancel, onRemove }: Props) {
   // 확인을 기다리는 실행 대상. undefined는 없음, null은 전체, 숫자는 그 단계만.
   const [pending, setPending] = useState<number | null | undefined>(undefined);
   const runnable = plan.steps.filter((s) => !s.blocked);
@@ -120,6 +122,7 @@ export function PlanCards({ plan, level, run, disabledReason, onRun, onCancel }:
             disabled={disabled}
             disabledReason={disabledReason}
             onRun={() => request(step.order)}
+            onRemove={onRemove && step.manual && !busy ? () => onRemove(step.order) : undefined}
           />
         ))}
       </ol>
@@ -134,7 +137,9 @@ function StepCard({
   disabled,
   disabledReason,
   onRun,
+  onRemove,
 }: {
+  onRemove?: () => void;
   step: ValidatedStep;
   level: UserLevel;
   run: RunState | null;
@@ -159,7 +164,15 @@ function StepCard({
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-raised text-xs text-dim">
           {step.order}
         </span>
-        <span className="flex-1 font-semibold">{step.title || step.tool}</span>
+        <span className="flex-1 font-semibold">
+          {step.title || step.tool}
+          {step.manual && <span className="ml-2 rounded-full border border-accent/40 px-2 py-0.5 text-xs font-normal text-accent">직접 추가</span>}
+        </span>
+        {onRemove && (
+          <button onClick={onRemove} title="이 단계를 계획에서 뺍니다" className="shrink-0 text-xs text-dim hover:text-danger">
+            ✕ 빼기
+          </button>
+        )}
         {state && <StatusChip status={state.status} exitCode={state.exit_code} elapsedMs={state.elapsed_ms} />}
         {step.needs_root && showCommand && (
           <span title="WSL2 root 권한으로 실행합니다" className="shrink-0 rounded-full border border-line px-2 py-0.5 text-xs text-dim">
@@ -188,6 +201,17 @@ function StepCard({
           <span className="text-accent">$ </span>
           {step.display}
         </pre>
+      )}
+
+      {showCommand && step.explain.length > 0 && (level === "junior" || step.manual) && (
+        <dl className="mt-2 space-y-0.5 text-xs">
+          {step.explain.map((e) => (
+            <div key={e.token} className="flex gap-2">
+              <dt className="w-32 shrink-0 font-mono text-accent">{e.token}</dt>
+              <dd className="text-dim">{e.label}</dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {step.reason && (
