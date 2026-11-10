@@ -74,6 +74,8 @@ export default function App() {
   const [manualMode, setManualMode] = useState(false);
   // 추천 목록 대신 직접 입력을 고른 입력칸
   const [custom, setCustom] = useState<Record<string, boolean>>({});
+  // Expert 옵션 패널에서 누른 옵션을 명령 입력칸에 붙인다.
+  const [appendReq, setAppendReq] = useState({ text: "", n: 0 });
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -133,6 +135,14 @@ export default function App() {
     }
   }, [level]);
 
+  // Easy와 Expert는 계획을 따로 쓴다. 모드를 바꾸면 직접 추가한 명령과 계획을 비운다.
+  useEffect(() => {
+    setPlan(null);
+    setExtras([]);
+    setPlanRunId(null);
+    setError(null);
+  }, [mode]);
+
   // 실행이 끝나면 AI에게 요약과 판정을 받는다.
   const planRunDone = planRun !== null && !planRun.active && Object.keys(planRun.steps).length > 0;
   useEffect(() => {
@@ -147,8 +157,11 @@ export default function App() {
   const levelInfo = USER_LEVELS.find((l) => l.id === level)!;
   const showCommands = level !== "general";
   const allowed = (min: UserLevel) => levelRank(level) >= levelRank(min);
-  const shownPlan = plan ?? ai?.plan ?? null;
-  const base: Base | null = ai
+  const expert = mode === "expert";
+  const shownPlan = expert ? plan : (plan ?? ai?.plan ?? null);
+  const base: Base | null = expert
+    ? { kind: "none" }
+    : ai
     ? { kind: "ai", plan_id: ai.planId }
     : recipe
       ? { kind: "recipe", id: recipe.id, inputs }
@@ -471,7 +484,29 @@ export default function App() {
             </div>
           )}
 
-          {mode === "easy" && ai ? (
+          {expert ? (
+            <div className="mx-auto max-w-3xl">
+              <h1 className="text-xl font-semibold">{tool ? tool.title : "명령 조립"}</h1>
+              <p className="mt-1 text-sm text-dim">
+                {tool
+                  ? `${tool.description} 오른쪽 옵션을 누르면 명령에 붙습니다. [검증]으로 확인한 뒤 [계획에 추가]하고 실행하세요.`
+                  : "왼쪽에서 도구를 고르면 사용 형식이 나오고, 오른쪽 옵션을 눌러 명령을 조립할 수 있습니다."}
+              </p>
+              {cards}
+              <AddStep
+                key={tool?.tool ?? "none"}
+                tools={tools}
+                level={level}
+                count={extras.length}
+                max={MAX_EXTRAS}
+                onAdd={(text) => changeExtras([...extras, text])}
+                initialTool={tool?.tool}
+                defaultOpen
+                appendReq={appendReq}
+                hideOptions
+              />
+            </div>
+          ) : mode === "easy" && ai ? (
             <div className="mx-auto max-w-3xl">
               <p className="text-xs font-semibold text-accent">AI 제안</p>
               <h1 className="mt-1 text-xl font-semibold">{ai.plan.summary || "진단 계획"}</h1>
@@ -613,7 +648,14 @@ export default function App() {
         {/* 우측: 옵션 패널 (목록 보기) */}
         {showCommands && mode === "expert" && (
           <aside className="w-96 shrink-0 overflow-y-auto border-l border-line bg-panel p-4">
-            {tool ? <OptionList tool={tool} /> : <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>}
+            {tool ? (
+              <OptionList
+                tool={tool}
+                onPick={(o) => setAppendReq((r) => ({ text: `${o.flag}${o.type === "boolean" ? "" : " "}`, n: r.n + 1 }))}
+              />
+            ) : (
+              <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>
+            )}
           </aside>
         )}
       </div>
@@ -624,7 +666,7 @@ export default function App() {
           <div className="flex items-center gap-3 border-b border-line px-5 py-2 font-mono text-sm">
             <span className="text-accent">$</span>
             <span className="truncate text-dim">
-              {shownPlan && mode === "easy"
+              {shownPlan
                 ? shownPlan.steps.map((s) => s.display).join("  ·  ")
                 : "실행할 명령이 여기에 조립됩니다"}
             </span>
@@ -677,7 +719,7 @@ export default function App() {
   );
 }
 
-function OptionList({ tool }: { tool: ToolSchema }) {
+function OptionList({ tool, onPick }: { tool: ToolSchema; onPick: (o: ToolSchema["options"][number]) => void }) {
   const groups = new Map<string, ToolSchema["options"]>();
   for (const o of tool.options) {
     const key = o.risk === "forbidden" ? "금지 (실행 불가)" : (o.group ?? "기타");
@@ -692,12 +734,20 @@ function OptionList({ tool }: { tool: ToolSchema }) {
           <h3 className="mb-1 text-xs font-semibold text-dim">{group}</h3>
           <ul className="space-y-1">
             {options.map((o) => (
-              <li key={o.flag} className="flex items-start gap-2 text-sm">
-                <code className="w-28 shrink-0 font-mono text-xs leading-5 break-all text-accent">{o.flag}</code>
-                <span className={`flex-1 text-xs leading-5 ${o.risk === "forbidden" ? "text-dim line-through" : ""}`}>
-                  {o.label}
-                </span>
-                {o.risk !== "safe" && <RiskBadge risk={o.risk} />}
+              <li key={o.flag}>
+                <button
+                  onClick={() => onPick(o)}
+                  disabled={o.risk === "forbidden"}
+                  title={o.risk === "forbidden" ? "실행할 수 없는 옵션입니다" : "누르면 명령 끝에 붙습니다"}
+                  className="flex w-full items-start gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-raised disabled:hover:bg-transparent"
+                >
+                  <code className="w-28 shrink-0 font-mono text-xs leading-5 break-all text-accent">
+                    {o.flag}
+                    {o.type !== "boolean" && o.risk !== "forbidden" && <span className="text-dim"> &lt;값&gt;</span>}
+                  </code>
+                  <span className={`flex-1 text-xs leading-5 ${o.risk === "forbidden" ? "text-dim line-through" : ""}`}>{o.label}</span>
+                  {o.risk !== "safe" && <RiskBadge risk={o.risk} />}
+                </button>
               </li>
             ))}
           </ul>

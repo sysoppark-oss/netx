@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { checkCommand } from "../lib/backend";
 import { levelRank } from "../lib/types";
 import type { ToolSchema, UserLevel, ValidatedStep } from "../lib/types";
@@ -22,14 +22,22 @@ interface Props {
   count: number;
   max: number;
   onAdd: (text: string) => void;
+  /** 처음부터 골라 둘 도구 (Expert 모드) */
+  initialTool?: string;
+  /** 처음부터 펼쳐 둔다 */
+  defaultOpen?: boolean;
+  /** 밖(옵션 패널)에서 누른 옵션을 명령 끝에 붙인다. n이 바뀔 때마다 한 번 붙인다. */
+  appendReq?: { text: string; n: number };
+  /** 옵션 목록을 감춘다 (Expert 모드에서는 오른쪽 패널에 따로 있다) */
+  hideOptions?: boolean;
 }
 
 /** 계획에 명령을 직접 추가한다. 도구의 사용 형식과 옵션을 보여 주고, [검증]으로 위험도와 예상을 미리 본다. */
-export function AddStep({ tools, level, count, max, onAdd }: Props) {
+export function AddStep({ tools, level, count, max, onAdd, initialTool, defaultOpen, appendReq, hideOptions }: Props) {
   const usable = tools.filter((t) => levelRank(level) >= levelRank(t.min_level));
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [text, setText] = useState("");
+  const [open, setOpen] = useState(defaultOpen ?? false);
+  const [name, setName] = useState(initialTool ?? "");
+  const [text, setText] = useState(initialTool ? `${initialTool} ` : "");
   const [checked, setChecked] = useState<{ text: string; step: ValidatedStep } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const tool = usable.find((t) => t.tool === name) ?? null;
@@ -70,6 +78,17 @@ export function AddStep({ tools, level, count, max, onAdd }: Props) {
     setText(name ? `${name} ` : "");
     setChecked(null);
   }
+
+  // 이 입력칸이 만들어진 뒤에 누른 옵션만 붙인다.
+  const seen = useRef(appendReq?.n ?? 0);
+  useEffect(() => {
+    if (!appendReq || appendReq.n === seen.current) return;
+    seen.current = appendReq.n;
+    setOpen(true);
+    setText((t) => `${t.trimEnd()} ${appendReq.text}`);
+    setChecked(null);
+    setError(null);
+  }, [appendReq?.n]);
 
   if (level === "general") return null;
 
@@ -154,7 +173,7 @@ export function AddStep({ tools, level, count, max, onAdd }: Props) {
               ))}
             </ul>
           )}
-          {tool.options.length > 0 && (
+          {tool.options.length > 0 && !hideOptions && (
             <>
               <p className="mt-2 text-xs text-dim">옵션 (누르면 명령 끝에 붙습니다. 값이 필요한 옵션은 뒤에 값을 적으세요)</p>
               <div className="mt-1 flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
