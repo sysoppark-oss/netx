@@ -57,11 +57,20 @@ pub struct StepResult {
     pub facts: Vec<Fact>,
     pub charts: Vec<Chart>,
     pub targets: Vec<Target>,
+    /// 포트를 쓰고 있는 Windows 프로세스(종료 버튼용)
+    pub processes: Vec<Proc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Proc {
+    pub pid: u32,
+    pub name: String,
+    pub ports: String,
 }
 
 impl StepResult {
     fn new(light: Light, text: impl Into<String>) -> Self {
-        StepResult { light, text: text.into(), facts: vec![], charts: vec![], targets: vec![] }
+        StepResult { light, text: text.into(), facts: vec![], charts: vec![], targets: vec![], processes: vec![] }
     }
     fn fact(mut self, label: &str, value: impl Into<String>) -> Self {
         self.facts.push(Fact { label: label.into(), value: value.into() });
@@ -483,6 +492,28 @@ fn winports(lines: &[String]) -> Option<StepResult> {
     if bars.len() > 1 {
         r = r.chart(Chart::Bars { title: "프로그램별 소켓 수".into(), unit: "개".into(), bars });
     }
+    // 프로세스별로 쓰는 포트를 모은다.
+    let mut procs: Vec<(u32, String, Vec<String>)> = Vec::new();
+    for c in rows.iter().filter(|c| c.len() >= 4) {
+        let Ok(pid) = c[2].parse::<u32>() else { continue };
+        let port = format!("{}/{}", c[1].rsplit(':').next().unwrap_or(""), c[0]);
+        match procs.iter_mut().find(|p| p.0 == pid) {
+            Some(p) => {
+                if !p.2.contains(&port) {
+                    p.2.push(port)
+                }
+            }
+            None => procs.push((pid, c[3].to_string(), vec![port])),
+        }
+    }
+    r.processes = procs
+        .into_iter()
+        .take(50)
+        .map(|(pid, name, ports)| {
+            let more = if ports.len() > 6 { format!(" 외 {}개", ports.len() - 6) } else { String::new() };
+            Proc { pid, name, ports: format!("{}{more}", ports.iter().take(6).cloned().collect::<Vec<_>>().join(", ")) }
+        })
+        .collect();
     Some(r)
 }
 
@@ -726,6 +757,9 @@ mod tests {
     fn lookups_and_fallbacks() {
         assert!(done("winports", "PROTO LOCAL  PID  PROCESS  STATE\nTCP   :::445  4  System  수신 대기", 0).text.contains("System(PID 4)"));
         assert!(done("winports", "Windows에서 포트 9 을(를) 쓰는 프로그램이 없습니다.", 0).text.contains("없습니다"));
+        let r = done("winports", "PROTO LOCAL  PID  PROCESS  STATE\nTCP   0.0.0.0:8080  5120  node  수신 대기\nTCP   :::8080  5120  node  수신 대기\nUDP   0.0.0.0:5353  900  chrome  -", 0);
+        assert_eq!(r.processes.len(), 2);
+        assert_eq!((r.processes[0].pid, r.processes[0].name.as_str(), r.processes[0].ports.as_str()), (5120, "node", "8080/TCP"));
         assert!(done("ss", "Netid State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess", 0).text.contains("없습니다"));
         assert!(done("lsof", "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\nsshd 1 root 3u IPv4 1 0t0 TCP *:22 (LISTEN)", 0).text.contains("1개"));
         assert!(done("tcpdump", "tcpdump: listening on eth0\n0 packets captured\n0 packets received by filter\n0 packets dropped by kernel", 0).text.contains("잡히지 않았습니다"));

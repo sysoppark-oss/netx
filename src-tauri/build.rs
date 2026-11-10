@@ -26,6 +26,7 @@ fn main() {
                 "plan_mixed",
                 "run_mixed",
                 "open_target",
+                "kill_process",
             ]),
         ),
     )

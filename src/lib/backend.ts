@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AppInfo,
+  KillResult,
   Base,
   NetInfo,
   ValidatedStep,
@@ -173,4 +174,9 @@ export async function runMixed(
 /** 스캔 결과의 장비에 접속해 본다. 웹은 브라우저, SSH·Telnet은 새 터미널 창. */
 export async function openTarget(host: string, port: number, kind: "web" | "ssh" | "telnet", user: string | null): Promise<string> {
   return invoke<string>("open_target", { host, port, kind, user });
+}
+
+/** Windows 프로세스를 종료한다. Windows Hello 확인을 거친다. typedName은 Hello를 쓸 수 없을 때 입력한 프로세스 이름. */
+export async function killProcess(pid: number, typedName: string | null, level: UserLevel): Promise<KillResult> {
+  return invoke<KillResult>("kill_process", { pid, typedName, level });
 }

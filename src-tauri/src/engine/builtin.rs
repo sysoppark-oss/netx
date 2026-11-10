@@ -183,8 +183,8 @@ mod tests {
         let code = portscan(&["--".into(), "127.0.0.1".into(), port.to_string()], &emit).await.unwrap();
         assert_eq!(code, 0);
         assert!(lines.lock().unwrap().iter().any(|l| l.starts_with("127.0.0.1  open  ") && l.contains(&port.to_string())));
-        drop(listener);
-        assert_eq!(portscan(&["127.0.0.1".into(), port.to_string()], &|_| {}).await.unwrap(), 1);
+        // 1번 포트는 쓰는 프로그램이 없다.
+        assert_eq!(portscan(&["127.0.0.1".into(), "1".into()], &|_| {}).await.unwrap(), 1);
         assert!(portscan(&["10.0.0.0/20".into(), "1-50".into()], &|_| {}).await.is_err(), "너무 넓은 범위");
         assert!(portscan(&["127.0.0.1".into()], &|_| {}).await.is_err());
     }

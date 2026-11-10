@@ -375,6 +375,33 @@ fn connect_command(host: &str, port: u16, kind: &str, user: Option<&str>) -> Res
     }
 }
 
+// ---- 프로세스 종료 ----
+
+/// Windows 프로세스를 종료한다. Windows Hello로 본인 확인을 받고, 쓸 수 없는 PC에서는 프로세스 이름 입력을 요구한다.
+/// 중급 이상 등급만 쓸 수 있고, 결과는 감사 로그에 남긴다.
+#[tauri::command]
+pub async fn kill_process(app: AppHandle, pid: u32, typed_name: Option<String>, level: Level) -> Result<crate::prockill::KillResult, String> {
+    if level < Level::Middle {
+        return Err("프로세스 종료는 중급 엔지니어 이상 등급에서만 쓸 수 있습니다".into());
+    }
+    #[cfg(target_os = "windows")]
+    let hwnd = app.get_webview_window("main").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let hwnd = 0isize;
+
+    let (result, killed) = tauri::async_runtime::spawn_blocking(move || crate::prockill::kill_process(hwnd, pid, typed_name.as_deref()))
+        .await
+        .map_err(|e| format!("종료 작업이 중단되었습니다: {e}"))??;
+    if let Some(name) = killed {
+        let (data_dir, _) = data_dirs(&app)?;
+        audit::log(
+            &data_dir,
+            &AuditEntry { time: audit::now(), run_id: 0, level, source: "kill", tool: "taskkill", argv: &[pid.to_string(), name], risk: Risk::Danger, root: false, confirmed: true },
+        );
+    }
+    Ok(result)
+}
+
 // ---- 내 네트워크 ----
 
 /// 쓰고 있는 어댑터의 주소, 게이트웨이, DNS, 공인 IP, 누적 송수신량.

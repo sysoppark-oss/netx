@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { openTarget } from "../lib/backend";
-import type { Light, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
+import { killProcess, openTarget } from "../lib/backend";
+import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 import { ChartView } from "./Charts";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
@@ -241,7 +241,7 @@ function StepCard({
 
       {state?.status === "running" && <Progress startedAt={state.started_at} estimateSecs={step.estimate_secs} />}
 
-      {result && state?.status !== "running" && <ResultView result={result} showFacts={showCommand} />}
+      {result && state?.status !== "running" && <ResultView result={result} showFacts={showCommand} level={level} />}
 
       {state && showCommand && (
         <pre ref={outRef} className="mt-3 max-h-64 overflow-auto rounded-md border border-line bg-void px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap">
@@ -314,7 +314,7 @@ const LIGHT_BOX: Record<Light, string> = {
 };
 
 /** 결과 해설: 한 줄 결론, 핵심 수치, 그래프. */
-function ResultView({ result, showFacts }: { result: StepResult; showFacts: boolean }) {
+function ResultView({ result, showFacts, level }: { result: StepResult; showFacts: boolean; level: UserLevel }) {
   return (
     <div className={`mt-3 rounded-md border px-3 py-3 ${LIGHT_BOX[result.light]}`}>
       <p className="flex gap-2 text-sm leading-relaxed">
@@ -342,6 +342,120 @@ function ResultView({ result, showFacts }: { result: StepResult; showFacts: bool
         </div>
       )}
       {result.targets.length > 0 && <TargetList targets={result.targets} allowTerminal={showFacts} />}
+      {result.processes.length > 0 && showFacts && <ProcessList processes={result.processes} level={level} />}
+    </div>
+  );
+}
+
+/** 포트를 쓰고 있는 Windows 프로세스 목록과 종료 버튼. 종료는 Windows Hello 확인을 거친다. */
+function ProcessList({ processes, level }: { processes: Proc[]; level: UserLevel }) {
+  const canKill = level === "middle" || level === "senior" || level === "op";
+  // 종료를 물어보는 중인 프로세스
+  const [asking, setAsking] = useState<Proc | null>(null);
+  const [needName, setNeedName] = useState<string | null>(null);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [gone, setGone] = useState<number[]>([]);
+
+  function ask(p: Proc) {
+    setAsking(p);
+    setNeedName(null);
+    setTyped("");
+    setMessage(null);
+  }
+
+  async function kill() {
+    if (!asking) return;
+    setBusy(true);
+    try {
+      const r = await killProcess(asking.pid, needName !== null ? typed : null, level);
+      if (r.status === "killed") {
+        setGone((g) => [...g, asking.pid]);
+        setAsking(null);
+        setMessage({ ok: true, text: r.message });
+      } else if (r.status === "need_name") {
+        setNeedName(r.name);
+        setMessage({ ok: false, text: r.message });
+      } else {
+        setAsking(null);
+        setMessage({ ok: false, text: r.message });
+      }
+    } catch (e) {
+      setAsking(null);
+      setMessage({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-line bg-void px-3 py-2">
+      <p className="text-xs font-semibold">
+        포트를 쓰고 있는 프로그램
+        {!canKill && <span className="ml-2 font-normal text-dim">종료는 중급 엔지니어 이상 등급에서 할 수 있습니다.</span>}
+      </p>
+      {asking && (
+        <div className="mt-2 rounded-md border border-danger/50 bg-danger/10 px-3 py-2 text-xs">
+          <p className="font-semibold text-danger">
+            {asking.name} (PID {asking.pid})을(를) 강제로 종료할까요?
+          </p>
+          <p className="mt-1 text-dim">
+            저장하지 않은 작업은 사라지고 되돌릴 수 없습니다. [종료]를 누르면 Windows Hello(지문, 얼굴, PIN) 확인 창이 뜹니다.
+          </p>
+          {needName !== null && (
+            <label className="mt-2 flex items-center gap-2">
+              프로세스 이름 입력
+              <input
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                placeholder={needName}
+                spellCheck={false}
+                autoFocus
+                className="w-48 rounded border border-line bg-raised px-2 py-0.5 font-mono text-ink outline-none focus:border-danger"
+              />
+            </label>
+          )}
+          <div className="mt-2 flex gap-2">
+            <button
+              onClick={kill}
+              disabled={busy || (needName !== null && typed.trim() === "")}
+              className="rounded bg-danger px-3 py-1 font-semibold text-void disabled:opacity-50"
+            >
+              {busy ? "확인을 기다리는 중…" : "종료"}
+            </button>
+            <button onClick={() => setAsking(null)} disabled={busy} className="rounded border border-line px-3 py-1 text-dim">
+              취소
+            </button>
+          </div>
+        </div>
+      )}
+      {message && <p className={`mt-1 text-xs ${message.ok ? "text-safe" : "text-caution"}`}>{message.text}</p>}
+      <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+        {processes.map((p) => {
+          const ended = gone.includes(p.pid);
+          return (
+            <li key={p.pid} className={`flex items-center gap-3 text-xs ${ended ? "opacity-40" : ""}`}>
+              <span className="w-40 shrink-0 truncate font-mono">{p.name}</span>
+              <span className="w-20 shrink-0 font-mono text-dim">PID {p.pid}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-accent">{p.ports}</span>
+              {ended ? (
+                <span className="shrink-0 text-dim">종료됨</span>
+              ) : (
+                canKill && (
+                  <button
+                    onClick={() => ask(p)}
+                    disabled={busy}
+                    className="shrink-0 rounded border border-danger/50 px-2 py-0.5 text-danger hover:bg-danger/10 disabled:opacity-50"
+                  >
+                    종료
+                  </button>
+                )
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

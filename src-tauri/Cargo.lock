@@ -2196,6 +2196,8 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "url",
+ "windows 0.62.2",
+ "windows-future",
 ]
 
 [[package]]

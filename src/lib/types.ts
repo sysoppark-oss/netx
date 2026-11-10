@@ -208,7 +208,20 @@ export interface StepResult {
   facts: { label: string; value: string }[];
   charts: Chart[];
   targets: Target[];
+  processes: Proc[];
 }
+
+/** 포트를 쓰고 있는 Windows 프로세스 */
+export interface Proc {
+  pid: number;
+  name: string;
+  ports: string;
+}
+
+export type KillResult =
+  | { status: "killed"; message: string }
+  | { status: "need_name"; name: string; message: string }
+  | { status: "denied"; message: string };
 
 /** 결과에서 바로 접속해 볼 수 있는 대상(열린 포트) */
 export interface Target {
