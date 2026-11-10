@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
-import { getAppInfo, getEnvironmentStatus, getRecipes, getTools, planFromRecipe } from "./lib/backend";
+import {
+  cancelRun,
+  getAppInfo,
+  getEnvironmentStatus,
+  getRecipes,
+  getToolStatus,
+  getTools,
+  installTools,
+  planFromRecipe,
+  runRecipe,
+} from "./lib/backend";
+import { useRun } from "./lib/runs";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
@@ -13,7 +24,7 @@ import type {
 } from "./lib/types";
 
 // 화면 배치는 docs/DEV_PLAN_v0.1.md 3장을 따른다.
-// Phase 2: 레시피 → 검증된 제안 카드, 도구 옵션 목록 보기. 실행은 Phase 3, AI 제안은 Phase 5.
+// Phase 3: 레시피 → 검증된 제안 카드 → 실행(WSL) → 실시간 출력. AI 제안은 Phase 5.
 
 export default function App() {
   const [level, setLevel] = useState<UserLevel>("middle");
@@ -29,17 +40,37 @@ export default function App() {
   const [plan, setPlan] = useState<ValidatedPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
+  const [runId, setRunId] = useState<number | null>(null);
+  const [runTitle, setRunTitle] = useState("");
+  const [planRunId, setPlanRunId] = useState<number | null>(null);
+  const [missing, setMissing] = useState<string[]>([]);
+  const [installRunId, setInstallRunId] = useState<number | null>(null);
+  const run = useRun(runId);
+  const planRun = useRun(planRunId);
+  const installing = useRun(installRunId)?.active ?? false;
+
+  const refreshTools = () =>
+    getToolStatus()
+      .then((list) => setMissing(list.filter((t) => !t.installed).map((t) => t.tool)))
+      .catch(() => setMissing([]));
 
   useEffect(() => {
     getAppInfo().then(setInfo).catch(() => setInfo(null));
     getEnvironmentStatus().then(setEnv).catch(() => setEnv(null));
     getRecipes().then(setRecipes).catch(() => setRecipes([]));
     getTools().then(setTools).catch(() => setTools([]));
+    refreshTools();
   }, []);
+
+  // 도구 설치가 끝나면 설치 상태를 다시 확인한다.
+  useEffect(() => {
+    if (installRunId !== null && !installing) refreshTools();
+  }, [installRunId, installing]);
 
   // 등급이 바뀌면 허용 범위가 달라지므로 계획을 다시 만들게 한다.
   useEffect(() => {
     setPlan(null);
+    setPlanRunId(null);
     setError(null);
     if (level === "general") setMode("easy");
   }, [level]);
@@ -52,12 +83,47 @@ export default function App() {
     setRecipe(r);
     setInputs({});
     setPlan(null);
+    setPlanRunId(null);
     setError(null);
   }
+
+  async function execute(onlyStep: number | null, confirmed: boolean) {
+    if (!recipe) return;
+    setError(null);
+    try {
+      const started = await runRecipe(recipe.id, inputs, level, confirmed, onlyStep);
+      setRunId(started.run_id);
+      setPlanRunId(started.run_id);
+      setRunTitle(recipe.title);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function install() {
+    setError(null);
+    try {
+      const started = await installTools();
+      setRunId(started.run_id);
+      setInstallRunId(started.run_id);
+      setRunTitle("도구 설치");
+      setRawOpen(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  const disabledReason =
+    env?.mode !== "full"
+      ? "실행하려면 WSL2가 필요합니다. 관리자 PowerShell에서 wsl --install 후 재부팅하세요."
+      : installing
+        ? "도구를 설치하는 중입니다."
+        : null;
 
   async function makePlan() {
     if (!recipe) return;
     setError(null);
+    setPlanRunId(null);
     try {
       setPlan(await planFromRecipe(recipe.id, inputs, level));
     } catch (e) {
@@ -176,6 +242,22 @@ export default function App() {
 
         {/* 중앙: 제안 카드 영역 */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          {missing.length > 0 && (
+            <div className="mx-auto mb-5 flex max-w-3xl items-center gap-4 rounded-md border border-caution/50 bg-caution/10 px-4 py-3 text-sm">
+              <p className="flex-1">
+                <span className="font-semibold text-caution">WSL에 설치되지 않은 도구가 있습니다.</span>
+                <span className="ml-2 font-mono text-xs text-dim">{missing.join(", ")}</span>
+              </p>
+              <button
+                onClick={install}
+                disabled={installing}
+                title="WSL(Ubuntu)에서 apt로 진단 도구를 설치합니다. root 권한으로 실행됩니다."
+                className="shrink-0 rounded-md bg-caution px-3 py-1.5 text-sm font-semibold whitespace-nowrap text-void disabled:opacity-50"
+              >
+                {installing ? "설치 중…" : "도구 설치"}
+              </button>
+            </div>
+          )}
           {mode === "easy" && recipe ? (
             <div className="mx-auto max-w-3xl">
               <h1 className="text-xl font-semibold">
@@ -195,7 +277,11 @@ export default function App() {
                     {input.label}
                     <input
                       value={inputs[input.name] ?? ""}
-                      onChange={(e) => setInputs({ ...inputs, [input.name]: e.target.value })}
+                      onChange={(e) => {
+                        setInputs({ ...inputs, [input.name]: e.target.value });
+                        setPlan(null);
+                        setPlanRunId(null);
+                      }}
                       placeholder={input.example ?? ""}
                       spellCheck={false}
                       className="rounded-md border border-line bg-raised px-3 py-2 font-mono text-sm text-ink outline-none placeholder:text-dim/60 focus:border-accent"
@@ -211,7 +297,16 @@ export default function App() {
               </form>
 
               {error && <p className="mt-4 rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>}
-              {plan && <PlanCards plan={plan} level={level} />}
+              {plan && (
+                <PlanCards
+                  plan={plan}
+                  level={level}
+                  run={planRun}
+                  disabledReason={disabledReason}
+                  onRun={execute}
+                  onCancel={() => planRunId !== null && cancelRun(planRunId)}
+                />
+              )}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -249,7 +344,22 @@ export default function App() {
           </div>
         )}
         <div className="flex items-center justify-between px-5 py-2 text-sm">
-          <span className="text-dim">AI 브리핑과 판정이 이곳에 표시됩니다</span>
+          <span className="flex items-center gap-3 text-dim">
+            {run ? (
+              <>
+                <span className={run.active ? "text-accent" : ""}>
+                  {runTitle} · {run.active ? "실행 중…" : "실행 끝"} · 출력 {run.lines.length}줄
+                </span>
+                {run.active && (
+                  <button onClick={() => cancelRun(run.run_id)} className="rounded border border-danger/50 px-2 py-0.5 text-xs text-danger">
+                    ■ 중지
+                  </button>
+                )}
+              </>
+            ) : (
+              "AI 브리핑과 판정이 이곳에 표시됩니다"
+            )}
+          </span>
           {showCommands && (
             <button onClick={() => setRawOpen((v) => !v)} className="text-xs text-dim hover:text-ink">
               원본 출력 {rawOpen ? "접기 ▾" : "펼치기 ▴"}
@@ -258,7 +368,14 @@ export default function App() {
         </div>
         {showCommands && rawOpen && (
           <pre className="h-48 overflow-auto border-t border-line bg-void px-5 py-3 font-mono text-xs text-dim">
-            (아직 실행 기록이 없습니다)
+            {run && run.lines.length > 0
+              ? run.lines.slice(-500).map((l, i) => (
+                  <div key={i} className={l.stream === "stderr" ? "text-caution" : "text-ink"}>
+                    <span className="text-dim">[{l.order}] </span>
+                    {l.line}
+                  </div>
+                ))
+              : "(아직 실행 기록이 없습니다)"}
           </pre>
         )}
       </footer>

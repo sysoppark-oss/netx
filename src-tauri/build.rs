@@ -10,6 +10,10 @@ fn main() {
                 "get_recipes",
                 "plan_from_recipe",
                 "validate_plan",
+                "run_recipe",
+                "cancel_run",
+                "tool_status",
+                "install_tools",
             ]),
         ),
     )

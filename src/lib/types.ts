@@ -98,3 +98,47 @@ export interface ValidatedPlan {
   blocked: boolean;
   steps: ValidatedStep[];
 }
+
+// ---- 실행 (src-tauri/src/engine) ----
+
+export type StepStatus = "running" | "done" | "timeout" | "cancelled" | "capped" | "error";
+
+export interface OutputEvent {
+  run_id: number;
+  order: number;
+  stream: "stdout" | "stderr";
+  line: string;
+}
+
+export interface StepEvent {
+  run_id: number;
+  order: number;
+  status: StepStatus;
+  exit_code: number | null;
+  elapsed_ms: number;
+}
+
+export interface RunStarted {
+  run_id: number;
+  orders: number[];
+}
+
+export interface ToolStatus {
+  tool: string;
+  installed: boolean;
+}
+
+export interface OutputLine {
+  order: number;
+  stream: "stdout" | "stderr";
+  line: string;
+}
+
+/// 화면이 들고 있는 실행 상태
+export interface RunState {
+  run_id: number;
+  title: string;
+  active: boolean;
+  steps: Record<number, { status: StepStatus; exit_code: number | null; elapsed_ms: number }>;
+  lines: OutputLine[];
+}

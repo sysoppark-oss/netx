@@ -32,11 +32,12 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 
 pub async fn check() -> EnvironmentStatus {
     if !cfg!(target_os = "windows") {
+        // 리눅스에서는 도구를 직접 실행하므로 전체 진단이 가능하다(개발·테스트용).
         return EnvironmentStatus {
-            mode: Mode::Basic,
+            mode: Mode::Full,
             wsl_installed: false,
             distros: vec![],
-            message: "Windows가 아닌 환경입니다. 개발용 기본 모드로 실행합니다.".into(),
+            message: "Windows가 아닌 환경입니다. 도구를 직접 실행합니다(개발용).".into(),
         };
     }
 
@@ -115,14 +116,11 @@ pub(crate) fn parse_distro_list(raw: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// wsl.exe 출력은 보통 UTF-16LE이다. 짝수 바이트 위치에 0이 많으면 UTF-16으로 본다.
+/// wsl.exe 자체 메시지는 UTF-16LE로, 리눅스 도구의 출력은 UTF-8로 온다.
+/// 텍스트 출력의 UTF-8에는 0 바이트가 없으므로, 0 바이트가 있으면 UTF-16으로 본다.
 pub(crate) fn decode_wsl_output(raw: &[u8]) -> String {
-    let looks_utf16 = raw.len() >= 2 && raw.iter().skip(1).step_by(2).filter(|b| **b == 0).count() * 2 >= raw.len() / 2;
-    if looks_utf16 {
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
+    if raw.contains(&0) {
+        let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         String::from_utf16_lossy(&units)
     } else {
         String::from_utf8_lossy(raw).into_owned()
@@ -131,13 +129,13 @@ pub(crate) fn decode_wsl_output(raw: &[u8]) -> String {
 
 /// Windows에서 외부 명령을 띄울 때 검은 콘솔 창이 깜빡이지 않게 한다.
 #[cfg(target_os = "windows")]
-fn hide_console_window(cmd: &mut Command) {
+pub(crate) fn hide_console_window(cmd: &mut Command) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(target_os = "windows"))]
-fn hide_console_window(_cmd: &mut Command) {}
+pub(crate) fn hide_console_window(_cmd: &mut Command) {}
 
 #[cfg(test)]
 mod tests {

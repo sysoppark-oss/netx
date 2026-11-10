@@ -12,6 +12,10 @@
     "allow-get-tools",
     "allow-get-recipes",
     "allow-plan-from-recipe",
-    "allow-validate-plan"
+    "allow-validate-plan",
+    "allow-run-recipe",
+    "allow-cancel-run",
+    "allow-tool-status",
+    "allow-install-tools"
   ]
 }
