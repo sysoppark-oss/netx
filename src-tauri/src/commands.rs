@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audit::{self, AuditEntry};
-use crate::engine::{self, Job, OutputEvent, Sink, StepEvent};
+use crate::engine::{self, Job, JobEngine, OutputEvent, Sink, StepEvent};
 use crate::env_check::{self, EnvironmentStatus, Mode};
 use crate::setup::{self, ToolStatus};
 use crate::model::{ExecutionPlan, Level, Recipe, Source, ToolSchema, ValidatedPlan};
@@ -136,12 +136,21 @@ pub async fn run_recipe(
     if !confirmed && steps.iter().any(|s| s.confirm != crate::model::Confirm::None) {
         return Err("주의 또는 위험 단계가 있습니다. 확인 후 실행하세요.".into());
     }
-    require_wsl().await?;
+    if steps.iter().any(|s| s.engines.first() != Some(&crate::model::Engine::Windows)) {
+        require_wsl().await?;
+    }
 
     let (data_dir, work_dir) = data_dirs(&app)?;
     let jobs: Vec<Job> = steps
         .iter()
-        .map(|s| Job { order: s.order, program: s.tool.clone(), argv: s.argv.clone(), root: s.needs_root, timeout_secs: STEP_TIMEOUT_SECS })
+        .map(|s| Job {
+            order: s.order,
+            program: s.tool.clone(),
+            argv: s.argv.clone(),
+            root: s.needs_root,
+            timeout_secs: STEP_TIMEOUT_SECS,
+            engine: if s.engines.first() == Some(&crate::model::Engine::Windows) { JobEngine::Windows } else { JobEngine::Wsl },
+        })
         .collect();
     let orders = jobs.iter().map(|j| j.order).collect();
     let run_id = engine::start(jobs, plan.parallel, work_dir, Arc::new(TauriSink(app)));

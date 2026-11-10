@@ -24,6 +24,8 @@ use tokio::sync::{Notify, watch};
 
 use crate::env_check::{decode_wsl_output, hide_console_window};
 
+pub mod windows;
+
 /// 한 단계의 출력 상한. 넘으면 실행을 멈춘다.
 const MAX_LINES: usize = 5000;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -39,6 +41,16 @@ pub struct Job {
     pub argv: Vec<String>,
     pub root: bool,
     pub timeout_secs: u32,
+    pub engine: JobEngine,
+}
+
+/// 어디에서 실행할지
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobEngine {
+    /// WSL 안의 리눅스 도구 (Windows가 아니면 직접 실행)
+    Wsl,
+    /// Windows 본체 조회 (PowerShell, 고정된 스크립트)
+    Windows,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -144,7 +156,12 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
 
     // `timeout`의 시간 인자에 고유한 소수부를 붙여, 중지할 때 이 실행만 골라 낼 수 있게 한다.
     let tag = format!("{}.{:06}", job.timeout_secs, NEXT_TAG.fetch_add(1, Ordering::Relaxed) % 1_000_000);
-    let mut child = match build_command(job, &tag, work_dir).spawn() {
+    let command = match job.engine {
+        JobEngine::Wsl => Ok(build_command(job, &tag, work_dir)),
+        JobEngine::Windows => build_windows_command(job),
+    };
+    let spawned = command.and_then(|mut c| c.spawn().map_err(|e| e.to_string()));
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             sink.output(OutputEvent { run_id, order: job.order, stream: "stderr", line: format!("실행하지 못했습니다: {e}") });
@@ -163,8 +180,12 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
     }
 
     // `timeout`이 제 역할을 못 했을 때를 대비한 바깥쪽 제한
-    let hard = tokio::time::sleep(Duration::from_secs(u64::from(job.timeout_secs) + 15));
+    let slack = if job.engine == JobEngine::Wsl { 15 } else { 0 };
+    let hard = tokio::time::sleep(Duration::from_secs(u64::from(job.timeout_secs) + slack));
     tokio::pin!(hard);
+    // Windows 조회는 리눅스 쪽 프로세스가 없으므로 신호 없이 바로 끝낸다.
+    let remote = job.engine == JobEngine::Wsl;
+    let grace = if remote { GRACE } else { Duration::ZERO };
     let mut outcome = Outcome::Normal;
     let mut force_at: Option<tokio::time::Instant> = None;
     let mut cancel_closed = false;
@@ -183,19 +204,25 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
                     cancel_closed = true;
                 } else if *cancel.borrow() {
                     outcome = Outcome::Cancelled;
-                    signal_remote(&tag).await;
-                    force_at = Some(tokio::time::Instant::now() + GRACE);
+                    if remote {
+                        signal_remote(&tag).await;
+                    }
+                    force_at = Some(tokio::time::Instant::now() + grace);
                 }
             }
             _ = limits.hit.notified(), if outcome == Outcome::Normal => {
                 outcome = Outcome::Capped;
-                signal_remote(&tag).await;
-                force_at = Some(tokio::time::Instant::now() + GRACE);
+                if remote {
+                    signal_remote(&tag).await;
+                }
+                force_at = Some(tokio::time::Instant::now() + grace);
             }
             _ = &mut hard, if outcome == Outcome::Normal => {
                 outcome = Outcome::Timeout;
-                signal_remote(&tag).await;
-                force_at = Some(tokio::time::Instant::now() + GRACE);
+                if remote {
+                    signal_remote(&tag).await;
+                }
+                force_at = Some(tokio::time::Instant::now() + grace);
             }
             _ = force => {
                 let _ = child.start_kill();
@@ -249,6 +276,17 @@ fn build_command(job: &Job, tag: &str, work_dir: &Path) -> Command {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     hide_console_window(&mut cmd);
     cmd
+}
+
+fn build_windows_command(job: &Job) -> Result<Command, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("Windows에서만 동작하는 도구입니다".into());
+    }
+    let args = windows::powershell_args(&job.program, &job.argv)?;
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    hide_console_window(&mut cmd);
+    Ok(cmd)
 }
 
 /// 리눅스 쪽 `timeout` 프로세스에 INT 신호를 보낸다. `timeout`은 받은 신호를 도구에 전달하므로
@@ -346,7 +384,7 @@ mod tests {
     }
 
     fn job(order: u32, program: &str, args: &[&str], timeout_secs: u32) -> Job {
-        Job { order, program: program.into(), argv: args.iter().map(|s| s.to_string()).collect(), root: false, timeout_secs }
+        Job { order, program: program.into(), argv: args.iter().map(|s| s.to_string()).collect(), root: false, timeout_secs, engine: JobEngine::Wsl }
     }
 
     async fn run(jobs: Vec<Job>, parallel: bool) -> (Arc<Collect>, u64) {
@@ -434,6 +472,16 @@ mod tests {
         finished(&sink).await;
         assert_eq!(sink.final_status(1).0, StepStatus::Cancelled);
         assert_eq!(sink.final_status(2).0, StepStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn windows_only_tool_reports_an_error_elsewhere() {
+        let mut j = job(1, "winports", &["8080"], 5);
+        j.engine = JobEngine::Windows;
+        let (sink, _) = run(vec![j], false).await;
+        finished(&sink).await;
+        assert_eq!(sink.final_status(1).0, StepStatus::Error);
+        assert!(sink.text().contains("Windows에서만"), "{}", sink.text());
     }
 
     #[test]

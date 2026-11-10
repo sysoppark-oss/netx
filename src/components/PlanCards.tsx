@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Risk, RunState, StepStatus, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
@@ -136,6 +136,12 @@ function StepCard({
   const showCommand = level !== "general";
   const state = run?.steps[step.order];
   const lines = run ? run.lines.filter((l) => l.order === step.order) : [];
+  const outRef = useRef<HTMLPreElement>(null);
+
+  // 새 출력이 오면 맨 아래로 내린다.
+  useEffect(() => {
+    if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
+  }, [lines.length]);
 
   return (
     <li className={`rounded-lg border bg-panel p-4 ${step.blocked ? "border-danger/50" : "border-line"}`}>
@@ -199,7 +205,7 @@ function StepCard({
       )}
 
       {state && (
-        <pre className="mt-3 max-h-64 overflow-auto rounded-md border border-line bg-void px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap">
+        <pre ref={outRef} className="mt-3 max-h-64 overflow-auto rounded-md border border-line bg-void px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap">
           {lines.length === 0 ? (
             <span className="text-dim">{state.status === "running" ? "출력을 기다리는 중…" : "(출력 없음)"}</span>
           ) : (

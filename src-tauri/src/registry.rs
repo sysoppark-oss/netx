@@ -20,6 +20,7 @@ const TOOL_FILES: &[&str] = &[
     include_str!("../../tools/curl.json"),
     include_str!("../../tools/lsof.json"),
     include_str!("../../tools/iperf3.json"),
+    include_str!("../../tools/winports.json"),
 ];
 
 const RECIPE_FILES: &[&str] = &[
@@ -140,7 +141,7 @@ mod tests {
     #[test]
     fn embedded_schemas_load_and_pass_self_check() {
         let reg = Registry::load().expect("스키마 로드");
-        assert_eq!(reg.tools().len(), 10);
+        assert_eq!(reg.tools().len(), 11);
         assert_eq!(reg.recipes().len(), 6);
     }
 

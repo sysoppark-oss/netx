@@ -1,0 +1,10 @@
+{
+  "tool": "winports",
+  "title": "Windows 포트 점유 조회",
+  "description": "Windows 본체에서 이 포트를 쓰고 있는 프로그램을 찾는다(Get-NetTCPConnection, Get-NetUDPEndpoint).",
+  "engines": ["windows"],
+  "categories": ["프로세스", "포트", "Windows"],
+  "viz": "fortress_blueprint",
+  "options": [],
+  "positional": [{ "name": "port", "type": "port", "label": "포트 번호", "required": true }]
+}

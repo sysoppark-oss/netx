@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import {
   cancelRun,
@@ -46,6 +46,13 @@ export default function App() {
   const [missing, setMissing] = useState<string[]>([]);
   const [installRunId, setInstallRunId] = useState<number | null>(null);
   const run = useRun(runId);
+  const rawRef = useRef<HTMLPreElement>(null);
+  const rawCount = run?.lines.length ?? 0;
+
+  // 새 출력이 오면 원본 출력 창을 맨 아래로 내린다.
+  useEffect(() => {
+    if (rawRef.current) rawRef.current.scrollTop = rawRef.current.scrollHeight;
+  }, [rawCount, rawOpen]);
   const planRun = useRun(planRunId);
   const installing = useRun(installRunId)?.active ?? false;
 
@@ -242,6 +249,9 @@ export default function App() {
 
         {/* 중앙: 제안 카드 영역 */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          {error && (
+            <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
+          )}
           {missing.length > 0 && (
             <div className="mx-auto mb-5 flex max-w-3xl items-center gap-4 rounded-md border border-caution/50 bg-caution/10 px-4 py-3 text-sm">
               <p className="flex-1">
@@ -296,7 +306,6 @@ export default function App() {
                 </button>
               </form>
 
-              {error && <p className="mt-4 rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>}
               {plan && (
                 <PlanCards
                   plan={plan}
@@ -367,7 +376,7 @@ export default function App() {
           )}
         </div>
         {showCommands && rawOpen && (
-          <pre className="h-48 overflow-auto border-t border-line bg-void px-5 py-3 font-mono text-xs text-dim">
+          <pre ref={rawRef} className="h-48 overflow-auto border-t border-line bg-void px-5 py-3 font-mono text-xs text-dim">
             {run && run.lines.length > 0
               ? run.lines.slice(-500).map((l, i) => (
                   <div key={i} className={l.stream === "stderr" ? "text-caution" : "text-ink"}>

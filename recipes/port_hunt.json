@@ -2,7 +2,7 @@
   "id": "port_hunt",
   "icon": "🚪",
   "title": "포트 점유 추적",
-  "description": "특정 포트를 어떤 프로세스가 쓰고 있는지 찾는다.",
+  "description": "특정 포트를 어떤 프로그램이 쓰고 있는지 Windows 본체와 WSL 안에서 함께 찾는다.",
   "inputs": [
     {
       "name": "port",
@@ -22,6 +22,14 @@
   "parallel": true,
   "steps": [
     {
+      "tool": "winports",
+      "args": [
+        "{port}"
+      ],
+      "reason": "Windows 본체에서 이 포트를 쓰는 프로그램을 찾는다.",
+      "expect": "PROCESS 열이 점유 프로그램, PID가 프로세스 번호. 없다고 나오면 Windows에서는 비어 있는 포트."
+    },
+    {
       "tool": "ss",
       "args": [
         "-tulpn",
@@ -29,7 +37,7 @@
         "=",
         ":{port}"
       ],
-      "reason": "해당 포트에서 수신 대기 중인 소켓과 프로세스를 확인한다.",
+      "reason": "WSL(리눅스) 안에서 이 포트에 수신 대기 중인 소켓과 프로세스를 확인한다.",
       "expect": "줄이 나오면 사용 중. users 항목에 프로세스 이름과 번호가 보인다."
     },
     {
@@ -39,7 +47,7 @@
         "-i",
         ":{port}"
       ],
-      "reason": "포트를 연 프로세스의 이름, 번호, 사용자를 확인한다.",
+      "reason": "WSL(리눅스) 안에서 포트를 연 프로세스의 이름, 번호, 사용자를 확인한다.",
       "expect": "COMMAND와 PID가 점유 프로세스. 아무것도 없으면 비어 있는 포트."
     }
   ]

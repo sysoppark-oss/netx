@@ -7,7 +7,8 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::process::Command;
 
-use crate::engine::Job;
+use crate::engine::{Job, JobEngine};
+use crate::model::Engine;
 use crate::env_check::hide_console_window;
 use crate::registry::Registry;
 
@@ -38,7 +39,11 @@ pub struct ToolStatus {
 
 /// `which`로 도구가 설치되어 있는지 확인한다.
 pub async fn tool_status() -> Result<Vec<ToolStatus>, String> {
-    let names: Vec<&str> = Registry::global().tools().iter().map(|t| t.tool.as_str()).chain(HELPERS.iter().copied()).collect();
+    let names: Vec<&str> = Registry::global()
+        .tools()
+        .iter()
+        .filter(|t| t.engines.contains(&Engine::Wsl))
+        .map(|t| t.tool.as_str()).chain(HELPERS.iter().copied()).collect();
 
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = Command::new("wsl.exe");
@@ -73,6 +78,7 @@ pub fn install_jobs() -> Vec<Job> {
         argv: ["DEBIAN_FRONTEND=noninteractive", "apt-get"].iter().chain(args).map(|s| s.to_string()).collect(),
         root: true,
         timeout_secs: 900,
+        engine: JobEngine::Wsl,
     };
     let mut install = vec!["install", "-y", "-q"];
     install.extend(PACKAGES);
