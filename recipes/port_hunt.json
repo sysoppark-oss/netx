@@ -1,0 +1,46 @@
+{
+  "id": "port_hunt",
+  "icon": "🚪",
+  "title": "포트 점유 추적",
+  "description": "특정 포트를 어떤 프로세스가 쓰고 있는지 찾는다.",
+  "inputs": [
+    {
+      "name": "port",
+      "type": "port",
+      "label": "포트 번호",
+      "example": "8080"
+    }
+  ],
+  "keywords": [
+    "포트",
+    "점유",
+    "충돌",
+    "사용 중",
+    "프로세스",
+    "누가 쓰"
+  ],
+  "parallel": true,
+  "steps": [
+    {
+      "tool": "ss",
+      "args": [
+        "-tulpn",
+        "sport",
+        "=",
+        ":{port}"
+      ],
+      "reason": "해당 포트에서 수신 대기 중인 소켓과 프로세스를 확인한다.",
+      "expect": "줄이 나오면 사용 중. users 항목에 프로세스 이름과 번호가 보인다."
+    },
+    {
+      "tool": "lsof",
+      "args": [
+        "-nP",
+        "-i",
+        ":{port}"
+      ],
+      "reason": "포트를 연 프로세스의 이름, 번호, 사용자를 확인한다.",
+      "expect": "COMMAND와 PID가 점유 프로세스. 아무것도 없으면 비어 있는 포트."
+    }
+  ]
+}

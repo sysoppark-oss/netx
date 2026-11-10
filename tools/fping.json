@@ -1,0 +1,196 @@
+{
+  "tool": "fping",
+  "title": "다중 핑 (fping)",
+  "description": "여러 대상이나 서브넷 전체에 한꺼번에 핑을 보낸다.",
+  "engines": [
+    "wsl"
+  ],
+  "streaming": true,
+  "end_of_options": true,
+  "categories": [
+    "연결성",
+    "스캔"
+  ],
+  "viz": "sonar_radar",
+  "options": [
+    {
+      "flag": "-a",
+      "type": "boolean",
+      "label": "응답하는 대상만 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-u",
+      "type": "boolean",
+      "label": "응답 없는 대상만 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-e",
+      "type": "boolean",
+      "label": "응답 시간 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-q",
+      "type": "boolean",
+      "label": "요약만 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-s",
+      "type": "boolean",
+      "label": "끝에 통계 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-A",
+      "type": "boolean",
+      "label": "주소로 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "이름으로 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-d",
+      "type": "boolean",
+      "label": "역방향 이름 조회",
+      "group": "출력"
+    },
+    {
+      "flag": "-D",
+      "type": "boolean",
+      "label": "줄마다 시각 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-g",
+      "type": "boolean",
+      "label": "대역 전체 스캔(대상에 CIDR 또는 시작·끝 주소)",
+      "group": "대상",
+      "risk": "caution"
+    },
+    {
+      "flag": "-c",
+      "type": "number",
+      "label": "대상마다 보낼 횟수",
+      "group": "제한",
+      "min": 1,
+      "max": 1000
+    },
+    {
+      "flag": "-C",
+      "type": "number",
+      "label": "대상마다 보낼 횟수(한 줄 요약)",
+      "group": "제한",
+      "min": 1,
+      "max": 1000
+    },
+    {
+      "flag": "-r",
+      "type": "number",
+      "label": "재시도 횟수",
+      "group": "제한",
+      "min": 0,
+      "max": 10
+    },
+    {
+      "flag": "-t",
+      "type": "number",
+      "label": "응답 대기 시간(ms)",
+      "group": "제한",
+      "min": 10,
+      "max": 60000
+    },
+    {
+      "flag": "-p",
+      "type": "number",
+      "label": "같은 대상에 보내는 간격(ms)",
+      "group": "제한",
+      "min": 10,
+      "max": 60000
+    },
+    {
+      "flag": "-i",
+      "type": "number",
+      "label": "패킷 사이 간격(ms)",
+      "group": "제한",
+      "min": 1,
+      "max": 10000
+    },
+    {
+      "flag": "-B",
+      "type": "float",
+      "label": "재시도 대기 배수",
+      "group": "제한",
+      "min": 1,
+      "max": 5
+    },
+    {
+      "flag": "-l",
+      "type": "boolean",
+      "label": "멈출 때까지 계속 보내기",
+      "group": "제한"
+    },
+    {
+      "flag": "-b",
+      "type": "number",
+      "label": "패킷 크기(바이트)",
+      "group": "패킷",
+      "min": 0,
+      "max": 65488
+    },
+    {
+      "flag": "-H",
+      "type": "number",
+      "label": "TTL",
+      "group": "패킷",
+      "min": 1,
+      "max": 255
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-I",
+      "type": "iface",
+      "label": "보낼 인터페이스",
+      "group": "주소"
+    },
+    {
+      "flag": "-S",
+      "type": "host",
+      "label": "출발 주소",
+      "group": "주소"
+    },
+    {
+      "flag": "-f",
+      "type": "string",
+      "label": "파일에서 대상 목록 읽기",
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "targets",
+      "type": "target",
+      "label": "대상(호스트 또는 대역)",
+      "required": true,
+      "variadic": true,
+      "min": 20
+    }
+  ]
+}

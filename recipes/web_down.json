@@ -1,0 +1,63 @@
+{
+  "id": "web_down",
+  "icon": "🌐",
+  "title": "웹 장애 진단",
+  "description": "웹 사이트가 안 열릴 때 DNS, 포트, 웹 서버 응답을 차례로 확인한다.",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "label": "URL",
+      "example": "https://example.com"
+    }
+  ],
+  "keywords": [
+    "웹",
+    "홈페이지",
+    "사이트",
+    "접속",
+    "안 열",
+    "502",
+    "503",
+    "인증서",
+    "https"
+  ],
+  "parallel": true,
+  "steps": [
+    {
+      "tool": "dig",
+      "args": [
+        "+short",
+        "{url.host}"
+      ],
+      "reason": "도메인 이름이 주소로 풀리는지 확인한다.",
+      "expect": "주소가 나오면 DNS 정상, 아무것도 안 나오면 DNS 문제."
+    },
+    {
+      "tool": "nc",
+      "args": [
+        "-vz",
+        "-w",
+        "3",
+        "{url.host}",
+        "{url.port}"
+      ],
+      "reason": "웹 포트가 열려 있는지 확인한다(방화벽·L4).",
+      "expect": "succeeded면 포트 개방, refused나 timed out이면 차단 또는 서버 중지."
+    },
+    {
+      "tool": "curl",
+      "args": [
+        "-I",
+        "-v",
+        "-k",
+        "-s",
+        "-m",
+        "10",
+        "{url}"
+      ],
+      "reason": "웹 서버의 응답 코드와 TLS 인증서를 확인한다(L7).",
+      "expect": "200대면 정상, 502·503이면 서버 뒤쪽 애플리케이션 문제. expire date에서 인증서 만료일 확인."
+    }
+  ]
+}

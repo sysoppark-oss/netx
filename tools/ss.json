@@ -1,0 +1,247 @@
+{
+  "tool": "ss",
+  "title": "소켓 상태 (ss)",
+  "description": "열린 포트와 연결 상태, 포트를 쓰는 프로세스를 본다.",
+  "engines": [
+    "wsl"
+  ],
+  "needs_root": true,
+  "categories": [
+    "소켓",
+    "포트"
+  ],
+  "viz": "fortress_blueprint",
+  "options": [
+    {
+      "flag": "-t",
+      "type": "boolean",
+      "label": "TCP",
+      "group": "종류",
+      "aliases": [
+        "--tcp"
+      ]
+    },
+    {
+      "flag": "-u",
+      "type": "boolean",
+      "label": "UDP",
+      "group": "종류",
+      "aliases": [
+        "--udp"
+      ]
+    },
+    {
+      "flag": "-w",
+      "type": "boolean",
+      "label": "RAW 소켓",
+      "group": "종류",
+      "aliases": [
+        "--raw"
+      ]
+    },
+    {
+      "flag": "-x",
+      "type": "boolean",
+      "label": "유닉스 소켓",
+      "group": "종류",
+      "aliases": [
+        "--unix"
+      ]
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만",
+      "group": "종류",
+      "aliases": [
+        "--ipv4"
+      ]
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만",
+      "group": "종류",
+      "aliases": [
+        "--ipv6"
+      ]
+    },
+    {
+      "flag": "-f",
+      "type": "enum",
+      "label": "주소 체계",
+      "group": "종류",
+      "aliases": [
+        "--family"
+      ],
+      "values": [
+        "inet",
+        "inet6",
+        "link",
+        "unix",
+        "netlink"
+      ]
+    },
+    {
+      "flag": "-l",
+      "type": "boolean",
+      "label": "수신 대기 중인 소켓만",
+      "group": "범위",
+      "aliases": [
+        "--listening"
+      ]
+    },
+    {
+      "flag": "-a",
+      "type": "boolean",
+      "label": "모든 소켓",
+      "group": "범위",
+      "aliases": [
+        "--all"
+      ]
+    },
+    {
+      "flag": "-p",
+      "type": "boolean",
+      "label": "소켓을 쓰는 프로세스 표시",
+      "group": "출력",
+      "aliases": [
+        "--processes"
+      ]
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "포트와 주소를 숫자로 표시",
+      "group": "출력",
+      "aliases": [
+        "--numeric"
+      ]
+    },
+    {
+      "flag": "-r",
+      "type": "boolean",
+      "label": "이름으로 변환",
+      "group": "출력",
+      "aliases": [
+        "--resolve"
+      ]
+    },
+    {
+      "flag": "-e",
+      "type": "boolean",
+      "label": "상세 소켓 정보",
+      "group": "출력",
+      "aliases": [
+        "--extended"
+      ]
+    },
+    {
+      "flag": "-m",
+      "type": "boolean",
+      "label": "소켓 메모리 사용량",
+      "group": "출력",
+      "aliases": [
+        "--memory"
+      ]
+    },
+    {
+      "flag": "-i",
+      "type": "boolean",
+      "label": "TCP 내부 정보(혼잡 제어, RTT)",
+      "group": "출력",
+      "aliases": [
+        "--info"
+      ]
+    },
+    {
+      "flag": "-o",
+      "type": "boolean",
+      "label": "타이머 정보",
+      "group": "출력",
+      "aliases": [
+        "--options"
+      ]
+    },
+    {
+      "flag": "-s",
+      "type": "boolean",
+      "label": "요약 통계만",
+      "group": "출력",
+      "aliases": [
+        "--summary"
+      ]
+    },
+    {
+      "flag": "-H",
+      "type": "boolean",
+      "label": "머리글 줄 생략",
+      "group": "출력",
+      "aliases": [
+        "--no-header"
+      ]
+    },
+    {
+      "flag": "-O",
+      "type": "boolean",
+      "label": "소켓 하나를 한 줄로",
+      "group": "출력",
+      "aliases": [
+        "--oneline"
+      ]
+    },
+    {
+      "flag": "-E",
+      "type": "boolean",
+      "label": "소켓이 닫힐 때마다 계속 표시",
+      "group": "출력",
+      "aliases": [
+        "--events"
+      ]
+    },
+    {
+      "flag": "-K",
+      "type": "boolean",
+      "label": "소켓 강제 종료",
+      "aliases": [
+        "--kill"
+      ],
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-D",
+      "type": "string",
+      "label": "소켓 정보를 파일로 덤프",
+      "aliases": [
+        "--diag"
+      ],
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-F",
+      "type": "string",
+      "label": "파일에서 필터 읽기",
+      "aliases": [
+        "--filter"
+      ],
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-N",
+      "type": "string",
+      "label": "다른 네트워크 네임스페이스로 전환",
+      "aliases": [
+        "--net"
+      ],
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "filter",
+      "type": "expr",
+      "label": "필터 (예: sport = :8080, state established)",
+      "variadic": true
+    }
+  ]
+}

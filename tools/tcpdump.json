@@ -1,0 +1,230 @@
+{
+  "tool": "tcpdump",
+  "title": "패킷 캡처 (tcpdump)",
+  "description": "인터페이스를 지나는 패킷을 캡처해 내용을 본다.",
+  "engines": [
+    "wsl"
+  ],
+  "needs_root": true,
+  "streaming": true,
+  "end_of_options": true,
+  "min_level": "junior",
+  "categories": [
+    "캡처",
+    "L2-L7"
+  ],
+  "viz": "packet_highway",
+  "options": [
+    {
+      "flag": "-i",
+      "type": "iface",
+      "label": "인터페이스",
+      "group": "입력"
+    },
+    {
+      "flag": "-D",
+      "type": "boolean",
+      "label": "캡처 가능한 인터페이스 목록",
+      "group": "입력"
+    },
+    {
+      "flag": "-p",
+      "type": "boolean",
+      "label": "무차별 모드 끄기",
+      "group": "입력"
+    },
+    {
+      "flag": "-Q",
+      "type": "enum",
+      "label": "캡처 방향",
+      "group": "입력",
+      "values": [
+        "in",
+        "out",
+        "inout"
+      ]
+    },
+    {
+      "flag": "-s",
+      "type": "number",
+      "label": "패킷당 캡처 길이(바이트)",
+      "group": "입력",
+      "min": 0,
+      "max": 262144
+    },
+    {
+      "flag": "-c",
+      "type": "number",
+      "label": "캡처할 패킷 수",
+      "group": "제한",
+      "min": 1,
+      "max": 1000000
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "이름 변환 안 함",
+      "group": "출력"
+    },
+    {
+      "flag": "-v",
+      "type": "boolean",
+      "label": "상세 출력(여러 번 쓰면 더 자세히)",
+      "group": "출력"
+    },
+    {
+      "flag": "-q",
+      "type": "boolean",
+      "label": "간략 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-e",
+      "type": "boolean",
+      "label": "링크 계층 헤더(MAC) 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-X",
+      "type": "boolean",
+      "label": "16진수와 ASCII로 내용 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-x",
+      "type": "boolean",
+      "label": "16진수로 내용 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-A",
+      "type": "boolean",
+      "label": "ASCII로 내용 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-t",
+      "type": "boolean",
+      "label": "시각 표시 방식 변경(여러 번 쓰면 형식 변경)",
+      "group": "출력"
+    },
+    {
+      "flag": "-S",
+      "type": "boolean",
+      "label": "TCP 순서 번호를 절대값으로",
+      "group": "출력"
+    },
+    {
+      "flag": "-l",
+      "type": "boolean",
+      "label": "줄 단위로 바로 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-U",
+      "type": "boolean",
+      "label": "패킷 단위로 바로 기록",
+      "group": "출력"
+    },
+    {
+      "flag": "-K",
+      "type": "boolean",
+      "label": "체크섬 검사 안 함",
+      "group": "출력"
+    },
+    {
+      "flag": "-#",
+      "type": "boolean",
+      "label": "줄마다 패킷 번호 표시",
+      "group": "출력",
+      "aliases": [
+        "--number"
+      ]
+    },
+    {
+      "flag": "--immediate-mode",
+      "type": "boolean",
+      "label": "버퍼 없이 즉시 전달",
+      "group": "입력"
+    },
+    {
+      "flag": "-w",
+      "type": "path",
+      "label": "pcap 파일로 저장(작업 폴더)",
+      "group": "저장",
+      "risk": "caution"
+    },
+    {
+      "flag": "-r",
+      "type": "path",
+      "label": "저장된 pcap 파일 읽기(작업 폴더)",
+      "group": "저장",
+      "risk": "caution"
+    },
+    {
+      "flag": "-C",
+      "type": "number",
+      "label": "파일 크기 제한(MB)",
+      "group": "저장",
+      "min": 1,
+      "max": 1024,
+      "risk": "caution"
+    },
+    {
+      "flag": "-W",
+      "type": "number",
+      "label": "보관할 파일 수",
+      "group": "저장",
+      "min": 1,
+      "max": 100,
+      "risk": "caution"
+    },
+    {
+      "flag": "-G",
+      "type": "number",
+      "label": "파일 교체 주기(초)",
+      "group": "저장",
+      "min": 1,
+      "max": 86400,
+      "risk": "caution"
+    },
+    {
+      "flag": "-z",
+      "type": "string",
+      "label": "파일 교체 때 프로그램 실행",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-Z",
+      "type": "string",
+      "label": "실행 사용자 변경",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-F",
+      "type": "string",
+      "label": "파일에서 필터식 읽기",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-V",
+      "type": "string",
+      "label": "파일 목록에서 읽기",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-E",
+      "type": "string",
+      "label": "IPsec 복호화 키",
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "filter",
+      "type": "expr",
+      "label": "필터식 (예: port 443 and host 192.168.0.50)",
+      "variadic": true
+    }
+  ]
+}

@@ -1,0 +1,155 @@
+{
+  "tool": "ping",
+  "title": "연결 확인 (ping)",
+  "description": "대상까지 연결이 되는지, 응답이 얼마나 걸리는지 확인한다.",
+  "engines": [
+    "wsl",
+    "builtin"
+  ],
+  "streaming": true,
+  "end_of_options": true,
+  "categories": [
+    "연결성",
+    "지연"
+  ],
+  "options": [
+    {
+      "flag": "-c",
+      "type": "number",
+      "label": "보낼 횟수",
+      "group": "제한",
+      "min": 1,
+      "max": 1000
+    },
+    {
+      "flag": "-i",
+      "type": "float",
+      "label": "보내는 간격(초)",
+      "group": "제한",
+      "min": 0.2,
+      "max": 60
+    },
+    {
+      "flag": "-W",
+      "type": "float",
+      "label": "응답 대기 시간(초)",
+      "group": "제한",
+      "min": 0.1,
+      "max": 60
+    },
+    {
+      "flag": "-w",
+      "type": "number",
+      "label": "전체 제한 시간(초)",
+      "group": "제한",
+      "min": 1,
+      "max": 3600
+    },
+    {
+      "flag": "-s",
+      "type": "number",
+      "label": "패킷 크기(바이트)",
+      "group": "패킷",
+      "min": 0,
+      "max": 65507
+    },
+    {
+      "flag": "-t",
+      "type": "number",
+      "label": "TTL",
+      "group": "패킷",
+      "min": 1,
+      "max": 255
+    },
+    {
+      "flag": "-M",
+      "type": "enum",
+      "label": "경로 MTU 탐색 방식",
+      "group": "패킷",
+      "values": [
+        "do",
+        "dont",
+        "want"
+      ]
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-I",
+      "type": "iface",
+      "label": "보낼 인터페이스",
+      "group": "주소"
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "이름 변환 안 함",
+      "group": "출력"
+    },
+    {
+      "flag": "-q",
+      "type": "boolean",
+      "label": "요약만 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-D",
+      "type": "boolean",
+      "label": "줄마다 시각 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-O",
+      "type": "boolean",
+      "label": "응답 없는 요청도 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-v",
+      "type": "boolean",
+      "label": "상세 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-A",
+      "type": "boolean",
+      "label": "적응형 전송(응답 속도에 맞춰 빠르게)",
+      "group": "부하",
+      "risk": "caution"
+    },
+    {
+      "flag": "-l",
+      "type": "number",
+      "label": "미리 보낼 패킷 수",
+      "group": "부하",
+      "min": 1,
+      "max": 3,
+      "risk": "caution"
+    },
+    {
+      "flag": "-f",
+      "type": "boolean",
+      "label": "플러드(응답을 기다리지 않고 연속 전송)",
+      "group": "부하",
+      "risk": "danger"
+    }
+  ],
+  "positional": [
+    {
+      "name": "host",
+      "type": "host",
+      "label": "대상",
+      "required": true
+    }
+  ]
+}

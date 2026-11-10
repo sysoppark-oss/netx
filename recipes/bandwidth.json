@@ -1,0 +1,38 @@
+{
+  "id": "bandwidth",
+  "icon": "🚀",
+  "title": "대역폭 측정",
+  "description": "iperf3 서버와 사이의 실제 전송 속도를 측정한다.",
+  "inputs": [
+    {
+      "name": "server",
+      "type": "host",
+      "label": "iperf3 서버",
+      "example": "192.168.0.10"
+    }
+  ],
+  "keywords": [
+    "속도",
+    "대역폭",
+    "느린",
+    "회선",
+    "mbps",
+    "iperf"
+  ],
+  "parallel": false,
+  "steps": [
+    {
+      "tool": "iperf3",
+      "args": [
+        "-c",
+        "{server}",
+        "-t",
+        "10",
+        "-P",
+        "4"
+      ],
+      "reason": "10초 동안 연결 4개로 낼 수 있는 최대 전송 속도를 측정한다.",
+      "expect": "SUM 줄의 Bitrate가 실제 대역폭. 회선 속도보다 크게 낮으면 구간 문제."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-plan-from-recipe"
+description = "Enables the plan_from_recipe command without any pre-configured scope."
+commands.allow = ["plan_from_recipe"]
+
+[[permission]]
+identifier = "deny-plan-from-recipe"
+description = "Denies the plan_from_recipe command without any pre-configured scope."
+commands.deny = ["plan_from_recipe"]

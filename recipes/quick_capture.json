@@ -1,0 +1,47 @@
+{
+  "id": "quick_capture",
+  "icon": "👁️",
+  "title": "트래픽 퀵 캡처",
+  "description": "패킷 100개를 빠르게 캡처해 파일로 저장한다.",
+  "min_level": "junior",
+  "inputs": [
+    {
+      "name": "iface",
+      "type": "iface",
+      "label": "인터페이스",
+      "example": "eth0"
+    },
+    {
+      "name": "port",
+      "type": "port",
+      "label": "포트",
+      "example": "443"
+    }
+  ],
+  "keywords": [
+    "캡처",
+    "패킷",
+    "덤프",
+    "tcpdump",
+    "pcap"
+  ],
+  "parallel": false,
+  "steps": [
+    {
+      "tool": "tcpdump",
+      "args": [
+        "-i",
+        "{iface}",
+        "-n",
+        "-c",
+        "100",
+        "-w",
+        "capture.pcap",
+        "port",
+        "{port}"
+      ],
+      "reason": "해당 포트를 지나는 패킷 100개를 pcap 파일로 저장한다.",
+      "expect": "작업 폴더에 capture.pcap이 생긴다. Wireshark로 열어 볼 수 있다."
+    }
+  ]
+}

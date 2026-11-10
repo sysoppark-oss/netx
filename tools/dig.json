@@ -1,0 +1,273 @@
+{
+  "tool": "dig",
+  "title": "DNS 질의 (dig)",
+  "description": "도메인 이름이 어떤 주소로 풀리는지, DNS 서버가 어떻게 답하는지 확인한다.",
+  "engines": [
+    "wsl",
+    "builtin"
+  ],
+  "categories": [
+    "DNS"
+  ],
+  "options": [
+    {
+      "flag": "+short",
+      "type": "boolean",
+      "label": "답만 짧게 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "+trace",
+      "type": "boolean",
+      "label": "루트부터 위임 경로 추적",
+      "group": "질의"
+    },
+    {
+      "flag": "+stats",
+      "type": "boolean",
+      "label": "질의 시간 등 통계 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+nostats",
+      "type": "boolean",
+      "label": "통계 숨김",
+      "group": "출력"
+    },
+    {
+      "flag": "+noall",
+      "type": "boolean",
+      "label": "모든 구역 숨김(+answer와 함께 사용)",
+      "group": "출력"
+    },
+    {
+      "flag": "+all",
+      "type": "boolean",
+      "label": "모든 구역 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+answer",
+      "type": "boolean",
+      "label": "답변 구역 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+authority",
+      "type": "boolean",
+      "label": "권한 구역 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+additional",
+      "type": "boolean",
+      "label": "추가 구역 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+question",
+      "type": "boolean",
+      "label": "질문 구역 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+noquestion",
+      "type": "boolean",
+      "label": "질문 구역 숨김",
+      "group": "출력"
+    },
+    {
+      "flag": "+comments",
+      "type": "boolean",
+      "label": "설명 줄 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+nocomments",
+      "type": "boolean",
+      "label": "설명 줄 숨김",
+      "group": "출력"
+    },
+    {
+      "flag": "+nocmd",
+      "type": "boolean",
+      "label": "첫 줄(버전·명령) 숨김",
+      "group": "출력"
+    },
+    {
+      "flag": "+multiline",
+      "type": "boolean",
+      "label": "레코드를 여러 줄로 읽기 쉽게",
+      "group": "출력"
+    },
+    {
+      "flag": "+ttlid",
+      "type": "boolean",
+      "label": "TTL 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+identify",
+      "type": "boolean",
+      "label": "답한 서버 주소 표시(+short와 함께)",
+      "group": "출력"
+    },
+    {
+      "flag": "+tcp",
+      "type": "boolean",
+      "label": "UDP 대신 TCP로 질의",
+      "group": "질의"
+    },
+    {
+      "flag": "+dnssec",
+      "type": "boolean",
+      "label": "DNSSEC 레코드 요청",
+      "group": "질의"
+    },
+    {
+      "flag": "+norecurse",
+      "type": "boolean",
+      "label": "재귀 질의 안 함",
+      "group": "질의"
+    },
+    {
+      "flag": "+nssearch",
+      "type": "boolean",
+      "label": "권한 서버들의 SOA 비교",
+      "group": "질의"
+    },
+    {
+      "flag": "+cd",
+      "type": "boolean",
+      "label": "DNSSEC 검증 끄기 요청",
+      "group": "질의"
+    },
+    {
+      "flag": "+qr",
+      "type": "boolean",
+      "label": "보낸 질의도 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "+time",
+      "type": "number",
+      "label": "응답 대기 시간(초)",
+      "group": "제한",
+      "min": 1,
+      "max": 30
+    },
+    {
+      "flag": "+tries",
+      "type": "number",
+      "label": "시도 횟수",
+      "group": "제한",
+      "min": 1,
+      "max": 10
+    },
+    {
+      "flag": "+retry",
+      "type": "number",
+      "label": "재시도 횟수",
+      "group": "제한",
+      "min": 0,
+      "max": 10
+    },
+    {
+      "flag": "-t",
+      "type": "enum",
+      "label": "레코드 종류",
+      "group": "질의",
+      "values": [
+        "A",
+        "AAAA",
+        "MX",
+        "NS",
+        "TXT",
+        "SOA",
+        "CNAME",
+        "PTR",
+        "SRV",
+        "CAA",
+        "ANY",
+        "DNSKEY",
+        "DS",
+        "NAPTR",
+        "HTTPS",
+        "SVCB"
+      ]
+    },
+    {
+      "flag": "-c",
+      "type": "enum",
+      "label": "클래스",
+      "group": "질의",
+      "values": [
+        "IN",
+        "CH",
+        "HS"
+      ]
+    },
+    {
+      "flag": "-x",
+      "type": "host",
+      "label": "IP 주소로 이름 찾기(역방향)",
+      "group": "질의"
+    },
+    {
+      "flag": "-q",
+      "type": "host",
+      "label": "질의할 이름",
+      "group": "질의"
+    },
+    {
+      "flag": "-p",
+      "type": "port",
+      "label": "DNS 서버 포트",
+      "group": "서버"
+    },
+    {
+      "flag": "-b",
+      "type": "host",
+      "label": "출발 주소",
+      "group": "서버"
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "서버"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "서버"
+    },
+    {
+      "flag": "-f",
+      "type": "string",
+      "label": "파일에서 질의 목록 읽기",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-k",
+      "type": "string",
+      "label": "TSIG 키 파일",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-y",
+      "type": "string",
+      "label": "TSIG 키 직접 입력",
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "query",
+      "type": "dig_arg",
+      "label": "이름, 레코드 종류, @서버",
+      "variadic": true
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "tool": "lsof",
+  "title": "포트 점유 프로세스 (lsof)",
+  "description": "어떤 프로세스가 네트워크 포트를 쓰고 있는지 찾는다.",
+  "engines": [
+    "wsl"
+  ],
+  "needs_root": true,
+  "categories": [
+    "프로세스",
+    "포트"
+  ],
+  "viz": "fortress_blueprint",
+  "options": [
+    {
+      "flag": "-i",
+      "type": "lsof_inet",
+      "label": "네트워크 연결만 (예: :8080, TCP:443, 4)",
+      "group": "대상",
+      "optional_value": true
+    },
+    {
+      "flag": "-s",
+      "type": "string",
+      "label": "프로토콜 상태로 걸러 보기 (예: TCP:LISTEN)",
+      "group": "대상"
+    },
+    {
+      "flag": "-p",
+      "type": "string",
+      "label": "프로세스 번호로 지정 (쉼표로 여러 개)",
+      "group": "대상"
+    },
+    {
+      "flag": "-u",
+      "type": "string",
+      "label": "사용자로 지정",
+      "group": "대상"
+    },
+    {
+      "flag": "-c",
+      "type": "string",
+      "label": "명령 이름으로 지정",
+      "group": "대상"
+    },
+    {
+      "flag": "-g",
+      "type": "string",
+      "label": "프로세스 그룹 번호로 지정",
+      "group": "대상"
+    },
+    {
+      "flag": "-a",
+      "type": "boolean",
+      "label": "조건을 모두 만족(AND)",
+      "group": "대상"
+    },
+    {
+      "flag": "-U",
+      "type": "boolean",
+      "label": "유닉스 소켓만",
+      "group": "대상"
+    },
+    {
+      "flag": "-N",
+      "type": "boolean",
+      "label": "NFS 파일만",
+      "group": "대상"
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "호스트 이름 변환 안 함",
+      "group": "출력"
+    },
+    {
+      "flag": "-P",
+      "type": "boolean",
+      "label": "포트를 숫자로 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-l",
+      "type": "boolean",
+      "label": "사용자를 번호로 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-t",
+      "type": "boolean",
+      "label": "프로세스 번호만 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-R",
+      "type": "boolean",
+      "label": "부모 프로세스 번호 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-V",
+      "type": "boolean",
+      "label": "찾지 못한 항목 알림",
+      "group": "출력"
+    },
+    {
+      "flag": "-F",
+      "type": "string",
+      "label": "스크립트용 필드 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-b",
+      "type": "boolean",
+      "label": "멈출 수 있는 커널 호출 피하기",
+      "group": "동작"
+    },
+    {
+      "flag": "-w",
+      "type": "boolean",
+      "label": "경고 숨김",
+      "group": "동작"
+    },
+    {
+      "flag": "-r",
+      "type": "number",
+      "label": "반복 간격(초)",
+      "group": "동작",
+      "min": 1,
+      "max": 3600
+    }
+  ],
+  "positional": []
+}

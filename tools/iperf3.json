@@ -1,0 +1,355 @@
+{
+  "tool": "iperf3",
+  "title": "대역폭 측정 (iperf3)",
+  "description": "iperf3 서버와 사이의 실제 전송 속도와 지터를 측정한다.",
+  "engines": [
+    "wsl"
+  ],
+  "streaming": true,
+  "end_of_options": true,
+  "categories": [
+    "성능",
+    "대역폭"
+  ],
+  "viz": "gauge",
+  "options": [
+    {
+      "flag": "-c",
+      "type": "host",
+      "label": "접속할 iperf3 서버",
+      "group": "모드",
+      "aliases": [
+        "--client"
+      ]
+    },
+    {
+      "flag": "-p",
+      "type": "port",
+      "label": "서버 포트",
+      "group": "모드",
+      "aliases": [
+        "--port"
+      ]
+    },
+    {
+      "flag": "-s",
+      "type": "boolean",
+      "label": "서버 모드(연결 수신 대기)",
+      "group": "모드",
+      "aliases": [
+        "--server"
+      ],
+      "risk": "danger"
+    },
+    {
+      "flag": "-1",
+      "type": "boolean",
+      "label": "한 번 연결 받고 종료(서버 모드)",
+      "group": "모드",
+      "aliases": [
+        "--one-off"
+      ]
+    },
+    {
+      "flag": "-t",
+      "type": "number",
+      "label": "측정 시간(초)",
+      "group": "제한",
+      "aliases": [
+        "--time"
+      ],
+      "min": 1,
+      "max": 3600
+    },
+    {
+      "flag": "-n",
+      "type": "rate",
+      "label": "보낼 총량 (예: 100M)",
+      "group": "제한",
+      "aliases": [
+        "--bytes"
+      ]
+    },
+    {
+      "flag": "-k",
+      "type": "rate",
+      "label": "보낼 블록 수",
+      "group": "제한",
+      "aliases": [
+        "--blockcount"
+      ]
+    },
+    {
+      "flag": "-O",
+      "type": "number",
+      "label": "처음 N초는 결과에서 제외",
+      "group": "제한",
+      "aliases": [
+        "--omit"
+      ],
+      "min": 0,
+      "max": 60
+    },
+    {
+      "flag": "--connect-timeout",
+      "type": "number",
+      "label": "연결 제한 시간(ms)",
+      "group": "제한",
+      "min": 100,
+      "max": 60000
+    },
+    {
+      "flag": "-P",
+      "type": "number",
+      "label": "동시 연결 수",
+      "group": "부하",
+      "aliases": [
+        "--parallel"
+      ],
+      "min": 1,
+      "max": 128
+    },
+    {
+      "flag": "-R",
+      "type": "boolean",
+      "label": "역방향(서버가 보내고 내가 받음)",
+      "group": "부하",
+      "aliases": [
+        "--reverse"
+      ]
+    },
+    {
+      "flag": "--bidir",
+      "type": "boolean",
+      "label": "양방향 동시 측정",
+      "group": "부하"
+    },
+    {
+      "flag": "-u",
+      "type": "boolean",
+      "label": "TCP 대신 UDP",
+      "group": "부하",
+      "aliases": [
+        "--udp"
+      ],
+      "risk": "caution"
+    },
+    {
+      "flag": "-b",
+      "type": "rate",
+      "label": "목표 전송 속도 (예: 100M)",
+      "group": "부하",
+      "aliases": [
+        "--bitrate"
+      ]
+    },
+    {
+      "flag": "-l",
+      "type": "rate",
+      "label": "읽기·쓰기 버퍼 크기",
+      "group": "튜닝",
+      "aliases": [
+        "--length"
+      ]
+    },
+    {
+      "flag": "-w",
+      "type": "rate",
+      "label": "소켓 버퍼(윈도우) 크기",
+      "group": "튜닝",
+      "aliases": [
+        "--window"
+      ]
+    },
+    {
+      "flag": "-M",
+      "type": "number",
+      "label": "TCP MSS",
+      "group": "튜닝",
+      "aliases": [
+        "--set-mss"
+      ],
+      "min": 88,
+      "max": 65495
+    },
+    {
+      "flag": "-N",
+      "type": "boolean",
+      "label": "TCP 지연 전송 끄기",
+      "group": "튜닝",
+      "aliases": [
+        "--no-delay"
+      ]
+    },
+    {
+      "flag": "-Z",
+      "type": "boolean",
+      "label": "제로카피 전송",
+      "group": "튜닝",
+      "aliases": [
+        "--zerocopy"
+      ]
+    },
+    {
+      "flag": "-C",
+      "type": "enum",
+      "label": "혼잡 제어 알고리즘",
+      "group": "튜닝",
+      "aliases": [
+        "--congestion"
+      ],
+      "values": [
+        "cubic",
+        "reno",
+        "bbr"
+      ]
+    },
+    {
+      "flag": "-S",
+      "type": "number",
+      "label": "TOS 값",
+      "group": "튜닝",
+      "aliases": [
+        "--tos"
+      ],
+      "min": 0,
+      "max": 255
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "주소",
+      "aliases": [
+        "--version4"
+      ]
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "주소",
+      "aliases": [
+        "--version6"
+      ]
+    },
+    {
+      "flag": "-B",
+      "type": "host",
+      "label": "출발 주소",
+      "group": "주소",
+      "aliases": [
+        "--bind"
+      ]
+    },
+    {
+      "flag": "--cport",
+      "type": "port",
+      "label": "출발 포트",
+      "group": "주소"
+    },
+    {
+      "flag": "-i",
+      "type": "float",
+      "label": "중간 결과 간격(초)",
+      "group": "출력",
+      "aliases": [
+        "--interval"
+      ],
+      "min": 0.1,
+      "max": 60
+    },
+    {
+      "flag": "-f",
+      "type": "enum",
+      "label": "단위",
+      "group": "출력",
+      "aliases": [
+        "--format"
+      ],
+      "values": [
+        "k",
+        "m",
+        "g",
+        "t",
+        "K",
+        "M",
+        "G",
+        "T"
+      ]
+    },
+    {
+      "flag": "-J",
+      "type": "boolean",
+      "label": "JSON으로 출력",
+      "group": "출력",
+      "aliases": [
+        "--json"
+      ]
+    },
+    {
+      "flag": "-V",
+      "type": "boolean",
+      "label": "상세 출력",
+      "group": "출력",
+      "aliases": [
+        "--verbose"
+      ]
+    },
+    {
+      "flag": "-T",
+      "type": "string",
+      "label": "결과 줄 앞에 붙일 제목",
+      "group": "출력",
+      "aliases": [
+        "--title"
+      ]
+    },
+    {
+      "flag": "--get-server-output",
+      "type": "boolean",
+      "label": "서버 쪽 결과도 받기",
+      "group": "출력"
+    },
+    {
+      "flag": "--timestamps",
+      "type": "boolean",
+      "label": "줄마다 시각 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-F",
+      "type": "string",
+      "label": "파일을 보내거나 받기",
+      "aliases": [
+        "--file"
+      ],
+      "risk": "forbidden"
+    },
+    {
+      "flag": "--logfile",
+      "type": "string",
+      "label": "출력을 파일로 기록",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-D",
+      "type": "boolean",
+      "label": "백그라운드 서비스로 실행",
+      "aliases": [
+        "--daemon"
+      ],
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-I",
+      "type": "string",
+      "label": "프로세스 번호 파일 기록",
+      "aliases": [
+        "--pidfile"
+      ],
+      "risk": "forbidden"
+    }
+  ],
+  "positional": []
+}

@@ -1,0 +1,278 @@
+{
+  "tool": "mtr",
+  "title": "경로 추적 (mtr)",
+  "description": "대상까지 거치는 구간(홉)마다 지연과 손실률을 측정한다.",
+  "engines": [
+    "wsl"
+  ],
+  "streaming": true,
+  "end_of_options": true,
+  "categories": [
+    "경로",
+    "지연"
+  ],
+  "viz": "subway_topology",
+  "options": [
+    {
+      "flag": "-r",
+      "type": "boolean",
+      "label": "보고서 모드(측정 후 한 번에 출력)",
+      "group": "출력",
+      "aliases": [
+        "--report"
+      ]
+    },
+    {
+      "flag": "-w",
+      "type": "boolean",
+      "label": "넓은 보고서(긴 이름 안 자름)",
+      "group": "출력",
+      "aliases": [
+        "--report-wide"
+      ]
+    },
+    {
+      "flag": "-c",
+      "type": "number",
+      "label": "측정 횟수",
+      "group": "제한",
+      "aliases": [
+        "--report-cycles"
+      ],
+      "min": 1,
+      "max": 1000
+    },
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "이름 변환 안 함",
+      "group": "출력",
+      "aliases": [
+        "--no-dns"
+      ]
+    },
+    {
+      "flag": "-b",
+      "type": "boolean",
+      "label": "이름과 IP 함께 표시",
+      "group": "출력",
+      "aliases": [
+        "--show-ips"
+      ]
+    },
+    {
+      "flag": "-z",
+      "type": "boolean",
+      "label": "AS 번호(통신사) 표시",
+      "group": "출력",
+      "aliases": [
+        "--aslookup"
+      ]
+    },
+    {
+      "flag": "-e",
+      "type": "boolean",
+      "label": "MPLS 정보 표시",
+      "group": "출력",
+      "aliases": [
+        "--mpls"
+      ]
+    },
+    {
+      "flag": "-j",
+      "type": "boolean",
+      "label": "JSON으로 출력",
+      "group": "출력",
+      "aliases": [
+        "--json"
+      ]
+    },
+    {
+      "flag": "-x",
+      "type": "boolean",
+      "label": "XML로 출력",
+      "group": "출력",
+      "aliases": [
+        "--xml"
+      ]
+    },
+    {
+      "flag": "-C",
+      "type": "boolean",
+      "label": "CSV로 출력",
+      "group": "출력",
+      "aliases": [
+        "--csv"
+      ]
+    },
+    {
+      "flag": "-l",
+      "type": "boolean",
+      "label": "원시 형식으로 출력",
+      "group": "출력",
+      "aliases": [
+        "--raw"
+      ]
+    },
+    {
+      "flag": "-o",
+      "type": "string",
+      "label": "표시할 항목과 순서 (예: LSD NBAW)",
+      "group": "출력",
+      "aliases": [
+        "--order"
+      ]
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "주소"
+    },
+    {
+      "flag": "-I",
+      "type": "iface",
+      "label": "보낼 인터페이스",
+      "group": "주소",
+      "aliases": [
+        "--interface"
+      ]
+    },
+    {
+      "flag": "-a",
+      "type": "host",
+      "label": "출발 주소",
+      "group": "주소",
+      "aliases": [
+        "--address"
+      ]
+    },
+    {
+      "flag": "-T",
+      "type": "boolean",
+      "label": "ICMP 대신 TCP로 측정",
+      "group": "방식",
+      "aliases": [
+        "--tcp"
+      ]
+    },
+    {
+      "flag": "-u",
+      "type": "boolean",
+      "label": "ICMP 대신 UDP로 측정",
+      "group": "방식",
+      "aliases": [
+        "--udp"
+      ]
+    },
+    {
+      "flag": "-P",
+      "type": "port",
+      "label": "대상 포트(TCP/UDP 측정 시)",
+      "group": "방식",
+      "aliases": [
+        "--port"
+      ]
+    },
+    {
+      "flag": "-i",
+      "type": "float",
+      "label": "측정 간격(초, 1 미만은 root 필요)",
+      "group": "제한",
+      "aliases": [
+        "--interval"
+      ],
+      "min": 0.1,
+      "max": 60
+    },
+    {
+      "flag": "-s",
+      "type": "number",
+      "label": "패킷 크기(바이트)",
+      "group": "패킷",
+      "aliases": [
+        "--psize"
+      ],
+      "min": 28,
+      "max": 65000
+    },
+    {
+      "flag": "-m",
+      "type": "number",
+      "label": "최대 홉 수",
+      "group": "제한",
+      "aliases": [
+        "--max-ttl"
+      ],
+      "min": 1,
+      "max": 255
+    },
+    {
+      "flag": "-f",
+      "type": "number",
+      "label": "시작 TTL",
+      "group": "제한",
+      "aliases": [
+        "--first-ttl"
+      ],
+      "min": 1,
+      "max": 255
+    },
+    {
+      "flag": "-Z",
+      "type": "number",
+      "label": "응답 대기 시간(초)",
+      "group": "제한",
+      "aliases": [
+        "--timeout"
+      ],
+      "min": 1,
+      "max": 60
+    },
+    {
+      "flag": "-G",
+      "type": "number",
+      "label": "마지막 응답 대기(초)",
+      "group": "제한",
+      "aliases": [
+        "--gracetime"
+      ],
+      "min": 1,
+      "max": 60
+    },
+    {
+      "flag": "-Q",
+      "type": "number",
+      "label": "TOS 값",
+      "group": "패킷",
+      "aliases": [
+        "--tos"
+      ],
+      "min": 0,
+      "max": 255
+    },
+    {
+      "flag": "-F",
+      "type": "string",
+      "label": "파일에서 대상 목록 읽기",
+      "aliases": [
+        "--filename"
+      ],
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "host",
+      "type": "host",
+      "label": "대상",
+      "required": true
+    }
+  ]
+}
