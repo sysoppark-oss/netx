@@ -25,6 +25,13 @@ v0.1 개발안: [docs/DEV_PLAN_v0.1.md](docs/DEV_PLAN_v0.1.md)
 - 백엔드 테스트: `cd src-tauri && cargo test`
 - 설치 파일: `main`에 푸시하면 GitHub Actions가 Windows 설치 파일(.exe, .msi)을 만듭니다. Actions 실행 화면의 Artifacts에서 내려받습니다.
 
+## 자동 업데이트
+
+- 새 판 확인을 위해 GitHub에 접속하며 이 PC의 정보는 보내지 않습니다. 설치된 NetX는 시작 8초 뒤와 3시간마다 `raw.githubusercontent.com/sysoppark-oss/netx/<채널>-builds/manifest.txt`를 HTTPS로 읽습니다. 보내는 것은 그 파일을 달라는 요청뿐이고, PC 이름·설정·진단 결과는 보내지 않습니다(접속하는 쪽의 IP 주소는 다른 웹 접속과 마찬가지로 GitHub에 보입니다).
+- 개발판(dev 채널): 새 빌드가 있으면 시작할 때 내려받아 SHA-256을 확인하고 설치합니다. 실행 중인 작업이 있으면 설치를 미루고 [지금 업데이트] 버튼으로 알립니다. 설정에서 자동 설치를 끄면 알림만 나옵니다.
+- 정식판(main 채널): 업데이트 서명 검증이 들어가기 전까지는 설치하지 않고 새 버전이 있다는 알림만 띄웁니다. 설치 파일은 이 저장소에서 받아 직접 설치합니다.
+- 직접 빌드한 실행 파일은 새 판을 확인하지 않습니다.
+
 ## 라이선스
 
 [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). 스토리방화벽과 같은 라이선스입니다.

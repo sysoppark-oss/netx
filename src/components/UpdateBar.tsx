@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { applyUpdate, onUpdateStatus } from "../lib/backend";
 import type { UpdateStatus } from "../lib/types";
 
-/** 새 버전 알림 줄. 시작 직후에는 자동으로 설치되고, 쓰는 도중에 새 버전이 올라오면 버튼으로 설치한다. */
+/**
+ * 새 버전 알림 줄. 개발판은 시작 직후에 자동으로 설치되고, 쓰는 도중이거나 실행 중인 작업이 있으면 버튼으로 설치한다.
+ * 정식판은 알림만 나온다(notice).
+ */
 export function UpdateBar() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -31,7 +34,7 @@ export function UpdateBar() {
           지금 업데이트
         </button>
       )}
-      {(status.state === "available" || status.state === "error") && (
+      {(status.state === "available" || status.state === "notice" || status.state === "error") && (
         <button type="button" onClick={() => setStatus(null)} className="ml-auto text-dim">
           닫기
         </button>

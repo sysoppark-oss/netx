@@ -287,7 +287,8 @@ export interface Settings {
 
 /** 자동 업데이트 상태 (src-tauri/src/updater.rs) */
 export interface UpdateStatus {
-  state: "available" | "downloading" | "installing" | "error";
+  /** notice는 알림만(설치 버튼 없음), available은 [지금 업데이트] 버튼이 나온다 */
+  state: "notice" | "available" | "downloading" | "installing" | "error";
   commit: string;
   message: string;
 }

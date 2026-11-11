@@ -175,7 +175,11 @@ export function SettingsDialog({
           <input type="checkbox" checked={!form.manual_update} onChange={(e) => setForm({ ...form, manual_update: !e.target.checked })} />
           새 버전이 올라오면 시작할 때 자동으로 설치
         </label>
-        <p className="mt-1 text-xs leading-relaxed text-dim">끄면 새 버전이 있다는 알림만 나오고, [지금 업데이트]를 눌러야 설치합니다.</p>
+        <p className="mt-1 text-xs leading-relaxed text-dim">
+          끄면 새 버전이 있다는 알림만 나오고, [지금 업데이트]를 눌러야 설치합니다. 실행 중인 작업이 있으면 설치를 미룹니다. 정식판(main 채널)은
+          업데이트 서명 검증이 들어가기 전까지 이 설정과 관계없이 알림만 나옵니다.
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-dim">새 판 확인을 위해 GitHub에 접속하며 이 PC의 정보는 보내지 않습니다.</p>
 
         {status && <p className={`mt-4 text-sm ${status.ok ? "text-safe" : "text-danger"}`}>{status.text}</p>}
 

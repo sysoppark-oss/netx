@@ -4,6 +4,9 @@
 //! - 주소는 코드에 고정되어 있고 HTTPS만 쓴다. 다른 곳으로 넘겨 보내는 응답(리다이렉트)은 따르지 않는다.
 //! - 채널(main, dev)과 커밋은 빌드할 때 박아 넣는다(build.rs). 직접 빌드한 실행 파일은 채널이 없어 업데이트하지 않는다.
 //! - 설치 파일에 별도 전자서명은 없다. 믿는 근거는 GitHub 저장소와 HTTPS, 그리고 같은 곳에 올라온 SHA-256이다.
+//!   그래서 정식판(main 채널)은 업데이트 서명 검증이 들어가기 전까지 설치하지 않고 알리기만 한다(`installs`).
+//! - 실행 중인 작업이 있으면 설치를 미룬다(`decide`). 설치하면 NetX가 닫히기 때문이다.
+//! - 보내는 것은 정해진 주소의 파일을 달라는 요청뿐이다. 이 PC의 이름, 설정, 진단 결과는 보내지 않는다.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -28,7 +31,7 @@ pub struct Manifest {
 /// 화면에 알리는 업데이트 상태 (이벤트 `update:status`)
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
-    /// available, downloading, installing, error
+    /// notice(알림만), available(설치 버튼), downloading, installing, error
     pub state: &'static str,
     pub commit: String,
     pub message: String,
@@ -57,6 +60,39 @@ pub fn setup_name(channel: &str) -> Option<&'static str> {
         "main" => Some("NetX-setup.exe"),
         "dev" => Some("NetX-dev-setup.exe"),
         _ => None,
+    }
+}
+
+/// 이 채널에서 NetX가 스스로 설치까지 해도 되는지.
+/// 설치 파일의 서명을 확인하는 절차가 아직 없으므로 개발판(dev)만 허용한다.
+/// 정식판(main)은 Tauri 업데이트 서명 검증을 넣은 뒤에 연다.
+pub fn installs(channel: &str) -> bool {
+    channel == "dev"
+}
+
+/// 새 버전을 찾았을 때 할 일
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// 알리기만 한다. 설치 버튼도 없다(서명 검증 전의 정식판).
+    Notice,
+    /// 바로 내려받아 설치한다.
+    Install,
+    /// 실행 중인 작업이 있어 미룬다. [지금 업데이트] 버튼으로 알린다.
+    Defer,
+    /// [지금 업데이트] 버튼으로 알린다.
+    Offer,
+}
+
+/// `at_start`: 시작 직후의 확인인지, `manual`: 설정에서 자동 설치를 껐는지, `busy`: 실행 중인 작업이 있는지
+pub fn decide(channel: &str, at_start: bool, manual: bool, busy: bool) -> Action {
+    if !installs(channel) {
+        Action::Notice
+    } else if !at_start || manual {
+        Action::Offer
+    } else if busy {
+        Action::Defer
+    } else {
+        Action::Install
     }
 }
 
@@ -149,6 +185,22 @@ mod tests {
         assert!(!is_newer(&m, &C2.to_uppercase(), 100));
         assert!(!is_newer(&m, C1, 200), "더 나중이 아님");
         assert!(!is_newer(&m, C1, 300), "옛 빌드로 되돌리지 않는다");
+    }
+
+    #[test]
+    fn main_channel_only_notifies_and_running_work_defers() {
+        // 정식판은 어떤 경우에도 설치하지 않는다.
+        for (start, manual, busy) in [(true, false, false), (true, true, false), (false, false, true), (true, false, true)] {
+            assert_eq!(decide("main", start, manual, busy), Action::Notice);
+        }
+        assert!(!installs("main") && installs("dev") && !installs("") && !installs("DEV"));
+        // 개발판: 시작 직후이고 자동 설치가 켜져 있고 한가할 때만 바로 설치한다.
+        assert_eq!(decide("dev", true, false, false), Action::Install);
+        assert_eq!(decide("dev", true, false, true), Action::Defer);
+        assert_eq!(decide("dev", true, true, false), Action::Offer);
+        assert_eq!(decide("dev", true, true, true), Action::Offer);
+        assert_eq!(decide("dev", false, false, false), Action::Offer);
+        assert_eq!(decide("dev", false, false, true), Action::Offer);
     }
 
     #[test]

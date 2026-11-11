@@ -152,13 +152,31 @@ fn update_status(app: &AppHandle, state: &'static str, commit: &str, message: im
     let _ = app.emit("update:status", crate::updater::Status { state, commit: commit.chars().take(7).collect(), message: message.into() });
 }
 
-/// 새 버전을 내려받아 확인하고 설치 프로그램을 실행한 뒤 NetX를 끝낸다. 새 버전이 없으면 아무것도 하지 않는다.
-async fn install_update(app: &AppHandle) -> Result<(), String> {
-    let Some(m) = crate::updater::check().await? else { return Ok(()) };
+const UPDATE_DEFERRED: &str = "실행 중인 작업이 있어 설치를 미뤘습니다. 작업이 끝난 뒤 [지금 업데이트]를 누르거나 NetX를 다시 켜면 설치됩니다.";
+const UPDATE_NOTICE: &str = "새 버전이 있습니다. 정식판은 업데이트 서명 검증이 들어가기 전까지 자동으로 설치하지 않습니다. GitHub의 sysoppark-oss/netx에서 설치 파일을 받아 직접 설치하세요.";
+
+/// 새 버전을 내려받아 확인하고 설치 프로그램을 실행한 뒤 NetX를 끝낸다.
+/// 실행 중인 작업이 있으면(내려받는 사이에 시작된 것 포함) 설치하지 않고 미뤘다고 알린다.
+async fn install_update(app: &AppHandle, m: &crate::updater::Manifest) -> Result<(), String> {
+    if !crate::updater::installs(crate::updater::CHANNEL) {
+        return Err("이 채널은 NetX가 직접 설치하지 않습니다.".into());
+    }
+    if engine::busy() {
+        update_status(app, "available", &m.commit, UPDATE_DEFERRED);
+        return Ok(());
+    }
     update_status(app, "downloading", &m.commit, "새 버전을 내려받고 있습니다.");
-    let path = crate::updater::download(&m, &data_dir(app)?.join("update")).await?;
+    let path = crate::updater::download(m, &data_dir(app)?.join("update")).await?;
+    if engine::busy() {
+        update_status(app, "available", &m.commit, UPDATE_DEFERRED);
+        return Ok(());
+    }
     update_status(app, "installing", &m.commit, "새 버전을 설치합니다. NetX가 잠시 닫혔다가 다시 열립니다.");
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    if engine::busy() {
+        update_status(app, "available", &m.commit, UPDATE_DEFERRED);
+        return Ok(());
+    }
     crate::updater::launch(&path)?;
     let (data_dir, _) = data_dirs(app)?;
     audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "update", tool: "netx-setup", argv: &[m.commit.clone(), m.sha256.clone()], risk: Risk::Caution, root: false, confirmed: true });
@@ -167,8 +185,10 @@ async fn install_update(app: &AppHandle) -> Result<(), String> {
 }
 
 /// 시작한 뒤 한 번, 그 뒤로 3시간마다 새 버전을 확인한다.
-/// 시작 직후에는 (설정에서 끄지 않았다면) 바로 설치하고, 쓰는 도중에는 알리기만 한다.
+/// 개발판은 시작 직후에 (설정에서 끄지 않았고 실행 중인 작업이 없으면) 바로 설치하고, 그 밖에는 알리기만 한다.
+/// 정식판은 언제나 알리기만 한다(`updater::decide`).
 pub fn watch_updates(app: AppHandle) {
+    use crate::updater::Action;
     if !crate::updater::enabled() {
         return;
     }
@@ -176,20 +196,18 @@ pub fn watch_updates(app: AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(8)).await;
         let mut first = true;
         loop {
-            let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true);
-            let result = if first && !manual {
-                install_update(&app).await
-            } else {
-                crate::updater::check().await.map(|m| {
-                    if let Some(m) = m {
-                        update_status(&app, "available", &m.commit, "새 버전이 있습니다.");
+            // 인터넷이 없을 때마다 알리지는 않는다. 설치를 시도하다 실패한 경우만 알린다.
+            if let Ok(Some(m)) = crate::updater::check().await {
+                let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true);
+                match crate::updater::decide(crate::updater::CHANNEL, first, manual, engine::busy()) {
+                    Action::Notice => update_status(&app, "notice", &m.commit, UPDATE_NOTICE),
+                    Action::Offer => update_status(&app, "available", &m.commit, "새 버전이 있습니다."),
+                    Action::Defer => update_status(&app, "available", &m.commit, UPDATE_DEFERRED),
+                    Action::Install => {
+                        if let Err(e) = install_update(&app, &m).await {
+                            update_status(&app, "error", "", e);
+                        }
                     }
-                })
-            };
-            if let Err(e) = result {
-                // 인터넷이 없을 때마다 알리지는 않는다. 설치를 시도하다 실패한 경우만 알린다.
-                if first && !manual && !e.contains("연결하지 못했습니다") {
-                    update_status(&app, "error", "", e);
                 }
             }
             first = false;
@@ -201,7 +219,10 @@ pub fn watch_updates(app: AppHandle) {
 /// 화면의 [지금 업데이트] 버튼
 #[tauri::command]
 pub async fn apply_update(app: AppHandle) -> Result<(), String> {
-    install_update(&app).await
+    match crate::updater::check().await? {
+        Some(m) => install_update(&app, &m).await,
+        None => Ok(()),
+    }
 }
 
 /// 구성도 그림으로 받을 수 있는 가장 큰 크기

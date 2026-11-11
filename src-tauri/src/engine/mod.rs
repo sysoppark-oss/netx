@@ -133,6 +133,11 @@ pub fn start(jobs: Vec<Job>, parallel: bool, work_dir: PathBuf, sink: Arc<dyn Si
     run_id
 }
 
+/// 지금 실행 중인 작업이 있는지 (자동 업데이트가 설치를 미룰지 정할 때 쓴다)
+pub fn busy() -> bool {
+    runs(|m| !m.is_empty())
+}
+
 /// 실행을 중지한다. 해당 실행이 없으면 false.
 pub fn cancel(run_id: u64) -> bool {
     runs(|m| m.get(&run_id).map(|tx| tx.send(true).is_ok()).unwrap_or(false))
