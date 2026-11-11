@@ -62,14 +62,20 @@ fn cache<R>(f: impl FnOnce(&mut Cache) -> R) -> R {
 pub async fn current() -> NetInfo {
     let config = match cache(|c| c.config.clone().filter(|(at, _)| at.elapsed() < CONFIG_TTL)) {
         Some((_, cfg)) => cfg,
-        None => {
-            let fresh = read_config().await;
-            cache(|c| {
-                let cfg = keep_last_good(c.config.take().map(|(_, old)| old), fresh);
-                c.config = Some((Instant::now(), cfg.clone()));
-                cfg
-            })
-        }
+        // 조회(PowerShell)는 한 번에 하나만 돌린다. 화면이 몇 초마다 묻는데 조회가 그보다 오래 걸리면
+        // 조회가 겹겹이 쌓여 서로 느려지고, 모두 제한 시간을 넘겨 "확인 불가"가 이어진다.
+        None => match Reading::begin() {
+            Some(_guard) => {
+                let fresh = read_config().await;
+                cache(|c| {
+                    let cfg = keep_last_good(c.config.take().map(|(_, old)| old), fresh);
+                    c.config = Some((Instant::now(), cfg.clone()));
+                    cfg
+                })
+            }
+            // 다른 조회가 돌고 있으면 지난번 값을 그대로 쓴다.
+            None => cache(|c| c.config.clone().map(|(_, cfg)| cfg)).unwrap_or_default(),
+        },
     };
 
     let fresh = cache(|c| c.public.clone()).filter(|(at, ip)| at.elapsed() < if ip.is_some() { PUBLIC_TTL } else { PUBLIC_RETRY });
@@ -100,6 +106,23 @@ pub async fn current() -> NetInfo {
         rx_bytes,
         tx_bytes,
         at_ms,
+    }
+}
+
+static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// "지금 조회 중" 표시. 조회가 끝나거나 도중에 버려지면 스스로 내려간다.
+struct Reading;
+
+impl Reading {
+    fn begin() -> Option<Reading> {
+        (!READING.swap(true, std::sync::atomic::Ordering::SeqCst)).then_some(Reading)
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READING.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -147,7 +170,7 @@ pub(crate) async fn run(program: &str, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     hide_console_window(&mut cmd);
-    match tokio::time::timeout(Duration::from_secs(25), cmd.output()).await {
+    match tokio::time::timeout(Duration::from_secs(45), cmd.output()).await {
         Ok(Ok(out)) if out.status.success() => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
         _ => None,
     }
@@ -255,6 +278,15 @@ async fn fetch_public_ip() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_read_at_a_time() {
+        let first = Reading::begin();
+        assert!(first.is_some());
+        assert!(Reading::begin().is_none(), "조회 중에는 새 조회를 시작하지 않는다");
+        drop(first);
+        assert!(Reading::begin().is_some(), "끝나면 다시 조회할 수 있다");
+    }
 
     #[test]
     fn parses_windows_json() {
