@@ -15,6 +15,15 @@ pub enum Provider {
     Ollama,
     /// OpenAI 호환 방식의 온라인 API
     Openai,
+    /// Anthropic Messages API (Claude)
+    Anthropic,
+}
+
+impl Provider {
+    /// 밖으로 나가는 온라인 API인지 (API 키를 보내고, 내부 IP 가리기를 적용한다)
+    pub fn online(self) -> bool {
+        matches!(self, Provider::Openai | Provider::Anthropic)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

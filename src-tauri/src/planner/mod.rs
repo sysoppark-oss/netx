@@ -293,7 +293,7 @@ pub async fn brief(run_id: u64, level: Level, settings: &Settings, api_key: Opti
     }
 
     let mut report = brief_report(&run);
-    let mask = (settings.redact && settings.provider == Provider::Openai).then(|| redact::Mask::build(&report));
+    let mask = (settings.redact && settings.provider.online()).then(|| redact::Mask::build(&report));
     if let Some(mask) = &mask {
         report = mask.apply(&report);
     }

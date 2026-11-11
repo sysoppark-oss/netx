@@ -288,7 +288,7 @@ export interface Briefing {
   next: string;
 }
 
-export type Provider = "none" | "ollama" | "openai";
+export type Provider = "none" | "ollama" | "openai" | "anthropic";
 
 export interface Settings {
   provider: Provider;

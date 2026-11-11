@@ -13,6 +13,11 @@ const PRESETS: Record<Exclude<Provider, "none">, { base_url: string; model: stri
     model: "",
     hint: "OpenAI 호환 방식의 API 주소입니다. 서비스가 안내하는 주소와 모델 이름을 넣으세요.",
   },
+  anthropic: {
+    base_url: "https://api.anthropic.com",
+    model: "",
+    hint: "Anthropic(Claude) API입니다. 모델 칸에는 Anthropic 콘솔에 나오는 모델 이름을 그대로 넣으세요 (예: claude-haiku-5-5). API 키가 필요합니다.",
+  },
 };
 
 /** 설정(AI 연결, 구성도용 SNMP, 자동 업데이트). API 키와 커뮤니티 문자열은 저장만 하고 다시 보여 주지 않는다. */
@@ -49,7 +54,7 @@ export function SettingsDialog({
       provider,
       base_url: changed || !form.base_url ? preset.base_url : form.base_url,
       model: changed || !form.model ? preset.model : form.model,
-      redact: provider === "openai" ? true : form.redact,
+      redact: provider === "ollama" ? form.redact : true,
       manual_update: form.manual_update,
     });
   }
@@ -115,7 +120,8 @@ export function SettingsDialog({
             [
               ["none", "사용 안 함"],
               ["ollama", "로컬 Ollama"],
-              ["openai", "온라인 API"],
+              ["openai", "OpenAI 호환"],
+              ["anthropic", "Anthropic"],
             ] as [Provider, string][]
           ).map(([id, label]) => (
             <button
@@ -150,7 +156,7 @@ export function SettingsDialog({
               />
             </label>
 
-            {form.provider === "openai" && (
+            {form.provider !== "ollama" && (
               <>
                 <label className="block text-xs text-dim">
                   API 키 {hasKey && <span className="text-safe">(저장되어 있음)</span>}

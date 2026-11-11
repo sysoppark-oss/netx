@@ -2,6 +2,7 @@
 //!
 //! - Ollama: `POST {주소}/api/chat`, `format`에 스키마
 //! - OpenAI 호환: `POST {주소}/chat/completions`, `response_format`에 스키마
+//! - Anthropic: `POST {주소}/v1/messages`, 스키마를 입력 형식으로 가진 도구 하나를 반드시 쓰게 한다
 
 use std::time::Duration;
 
@@ -11,6 +12,10 @@ use crate::settings::{Provider, Settings};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RESPONSE_BYTES: usize = 200_000;
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const ANTHROPIC_MAX_TOKENS: u32 = 4096;
+/// Anthropic에 넘기는 도구 이름. 모델은 이 도구의 입력으로만 답한다.
+const ANSWER_TOOL: &str = "netx_answer";
 
 /// 시스템 지시와 사용자 내용을 보내고, 스키마에 맞는 JSON을 돌려받는다.
 pub async fn call_json(settings: &Settings, api_key: Option<&str>, system: &str, user: &str, schema: &Value) -> Result<Value, String> {
@@ -32,12 +37,27 @@ pub async fn call_json(settings: &Settings, api_key: Option<&str>, system: &str,
                 "response_format": { "type": "json_schema", "json_schema": { "name": "netx", "strict": true, "schema": schema } }
             }),
         ),
+        Provider::Anthropic => (
+            if base.ends_with("/v1") { format!("{base}/messages") } else { format!("{base}/v1/messages") },
+            json!({
+                "model": settings.model,
+                "max_tokens": ANTHROPIC_MAX_TOKENS,
+                "temperature": 0,
+                "system": system,
+                "messages": [{ "role": "user", "content": user }],
+                "tools": [{ "name": ANSWER_TOOL, "description": "정해진 형식으로 답을 적는다.", "input_schema": schema }],
+                "tool_choice": { "type": "tool", "name": ANSWER_TOOL }
+            }),
+        ),
     };
 
     let client = reqwest::Client::builder().timeout(TIMEOUT).build().map_err(|e| format!("연결 준비에 실패했습니다: {e}"))?;
     let mut req = client.post(&url).json(&body);
-    if let Some(key) = api_key.filter(|_| settings.provider == Provider::Openai) {
-        req = req.bearer_auth(key);
+    match (settings.provider, api_key) {
+        (Provider::Openai, Some(key)) => req = req.bearer_auth(key),
+        (Provider::Anthropic, Some(key)) => req = req.header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION),
+        (Provider::Anthropic, None) => return Err("Anthropic API 키가 없습니다. 설정에서 키를 넣어 주세요".into()),
+        _ => {}
     }
 
     let resp = req.send().await.map_err(|e| {
@@ -60,6 +80,9 @@ pub async fn call_json(settings: &Settings, api_key: Option<&str>, system: &str,
     }
 
     let outer: Value = serde_json::from_slice(&bytes).map_err(|_| "AI 응답이 JSON 형식이 아닙니다".to_string())?;
+    if settings.provider == Provider::Anthropic {
+        return anthropic_answer(&outer);
+    }
     let content = match settings.provider {
         Provider::Ollama => outer.pointer("/message/content"),
         _ => outer.pointer("/choices/0/message/content"),
@@ -68,6 +91,19 @@ pub async fn call_json(settings: &Settings, api_key: Option<&str>, system: &str,
     .ok_or("AI 응답에 내용이 없습니다")?;
 
     parse_content(content)
+}
+
+/// Anthropic 응답에서 답을 꺼낸다. 도구 입력(`tool_use`)이 답이고, 글로만 답했으면 그 글에서 JSON을 찾는다.
+fn anthropic_answer(outer: &Value) -> Result<Value, String> {
+    let blocks = outer.get("content").and_then(Value::as_array).ok_or("AI 응답에 내용이 없습니다")?;
+    if let Some(input) = blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")).and_then(|b| b.get("input")) {
+        return if input.is_object() { Ok(input.clone()) } else { Err("AI가 정해진 형식으로 답하지 않았습니다".into()) };
+    }
+    if outer.get("stop_reason").and_then(Value::as_str) == Some("max_tokens") {
+        return Err("AI 응답이 길어서 도중에 끊겼습니다".into());
+    }
+    let text = blocks.iter().find_map(|b| b.get("text").and_then(Value::as_str)).ok_or("AI 응답에 내용이 없습니다")?;
+    parse_content(text)
 }
 
 /// 모델이 돌려준 본문에서 JSON 객체를 꺼낸다. 코드 블록 표시로 감싼 경우도 받아 준다.
@@ -149,6 +185,33 @@ pub(crate) mod tests {
         assert!(request.starts_with("POST /v1/chat/completions "));
         assert!(request.to_lowercase().contains("authorization: bearer secret"));
         assert!(request.contains("\"json_schema\""));
+    }
+
+    #[tokio::test]
+    async fn anthropic_request_and_response() {
+        let reply = json!({ "content": [{ "type": "text", "text": "생각" }, { "type": "tool_use", "id": "t1", "name": ANSWER_TOOL, "input": { "a": 1 } }], "stop_reason": "tool_use" }).to_string();
+        let (base, server) = fake_server(200, reply).await;
+        let schema = json!({ "type": "object" });
+        let out = call_json(&settings(Provider::Anthropic, &base), Some("secret"), "sys", "user", &schema).await.unwrap();
+        assert_eq!(out, json!({ "a": 1 }));
+        let request = server.await.unwrap();
+        let lower = request.to_lowercase();
+        assert!(request.starts_with("POST /v1/messages "));
+        assert!(lower.contains("x-api-key: secret") && lower.contains("anthropic-version: 2023-06-01") && !lower.contains("authorization"));
+        assert!(request.contains("\"system\":\"sys\"") && request.contains("\"input_schema\":{\"type\":\"object\"}"));
+        assert!(request.contains("\"tool_choice\":{\"name\":\"netx_answer\",\"type\":\"tool\"}"), "{request}");
+
+        // 주소가 /v1로 끝나면 한 번만 붙인다. 글로 답해도 JSON이면 받는다.
+        let reply = json!({ "content": [{ "type": "text", "text": "{\"b\":2}" }] }).to_string();
+        let (base, server) = fake_server(200, reply).await;
+        assert_eq!(call_json(&settings(Provider::Anthropic, &format!("{base}/v1/")), Some("k"), "s", "u", &schema).await.unwrap(), json!({ "b": 2 }));
+        assert!(server.await.unwrap().starts_with("POST /v1/messages "));
+
+        // 키가 없으면 보내지 않는다. 도중에 끊긴 답, 형식이 아닌 답
+        assert!(call_json(&settings(Provider::Anthropic, "http://127.0.0.1:9"), None, "s", "u", &schema).await.unwrap_err().contains("키"));
+        assert!(anthropic_answer(&json!({ "content": [], "stop_reason": "max_tokens" })).unwrap_err().contains("끊겼"));
+        assert!(anthropic_answer(&json!({ "content": [{ "type": "tool_use", "input": "x" }] })).is_err());
+        assert!(anthropic_answer(&json!({ "error": {} })).is_err());
     }
 
     #[tokio::test]

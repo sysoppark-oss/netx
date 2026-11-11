@@ -168,7 +168,7 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
               </p>
               <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-dim">
                 <li>로컬(Ollama): 이 PC나 사내 PC에서 도는 모델. 내용이 밖으로 나가지 않습니다.</li>
-                <li>온라인(OpenAI 호환 API): API 키가 필요합니다. 키는 직접 입력하며 Windows 자격 증명 저장소에만 둡니다.</li>
+                <li>온라인(OpenAI 호환 API 또는 Anthropic API): API 키가 필요합니다. 키는 직접 입력하며 Windows 자격 증명 저장소에만 둡니다.</li>
               </ul>
               <p className="mt-4">
                 지금 상태: <span className={aiOn ? "font-semibold text-safe" : "font-semibold text-dim"}>{aiOn ? "연결됨" : "연결 안 됨"}</span>

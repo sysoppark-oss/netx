@@ -457,7 +457,12 @@ pub fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
 #[tauri::command]
 pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>, snmp_community: Option<String>) -> Result<SettingsView, String> {
     let dir = data_dir(&app)?;
+    // 다른 회사의 API로 바꾸면서 새 키를 넣지 않았으면, 전에 쓰던 키를 지운다(엉뚱한 곳으로 키가 나가지 않게).
+    let stale_key = api_key.is_none() && key_is_for_another_service(&settings::load(&dir), &settings);
     settings::save(&dir, &settings)?;
+    if stale_key {
+        let _ = settings::set_api_key("");
+    }
     if let Some(key) = api_key {
         let key = key.trim();
         if key.len() > 500 || key.chars().any(|c| c.is_control()) {
@@ -471,6 +476,11 @@ pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>
         settings::set_snmp_community(community)?;
     }
     get_settings(app)
+}
+
+/// 저장돼 있는 API 키가 새 설정의 서비스가 아닌 다른 서비스의 것인지 (온라인 방식끼리 바꾼 경우)
+fn key_is_for_another_service(old: &Settings, new: &Settings) -> bool {
+    old.provider.online() && new.provider.online() && old.provider != new.provider
 }
 
 /// 저장된 설정으로 AI에 짧은 요청을 보내 연결을 확인한다.
@@ -659,6 +669,16 @@ pub async fn run_mixed(app: AppHandle, base: Base, extras: Vec<String>, level: L
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_is_dropped_when_switching_between_online_services() {
+        let with = |provider| Settings { provider, ..Settings::default() };
+        assert!(key_is_for_another_service(&with(Provider::Openai), &with(Provider::Anthropic)));
+        assert!(key_is_for_another_service(&with(Provider::Anthropic), &with(Provider::Openai)));
+        assert!(!key_is_for_another_service(&with(Provider::Openai), &with(Provider::Openai)));
+        assert!(!key_is_for_another_service(&with(Provider::Openai), &with(Provider::Ollama)));
+        assert!(!key_is_for_another_service(&with(Provider::None), &with(Provider::Anthropic)));
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
