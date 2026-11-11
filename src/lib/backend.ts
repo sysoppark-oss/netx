@@ -219,3 +219,22 @@ export async function voiceTyping(): Promise<void> {
   if (!isTauri()) throw new Error("음성 입력은 앱에서만 됩니다.");
   return invoke<void>("voice_typing");
 }
+
+/** 다른 프로그램(스토리방화벽 등)이 넘긴 진단 대상. 입력칸에 채울 뿐이고 실행은 사람이 누른다. */
+export interface Handoff {
+  target: string;
+  from: string;
+  note: string;
+}
+
+/** 넘겨받은 대상이 있으면 알려 준다. 이미 와 있던 것도 한 번 가져온다. */
+export async function onHandoff(handler: (h: Handoff) => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const take = () =>
+    invoke<Handoff | null>("bridge_take_handoff")
+      .then((h) => h && handler(h))
+      .catch(() => {});
+  const stop = await listen("bridge:handoff", take);
+  void take();
+  return stop;
+}

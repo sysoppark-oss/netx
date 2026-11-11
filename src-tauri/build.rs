@@ -49,6 +49,7 @@ fn main() {
                 "capture_packet",
                 "capture_folder",
                 "voice_typing",
+                "bridge_take_handoff",
                 "open_terminal",
                 "term_take_preset",
                 "term_ports",

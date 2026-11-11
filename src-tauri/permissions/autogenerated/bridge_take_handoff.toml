@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bridge-take-handoff"
+description = "Enables the bridge_take_handoff command without any pre-configured scope."
+commands.allow = ["bridge_take_handoff"]
+
+[[permission]]
+identifier = "deny-bridge-take-handoff"
+description = "Denies the bridge_take_handoff command without any pre-configured scope."
+commands.deny = ["bridge_take_handoff"]

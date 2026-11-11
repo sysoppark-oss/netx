@@ -6,6 +6,7 @@
 
 mod audit;
 mod basic;
+mod bridge;
 mod capview;
 mod commands;
 mod engine;
@@ -45,6 +46,8 @@ pub fn run() {
             use tauri::Manager;
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 term::close_all();
+                #[cfg(target_os = "windows")]
+                bridge::pipe::unpublish();
                 if let Some(terminal) = window.app_handle().get_webview_window("terminal") {
                     let _ = terminal.close();
                 }
@@ -52,6 +55,9 @@ pub fn run() {
         })
         .setup(|app| {
             commands::watch_updates(app.handle().clone());
+            // 다른 프로그램(스토리방화벽 등)이 진단 대상을 넘길 수 있는 입구를 연다.
+            #[cfg(target_os = "windows")]
+            bridge::pipe::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +94,7 @@ pub fn run() {
             commands::capture_packet,
             commands::capture_folder,
             voice::voice_typing,
+            bridge::bridge_take_handoff,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,
             term::cmd::term_ports,

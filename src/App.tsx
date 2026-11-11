@@ -18,6 +18,8 @@ import {
   getRecipes,
   getSettings,
   voiceTyping,
+  onHandoff,
+  type Handoff,
   getToolStatus,
   getTools,
   installTools,
@@ -89,6 +91,20 @@ export default function App() {
   const situationRef = useRef<HTMLInputElement>(null);
   // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
   const [capture, setCapture] = useState<string | null>(null);
+  // 다른 프로그램이 넘긴 진단 대상: 입력칸에 채우고 알림을 보인다. 실행하지 않는다.
+  const [handoff, setHandoff] = useState<Handoff | null>(null);
+  useEffect(() => {
+    let stop = () => {};
+    let gone = false;
+    void onHandoff((h) => {
+      setHandoff(h);
+      setSituation(h.target);
+    }).then((s) => (gone ? s() : (stop = s)));
+    return () => {
+      gone = true;
+      stop();
+    };
+  }, []);
   useEffect(() => {
     const open = (e: Event) => setCapture(String((e as CustomEvent).detail ?? ""));
     window.addEventListener(OPEN_CAPTURE_EVENT, open);
@@ -518,6 +534,19 @@ export default function App() {
 
         {/* 중앙: 제안 카드 영역 */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          {handoff && (
+            <p className="mx-auto mb-5 flex max-w-3xl items-center gap-3 rounded-md border border-accent/50 px-3 py-2 text-sm">
+              <span className="min-w-0 flex-1">
+                <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
+                <span className="font-mono text-accent">{handoff.target}</span>
+                {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
+                <span className="block text-xs text-dim">입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다.</span>
+              </span>
+              <button onClick={() => setHandoff(null)} className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
+                닫기
+              </button>
+            </p>
+          )}
           {error && (
             <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
           )}
