@@ -28,6 +28,9 @@ pub struct AppInfo {
     pub version: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
+    /// 빌드한 커밋 앞 7자(직접 빌드하면 빈 문자열)와 업데이트 채널
+    pub commit: &'static str,
+    pub channel: &'static str,
 }
 
 /// 앱 이름, 버전, 실행 OS를 돌려준다.
@@ -38,6 +41,8 @@ pub fn app_info() -> AppInfo {
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
+        commit: crate::updater::COMMIT.get(..7).unwrap_or(""),
+        channel: crate::updater::CHANNEL,
     }
 }
 

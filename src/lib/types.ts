@@ -24,6 +24,9 @@ export interface AppInfo {
   version: string;
   os: string;
   arch: string;
+  /** 빌드한 커밋 앞 7자(직접 빌드하면 빈 문자열)와 업데이트 채널(main, dev) */
+  commit: string;
+  channel: string;
 }
 
 export interface EnvironmentStatus {

@@ -324,7 +324,10 @@ export default function App() {
       <header className="flex items-center gap-4 border-b border-line bg-panel px-5 py-3">
         <div className="flex shrink-0 items-baseline gap-2">
           <span className="text-lg font-bold tracking-tight text-accent">NetX</span>
-          <span className="text-xs text-dim">v{info?.version ?? "…"}</span>
+          <span className="text-xs text-dim" title={info?.channel ? `${info.channel} 채널 · 새 버전이 올라오면 자동으로 업데이트됩니다` : undefined}>
+            v{info?.version ?? "…"}
+            {info?.commit ? ` · ${info.commit}` : ""}
+          </span>
         </div>
 
         <form

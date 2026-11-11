@@ -31,7 +31,7 @@ const previewRecipes = () =>
   Object.values(import.meta.glob("../../recipes/*.json", { eager: true, import: "default" })) as Recipe[];
 
 export async function getAppInfo(): Promise<AppInfo> {
-  if (!isTauri()) return { name: "NetX", version: "0.1.0", os: "browser", arch: "-" };
+  if (!isTauri()) return { name: "NetX", version: "0.1.0", os: "browser", arch: "-", commit: "", channel: "" };
   return invoke<AppInfo>("app_info");
 }
 
