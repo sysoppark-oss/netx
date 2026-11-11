@@ -40,7 +40,7 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
-windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_System_WinRT", "Win32_Foundation", "Win32_NetworkManagement_IpHelper"] }
+windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_System_WinRT", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_UI_Input_KeyboardAndMouse"] }
 windows-future = "0.3"
 
 

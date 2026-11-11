@@ -17,6 +17,7 @@ import {
   getEnvironmentStatus,
   getRecipes,
   getSettings,
+  voiceTyping,
   getToolStatus,
   getTools,
   installTools,
@@ -85,6 +86,7 @@ export default function App() {
   // 직접 추가한 명령과 "직접 명령" 화면
   const [extras, setExtras] = useState<string[]>([]);
   const [manualMode, setManualMode] = useState(false);
+  const situationRef = useRef<HTMLInputElement>(null);
   // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
   const [capture, setCapture] = useState<string | null>(null);
   useEffect(() => {
@@ -364,11 +366,27 @@ export default function App() {
           }}
         >
           <input
+            ref={situationRef}
             value={situation}
             onChange={(e) => setSituation(e.target.value)}
             placeholder="상황을 입력하세요. 예: 회사 홈페이지가 가끔 느려요"
             className="w-full min-w-0 rounded-l-md border border-line bg-raised px-4 py-2 text-sm outline-none placeholder:text-dim focus:border-accent"
           />
+          {settings?.voice_input && (
+            <button
+              type="button"
+              onClick={() => {
+                // 입력칸에 초점을 둔 뒤 Windows 음성 입력을 연다. 말한 것은 Windows가 입력칸에 넣는다.
+                situationRef.current?.focus();
+                setTimeout(() => voiceTyping().catch((e) => setError(String(e))), 120);
+              }}
+              title="Windows 음성 입력을 엽니다 (Windows 키 + H). 소리는 Windows가 Microsoft 음성 서비스로 보내 글자로 바꿉니다."
+              aria-label="음성 입력"
+              className="shrink-0 border-y border-line bg-raised px-3 text-base hover:bg-line"
+            >
+              🎤
+            </button>
+          )}
           <button
             type="submit"
             disabled={suggesting || situation.trim() === ""}

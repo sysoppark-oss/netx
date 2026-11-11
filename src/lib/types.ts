@@ -344,6 +344,8 @@ export interface Settings {
   redact: boolean;
   /** 새 버전을 자동으로 설치하지 않는다(알림만) */
   manual_update: boolean;
+  /** 입력칸 옆에 음성 입력 단추를 보인다 (Windows 음성 입력, 기본 꺼짐) */
+  voice_input: boolean;
 }
 
 /** 자동 업데이트 상태 (src-tauri/src/updater.rs) */

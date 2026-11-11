@@ -48,6 +48,7 @@ fn main() {
                 "capture_rows",
                 "capture_packet",
                 "capture_folder",
+                "voice_typing",
                 "open_terminal",
                 "term_take_preset",
                 "term_ports",

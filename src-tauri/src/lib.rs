@@ -26,6 +26,7 @@ mod setup;
 mod snmp;
 mod term;
 mod updater;
+mod voice;
 mod word;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -86,6 +87,7 @@ pub fn run() {
             commands::capture_rows,
             commands::capture_packet,
             commands::capture_folder,
+            voice::voice_typing,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,
             term::cmd::term_ports,

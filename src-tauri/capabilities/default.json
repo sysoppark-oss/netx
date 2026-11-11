@@ -39,6 +39,7 @@
     "allow-capture-open",
     "allow-capture-rows",
     "allow-capture-packet",
-    "allow-capture-folder"
+    "allow-capture-folder",
+    "allow-voice-typing"
   ]
 }

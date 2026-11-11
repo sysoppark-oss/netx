@@ -36,6 +36,7 @@ export function SettingsDialog({
     model: initial.model,
     redact: initial.redact,
     manual_update: initial.manual_update,
+    voice_input: initial.voice_input,
   });
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(initial.has_key);
@@ -56,6 +57,7 @@ export function SettingsDialog({
       model: changed || !form.model ? preset.model : form.model,
       redact: provider === "ollama" ? form.redact : true,
       manual_update: form.manual_update,
+      voice_input: form.voice_input,
     });
   }
 
@@ -220,6 +222,19 @@ export function SettingsDialog({
             v2c는 이 값을 암호화하지 않고 보냅니다. 읽기 전용이어도 같은 망의 공격자가 문자열을 얻으면 네트워크 구조를 읽어 갑니다.
           </p>
         </div>
+
+        <label className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-sm">
+          <input type="checkbox" checked={form.voice_input} onChange={(e) => setForm({ ...form, voice_input: e.target.checked })} />
+          음성 입력 단추 보이기 (Windows 음성 입력)
+        </label>
+        <p className="mt-1 text-xs leading-relaxed text-caution">
+          켜면 상황 입력칸 옆에 🎤 단추가 생깁니다. 누르면 Windows 음성 입력(Windows 키 + H)이 열리고, 말한 것이 입력칸에 글자로 들어갑니다. Windows 음성
+          입력은 소리를 Microsoft 음성 서비스로 보내 글자로 바꿉니다(인터넷 필요).
+        </p>
+        <p className="mt-1 text-xs leading-relaxed text-dim">
+          NetX는 마이크를 열지 않고 소리를 받거나 저장하지 않습니다. 처음 쓸 때 Windows가 마이크와 음성 인식 사용을 물을 수 있습니다. Windows 10은 한국어
+          음성 입력이 안 될 수 있습니다.
+        </p>
 
         <label className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-sm">
           <input type="checkbox" checked={!form.manual_update} onChange={(e) => setForm({ ...form, manual_update: !e.target.checked })} />

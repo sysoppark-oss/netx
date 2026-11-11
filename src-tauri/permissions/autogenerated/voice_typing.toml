@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-typing"
+description = "Enables the voice_typing command without any pre-configured scope."
+commands.allow = ["voice_typing"]
+
+[[permission]]
+identifier = "deny-voice-typing"
+description = "Denies the voice_typing command without any pre-configured scope."
+commands.deny = ["voice_typing"]

@@ -126,7 +126,7 @@ export async function briefRun(runId: number, level: UserLevel): Promise<Briefin
 }
 
 export async function getSettings(): Promise<SettingsView> {
-  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, manual_update: false, has_key: false, has_snmp: false };
+  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, manual_update: false, voice_input: false, has_key: false, has_snmp: false };
   return invoke<SettingsView>("get_settings");
 }
 
@@ -212,4 +212,10 @@ export async function getWord(date: Date): Promise<WordView | null> {
 export async function openChurchMail(): Promise<void> {
   if (!isTauri()) return;
   return invoke<void>("open_church_mail");
+}
+
+/** Windows 음성 입력(Win+H)을 연다. 설정에서 켠 경우에만 된다. NetX는 소리를 받지 않는다. */
+export async function voiceTyping(): Promise<void> {
+  if (!isTauri()) throw new Error("음성 입력은 앱에서만 됩니다.");
+  return invoke<void>("voice_typing");
 }
