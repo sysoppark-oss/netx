@@ -24,7 +24,7 @@ const BASE: &str = "https://raw.githubusercontent.com/sysoppark-oss/netx";
 /// 업데이트 서명을 확인하는 공개 키(Tauri 형식: minisign 공개 키 파일을 base64로 감싼 것). 공개해도 되는 값이다.
 /// 짝이 되는 개인 키는 GitHub 저장소 비밀값 `TAURI_SIGNING_PRIVATE_KEY`에만 있다. 키를 바꾸면 이미 설치된 판은
 /// 새 서명을 확인하지 못하므로 손으로 다시 설치해야 한다.
-pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4MDk0RkM2MUI4MDlGNDgKUldSSW40QWJ4azhKdURLOFNmMXVOblJaL1VlbXExRTE2QngvZWNQemNKOXJpNzhMaDhkb0lPckYK";
+pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIwMDlENDUzNThGQjEyRDEKUldUUkV2dFlVOVFKSUdMZFhDeUdQbFJZazhQeksvU1ZRWmRnZHBORUpVZFcyMFRPVDFaSGhCbnEK";
 /// 서명 파일로 받을 수 있는 가장 큰 크기
 const MAX_SIG_BYTES: usize = 4096;
 /// 설치 파일로 받을 수 있는 가장 큰 크기
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn embedded_public_key_is_readable() {
         let text = unwrap_base64(PUBLIC_KEY).expect("base64");
-        assert!(text.starts_with("untrusted comment: minisign public key: B8094FC61B809F48"));
+        assert!(text.starts_with("untrusted comment: minisign public key: 2009D45358FB12D1"));
         assert!(minisign_verify::PublicKey::decode(&text).is_ok());
     }
 
