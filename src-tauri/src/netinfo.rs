@@ -112,17 +112,21 @@ pub async fn current() -> NetInfo {
 static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// "지금 조회 중" 표시. 조회가 끝나거나 도중에 버려지면 스스로 내려간다.
-struct Reading;
+struct Reading(&'static std::sync::atomic::AtomicBool);
 
 impl Reading {
     fn begin() -> Option<Reading> {
-        (!READING.swap(true, std::sync::atomic::Ordering::SeqCst)).then_some(Reading)
+        Reading::begin_on(&READING)
+    }
+
+    fn begin_on(flag: &'static std::sync::atomic::AtomicBool) -> Option<Reading> {
+        (!flag.swap(true, std::sync::atomic::Ordering::SeqCst)).then_some(Reading(flag))
     }
 }
 
 impl Drop for Reading {
     fn drop(&mut self) {
-        READING.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -281,11 +285,13 @@ mod tests {
 
     #[test]
     fn only_one_read_at_a_time() {
-        let first = Reading::begin();
+        // 다른 시험이 실제 조회를 돌리고 있을 수 있으므로 시험용 표시를 따로 쓴다.
+        static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let first = Reading::begin_on(&FLAG);
         assert!(first.is_some());
-        assert!(Reading::begin().is_none(), "조회 중에는 새 조회를 시작하지 않는다");
+        assert!(Reading::begin_on(&FLAG).is_none(), "조회 중에는 새 조회를 시작하지 않는다");
         drop(first);
-        assert!(Reading::begin().is_some(), "끝나면 다시 조회할 수 있다");
+        assert!(Reading::begin_on(&FLAG).is_some(), "끝나면 다시 조회할 수 있다");
     }
 
     #[test]
