@@ -436,7 +436,7 @@ function NewConnection({ onOpen, empty }: { onOpen: (spec: TermSpec) => void; em
           </button>
         </div>
       </form>
-      {empty && <WordCard className="mx-auto mt-8 max-w-xl text-center" />}
+      {empty && <WordCard className="mx-auto mt-8 w-fit max-w-xl" />}
     </div>
   );
 }

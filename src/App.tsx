@@ -697,7 +697,7 @@ export default function App() {
                 <p className="mt-6 text-xs text-dim">
                   현재 등급: <span className="text-ink">{levelInfo.label}</span> · {levelInfo.hint}
                 </p>
-                <WordCard className="mt-10 border-t border-line pt-6" />
+                <WordCard className="mx-auto mt-10 w-fit" />
               </div>
             </div>
           )}
@@ -714,7 +714,7 @@ export default function App() {
             ) : (
               <>
                 <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>
-                <WordCard className="mt-8 border-t border-line pt-5" />
+                <WordCard className="mt-8" />
               </>
             )}
           </aside>

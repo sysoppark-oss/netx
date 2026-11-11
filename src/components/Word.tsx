@@ -54,14 +54,19 @@ function useWaitingVerse(): { verse: Verse; version: string } | null {
   return { verse: view.waiting[(view.start + step) % view.waiting.length], version: view.version };
 }
 
-/** 본문, 그 아래 장·절과 번역본 이름 */
+/**
+ * 본문, 그 아래 장·절과 번역본 이름.
+ * 모양은 통합프로젝트의 「말씀 구절 표시 모양 (1판)」을 따른다: 본문은 기본 글자색으로 한 단계 크게,
+ * 왼쪽에 대표색 세로줄(3px, 본문과 12px), 장·절 줄은 작은 대표색 글자. 위 구분선을 두지 않는다.
+ * 글자에 상태 색(주의·위험·정상)과 투명도를 쓰지 않는다.
+ */
 export function WordCard({ className = "" }: { className?: string }) {
   const now = useWaitingVerse();
   if (!now) return null;
   return (
-    <figure className={`text-xs leading-relaxed text-dim ${className}`}>
-      <blockquote className="whitespace-pre-line text-ink/80">{now.verse.text}</blockquote>
-      <figcaption className="mt-1">
+    <figure className={`max-w-[46em] border-l-[3px] border-accent pl-3 text-left ${className}`}>
+      <blockquote className="text-[15px] leading-[1.7] break-keep whitespace-pre-line text-ink">{now.verse.text}</blockquote>
+      <figcaption className="mt-1 text-[12.5px] text-accent">
         {now.verse.ref} · {now.version}
       </figcaption>
     </figure>

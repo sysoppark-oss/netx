@@ -248,7 +248,7 @@ function StepCard({
         <>
           <Progress startedAt={state.started_at} estimateSecs={step.estimate_secs} />
           {/* 기다리는 동안에만 보인다. 결과와 원본 출력에는 섞지 않는다. */}
-          <WordCard className="mt-3 border-l-2 border-line pl-3" />
+          <WordCard className="mt-[18px]" />
         </>
       )}
 
