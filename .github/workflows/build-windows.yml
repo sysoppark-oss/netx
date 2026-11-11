@@ -74,6 +74,7 @@ jobs:
           # 개인 키는 저장소 비밀값에만 있다. 붙여 넣을 때 딸려 온 줄바꿈은 떼어 낸다.
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw "저장소 비밀값 TAURI_SIGNING_PRIVATE_KEY가 없습니다." }
           $env:TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD.Trim() }
           npx tauri signer sign (Join-Path $d $name) | Out-Null
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $d "$name.sig"))) { throw "설치 파일에 서명하지 못했습니다." }
           $sha = (Get-FileHash (Join-Path $d $name) -Algorithm SHA256).Hash.ToLower()
