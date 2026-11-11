@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-rows"
+description = "Enables the capture_rows command without any pre-configured scope."
+commands.allow = ["capture_rows"]
+
+[[permission]]
+identifier = "deny-capture-rows"
+description = "Denies the capture_rows command without any pre-configured scope."
+commands.deny = ["capture_rows"]

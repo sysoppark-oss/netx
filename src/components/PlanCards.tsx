@@ -4,6 +4,7 @@ import { killProcess, openTarget } from "../lib/backend";
 import { openTerminal } from "../lib/term";
 import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 import { ChartView } from "./Charts";
+import { captureNameOf, openCapture } from "../lib/capture";
 import { TopologyView } from "./Topology";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
@@ -155,6 +156,7 @@ function StepCard({
   const state = run?.steps[step.order];
   const lines = run ? run.lines.filter((l) => l.order === step.order) : [];
   const result = run?.results[step.order];
+  const captureFile = step.tool === "tcpdump" ? captureNameOf(step.argv) : null;
   const outRef = useRef<HTMLPreElement>(null);
 
   // 새 출력이 오면 맨 아래로 내린다.
@@ -251,6 +253,13 @@ function StepCard({
       )}
 
       {result && state?.status !== "running" && <ResultView result={result} showFacts={showCommand} level={level} />}
+
+      {/* 캡처가 끝나면 저장된 파일을 바로 열어 분석할 수 있다. */}
+      {captureFile && state && state.status !== "running" && (
+        <button onClick={() => openCapture(captureFile)} className="mt-3 rounded-md border border-accent/60 px-3 py-1.5 text-sm text-accent hover:bg-raised">
+          📂 캡처 분석 열기
+        </button>
+      )}
 
       {state && showCommand && (
         <pre ref={outRef} className="mt-3 max-h-64 overflow-auto rounded-md border border-line bg-void px-3 py-2 font-mono text-xs leading-5 whitespace-pre-wrap">

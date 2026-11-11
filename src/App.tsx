@@ -1,3 +1,5 @@
+import { CaptureView } from "./components/CaptureView";
+import { OPEN_CAPTURE_EVENT } from "./lib/capture";
 import { useEffect, useRef, useState } from "react";
 import { AddStep } from "./components/AddStep";
 import { BriefPanel } from "./components/BriefPanel";
@@ -83,6 +85,13 @@ export default function App() {
   // 직접 추가한 명령과 "직접 명령" 화면
   const [extras, setExtras] = useState<string[]>([]);
   const [manualMode, setManualMode] = useState(false);
+  // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
+  const [capture, setCapture] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => setCapture(String((e as CustomEvent).detail ?? ""));
+    window.addEventListener(OPEN_CAPTURE_EVENT, open);
+    return () => window.removeEventListener(OPEN_CAPTURE_EVENT, open);
+  }, []);
   // 추천 목록 대신 직접 입력을 고른 입력칸
   const [custom, setCustom] = useState<Record<string, boolean>>({});
   // Expert 옵션 패널에서 누른 옵션을 명령 입력칸에 붙인다.
@@ -441,9 +450,17 @@ export default function App() {
                   );
                 })}
               </ul>
+              <h2 className="mt-4 mb-2 px-1 text-xs font-semibold text-dim">직접 하기</h2>
+              <button
+                onClick={() => setCapture("")}
+                title="저장해 둔 패킷 캡처를 열어 요약, 문제 찾기, 패킷 목록을 봅니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">📂</span>
+                <span className="flex-1">캡처 분석</span>
+              </button>
               {level !== "general" && (
                 <>
-                  <h2 className="mt-4 mb-2 px-1 text-xs font-semibold text-dim">직접 하기</h2>
                   <button
                     onClick={openManual}
                     title="도구와 옵션을 직접 정해서 실행합니다. 실행 전에 검증으로 위험도와 예상을 볼 수 있습니다."
@@ -762,6 +779,7 @@ export default function App() {
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}
+      {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );
 }

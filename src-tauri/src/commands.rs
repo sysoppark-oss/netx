@@ -166,6 +166,38 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     Ok((data, work))
 }
 
+// ---- 캡처 분석 ----
+// 작업 폴더의 캡처 파일만 이름으로 연다. 읽기 전용이고 아무것도 밖으로 보내지 않는다.
+
+#[tauri::command(async)]
+pub fn capture_list(app: AppHandle) -> Result<Vec<crate::capview::CaptureFile>, String> {
+    Ok(crate::capview::list(&data_dirs(&app)?.1))
+}
+
+#[tauri::command(async)]
+pub fn capture_open(app: AppHandle, name: String) -> Result<crate::capview::Analysis, String> {
+    crate::capview::open(&data_dirs(&app)?.1, &name)
+}
+
+#[tauri::command(async)]
+pub fn capture_rows(app: AppHandle, name: String, text: String, mark: String, offset: usize, limit: usize) -> Result<crate::capview::Page, String> {
+    crate::capview::rows(&data_dirs(&app)?.1, &name, &text, &mark, offset, limit)
+}
+
+#[tauri::command(async)]
+pub fn capture_packet(app: AppHandle, name: String, no: u32) -> Result<crate::capview::Detail, String> {
+    crate::capview::packet(&data_dirs(&app)?.1, &name, no)
+}
+
+/// 캡처 파일이 있는 작업 폴더를 파일 탐색기로 연다(Wireshark로 열어 보고 싶을 때).
+#[tauri::command]
+pub fn capture_folder(app: AppHandle) -> Result<String, String> {
+    let (_, work) = data_dirs(&app)?;
+    let program = if cfg!(target_os = "windows") { "explorer.exe" } else { "xdg-open" };
+    let _ = std::process::Command::new(program).arg(&work).stdin(std::process::Stdio::null()).spawn();
+    Ok(work.to_string_lossy().into_owned())
+}
+
 // ---- 자동 업데이트 ----
 
 /// 실행 중인 작업이나 열려 있는 터미널 접속이 있는지 (있으면 자동 업데이트 설치를 미룬다)

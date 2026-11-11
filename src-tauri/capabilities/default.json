@@ -34,6 +34,11 @@
     "allow-apply-update",
     "allow-get-word",
     "allow-open-church-mail",
-    "allow-open-terminal"
+    "allow-open-terminal",
+    "allow-capture-list",
+    "allow-capture-open",
+    "allow-capture-rows",
+    "allow-capture-packet",
+    "allow-capture-folder"
   ]
 }

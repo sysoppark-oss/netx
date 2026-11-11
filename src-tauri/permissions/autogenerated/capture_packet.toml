@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-packet"
+description = "Enables the capture_packet command without any pre-configured scope."
+commands.allow = ["capture_packet"]
+
+[[permission]]
+identifier = "deny-capture-packet"
+description = "Denies the capture_packet command without any pre-configured scope."
+commands.deny = ["capture_packet"]

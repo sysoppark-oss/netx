@@ -6,6 +6,7 @@
 
 mod audit;
 mod basic;
+mod capview;
 mod commands;
 mod engine;
 mod env_check;
@@ -80,6 +81,11 @@ pub fn run() {
             commands::apply_update,
             commands::get_word,
             commands::open_church_mail,
+            commands::capture_list,
+            commands::capture_open,
+            commands::capture_rows,
+            commands::capture_packet,
+            commands::capture_folder,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,
             term::cmd::term_ports,
