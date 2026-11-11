@@ -20,6 +20,7 @@ mod registry;
 mod security;
 mod settings;
 mod setup;
+mod snmp;
 mod updater;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
