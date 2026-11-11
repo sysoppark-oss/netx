@@ -255,7 +255,8 @@ pub fn watch_updates(app: AppHandle) {
         loop {
             // 인터넷이 없을 때마다 알리지는 않는다. 설치를 시도하다 실패한 경우만 알린다.
             if let Ok(Some(m)) = crate::updater::check().await {
-                let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true);
+                // PC 전체 설치판은 설치에 관리자 승인이 필요하므로 켤 때 저절로 설치하지 않고 알리기만 한다.
+                let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true) || crate::updater::needs_admin();
                 match crate::updater::decide(crate::updater::CHANNEL, first, manual, busy()) {
                     Action::Notice => update_status(&app, "notice", &m.commit, UPDATE_NOTICE),
                     Action::Offer => update_status(&app, "available", &m.commit, "새 버전이 있습니다."),

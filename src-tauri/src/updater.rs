@@ -171,13 +171,72 @@ pub async fn download(m: &Manifest, dir: &Path) -> Result<PathBuf, String> {
     verify_signature(&data, &String::from_utf8_lossy(&sig), PUBLIC_KEY)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("업데이트 폴더를 만들지 못했습니다: {e}"))?;
     let path = dir.join(name);
+    // 앞서 잡아 둔 파일이 있으면 놓는다(같은 이름으로 다시 쓰기 위해).
+    *HELD.lock().unwrap_or_else(|e| e.into_inner()) = None;
     std::fs::write(&path, &data).map_err(|e| format!("설치 파일을 저장하지 못했습니다: {e}"))?;
+    hold(&path, &m.sha256)?;
     Ok(path)
 }
 
+/// 확인을 마친 설치 파일을 실행할 때까지 잡아 둔다.
+static HELD: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+
+/// 저장한 설치 파일을 "다른 프로그램은 읽기만 가능"하게 열어 잡고, 잡은 채로 내용을 다시 확인한다.
+/// 확인과 실행 사이에 파일이 바꿔치기되는 것을 막는다. 설치 프로그램이 관리자 권한으로 돌 수 있으므로 필요하다.
+/// 잡은 파일은 NetX가 끝나거나 다음 내려받기를 시작할 때 놓는다.
+fn hold(path: &Path, sha256: &str) -> Result<(), String> {
+    use std::io::Read;
+    const CHANGED: &str = "저장한 설치 파일이 확인한 것과 다릅니다. 설치하지 않았습니다.";
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ만: 열려 있는 동안 다른 프로그램이 쓰거나 지우거나 이름을 바꿀 수 없다.
+        options.share_mode(1);
+    }
+    let mut file = options.open(path).map_err(|e| format!("설치 파일을 열지 못했습니다: {e}"))?;
+    let mut data = Vec::new();
+    (&mut file).take(MAX_SETUP_BYTES as u64 + 1).read_to_end(&mut data).map_err(|_| CHANGED.to_string())?;
+    if sha256_hex(&data) != sha256 {
+        return Err(CHANGED.into());
+    }
+    *HELD.lock().unwrap_or_else(|e| e.into_inner()) = Some(file);
+    Ok(())
+}
+
+/// NetX가 PC 전체 설치(Program Files 아래)인지. 그렇다면 설치에 관리자 승인(UAC)이 필요하므로
+/// 켤 때 저절로 설치하지 않고 [지금 업데이트]로 알리기만 한다.
+pub fn needs_admin() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let dirs = crate::bridge::pipe::admin_dirs();
+        std::env::current_exe().ok().and_then(|exe| crate::bridge::pipe::final_path(&exe.to_string_lossy())).is_some_and(|exe| crate::bridge::under_admin_dirs(&exe, &dirs))
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
 /// 설치 프로그램을 실행한다. `/P`는 진행 창만 보이는 설치, `/R`은 설치 뒤 NetX 다시 실행.
+/// 설치 프로그램이 관리자 권한을 요구하면 Windows가 승인 창(UAC)을 띄운다. 그래서 프로세스를 직접 만들지 않고
+/// Windows 셸의 "열기"로 실행한다(직접 만들면 승인 창 없이 실패한다). 경로와 인자는 고정이고 셸 명령줄을 거치지 않는다.
+#[cfg(target_os = "windows")]
 pub fn launch(path: &Path) -> Result<(), String> {
-    std::process::Command::new(path).args(["/P", "/R"]).spawn().map(|_| ()).map_err(|e| format!("설치 프로그램을 실행하지 못했습니다: {e}"))
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let file = HSTRING::from(path.as_os_str());
+    let result = unsafe { ShellExecuteW(None, w!("open"), &file, w!("/P /R"), PCWSTR::null(), SW_SHOWNORMAL) };
+    match result.0 as isize {
+        code if code > 32 => Ok(()),
+        5 => Err("설치를 시작하지 못했습니다. 관리자 승인 창에서 [예]를 눌러야 설치됩니다.".into()),
+        code => Err(format!("설치 프로그램을 실행하지 못했습니다 (오류 {code}).")),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn launch(_path: &Path) -> Result<(), String> {
+    Err("자동 설치는 Windows에서만 됩니다.".into())
 }
 
 #[cfg(test)]
@@ -187,6 +246,21 @@ mod tests {
     const C1: &str = "026187f49907216b7c2dd52a2487deefe3fcaa5b";
     const C2: &str = "e60ae11bbd5ba760a09dbfc04a85aeb70c66b0ce";
     const SHA: &str = "22cb6f008b4b17585ceb6bc95da741942625a1b8658b23a642e7739bc0d2017b";
+
+    #[test]
+    fn held_setup_file_must_match_what_was_verified() {
+        let dir = std::env::temp_dir().join(format!("netx-hold-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("setup.exe");
+        std::fs::write(&path, b"verified installer").unwrap();
+        assert!(hold(&path, &sha256_hex(b"verified installer")).is_ok());
+        *HELD.lock().unwrap() = None;
+        std::fs::write(&path, b"swapped installer").unwrap();
+        assert!(hold(&path, &sha256_hex(b"verified installer")).is_err());
+        assert!(hold(&dir.join("none.exe"), SHA).is_err());
+        assert!(!needs_admin());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn manifest_is_read_strictly() {

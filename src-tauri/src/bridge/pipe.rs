@@ -106,12 +106,12 @@ pub fn unpublish() {
 }
 
 /// 운영체제가 알려 주는 최종 경로(짧은 이름과 연결을 푼 것). 파일이 없으면 None.
-fn final_path(path: &str) -> Option<String> {
+pub(crate) fn final_path(path: &str) -> Option<String> {
     Some(std::fs::canonicalize(path).ok()?.to_string_lossy().into_owned())
 }
 
 /// 관리자만 쓸 수 있는 프로그램 폴더들. 환경 변수가 아니라 HKLM에서 읽는다(환경 변수는 실행한 쪽이 바꿀 수 있다).
-fn admin_dirs() -> Vec<String> {
+pub(crate) fn admin_dirs() -> Vec<String> {
     let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion") else { return Vec::new() };
     ["ProgramFilesDir", "ProgramFilesDir (x86)", "ProgramW6432Dir"].iter().filter_map(|name| final_path(&key.get_value::<String, _>(name).ok()?)).collect()
 }
