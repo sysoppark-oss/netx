@@ -28,7 +28,7 @@ export function ChartView({ chart }: { chart: Chart }) {
       {chart.kind === "gauge" && <Gauge chart={chart} />}
       {chart.kind === "route" && <RouteMap hops={chart.hops} from={chart.from} />}
       {chart.kind === "radar" && <RadarView hosts={chart.hosts} />}
-      {chart.kind === "fortress" && <FortressView doors={chart.doors} />}
+      {chart.kind === "fortress" && <FortressView doors={chart.doors} more={chart.more} />}
       {chart.kind === "highway" && <HighwayView road={chart.road} />}
     </figure>
   );

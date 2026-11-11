@@ -206,7 +206,7 @@ export type Chart =
   | { kind: "gauge"; title: string; unit: string; value: number; max: number }
   | { kind: "route"; title: string; unit: string; hops: RouteHop[]; from: number }
   | { kind: "radar"; title: string; unit: string; hosts: RadarHost[] }
-  | { kind: "fortress"; title: string; unit: string; doors: Door[] }
+  | { kind: "fortress"; title: string; unit: string; doors: Door[]; more: number }
   | { kind: "highway"; title: string; unit: string; road: Highway };
 
 /** 시각화 자료 (src-tauri/src/interpret.rs, pcap.rs) */

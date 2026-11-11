@@ -45,7 +45,8 @@ pub enum Chart {
     /// 소나 레이더 (fping으로 응답한 장비)
     Radar { title: String, unit: String, hosts: Vec<RadarHost> },
     /// 요새 도면 (Windows에서 포트를 열고 있는 프로그램)
-    Fortress { title: String, unit: String, doors: Vec<Door> },
+    /// `more`는 그림에 다 넣지 못한 문의 수
+    Fortress { title: String, unit: String, doors: Vec<Door>, more: usize },
     /// 패킷 하이웨이 (캡처 파일)
     Highway { title: String, unit: String, road: crate::pcap::Highway },
 }
@@ -588,9 +589,9 @@ fn winports(lines: &[String]) -> Option<StepResult> {
     counts.sort_by(|a, b| b.1.cmp(&a.1));
     let bars: Vec<Bar> = counts.iter().take(12).map(|(n, k)| Bar { label: n.clone(), value: *k as f64, light: Light::Info, note: String::new() }).collect();
     let mut r = StepResult::new(Light::Info, format!("Windows에서 {shown}{more}이(가) 쓰고 있습니다.")).fact("소켓 수", rows.len().to_string()).fact("프로그램 수", owners.len().to_string());
-    let doors = winports_doors(&rows);
+    let (doors, more) = winports_doors(&rows);
     if !doors.is_empty() {
-        r = r.chart(Chart::Fortress { title: "요새 도면".into(), unit: "문을 누르면 프로그램".into(), doors });
+        r = r.chart(Chart::Fortress { title: "요새 도면".into(), unit: "문을 누르면 프로그램".into(), doors, more });
     }
     if bars.len() > 1 {
         r = r.chart(Chart::Bars { title: "프로그램별 소켓 수".into(), unit: "개".into(), bars });
@@ -621,7 +622,7 @@ fn winports(lines: &[String]) -> Option<StepResult> {
 }
 
 /// 요새 도면의 문: (프로토콜, 포트, 프로세스)마다 하나. 열만 `PROTO LOCAL PID PROCESS STATE…`
-fn winports_doors(rows: &[Vec<&str>]) -> Vec<Door> {
+fn winports_doors(rows: &[Vec<&str>]) -> (Vec<Door>, usize) {
     let mut doors: Vec<Door> = Vec::new();
     for c in rows.iter().filter(|c| c.len() >= 5) {
         let (Some(port), Ok(pid)) = (c[1].rsplit(':').next().and_then(|p| p.parse::<u16>().ok()), c[2].parse::<u32>()) else { continue };
@@ -636,10 +637,16 @@ fn winports_doors(rows: &[Vec<&str>]) -> Vec<Door> {
             None => doors.push(Door { proto: c[0].to_string(), port, process: process.to_string(), pid, listening: !connected, connections: u32::from(connected) }),
         }
     }
+    // 문이 많으면 들어오는 연결을 기다리는 문(수신 대기)을 먼저 남긴다. 그림은 포트 순서로 그린다.
+    doors.sort_by(|a, b| (!a.listening, a.port, &a.proto, a.pid).cmp(&(!b.listening, b.port, &b.proto, b.pid)));
+    let more = doors.len().saturating_sub(MAX_DOORS);
+    doors.truncate(MAX_DOORS);
     doors.sort_by(|a, b| (a.port, &a.proto, a.pid).cmp(&(b.port, &b.proto, b.pid)));
-    doors.truncate(48);
-    doors
+    (doors, more)
 }
+
+/// 요새 도면에 그리는 문의 수
+const MAX_DOORS: usize = 48;
 
 /// 내장 포트 스캔: "192.168.0.1  open  22(SSH) 80(HTTP)"
 fn portscan(lines: &[String]) -> Option<StepResult> {
@@ -1006,6 +1013,11 @@ mod tests {
         let r = done("winports", out, 0);
         let Chart::Fortress { doors, .. } = &r.charts[0] else { panic!("{:?}", r.charts) };
         assert_eq!(doors.len(), 4);
+        // 문이 많으면 수신 대기 문을 먼저 남기고 나머지 수를 알린다.
+        let many: Vec<String> = (0..60).map(|i| format!("TCP 0.0.0.0:{} 1 a {}", 1000 + i, if i < 20 { "연결됨 1.1.1.1:1" } else { "수신 대기" })).collect();
+        let rows: Vec<Vec<&str>> = many.iter().map(|l| l.split_whitespace().collect()).collect();
+        let (kept, more) = winports_doors(&rows);
+        assert_eq!((kept.len(), more, kept.iter().filter(|d| d.listening).count()), (48, 12, 40));
         assert_eq!((doors[3].process.as_str(), doors[3].listening, doors[3].connections), ("(알 수 없음)", false, 1));
         assert_eq!((doors[0].port, doors[0].process.as_str(), doors[0].listening, doors[0].connections), (445, "System", true, 0));
         assert_eq!((doors[2].port, doors[2].listening, doors[2].connections), (50001, false, 2));

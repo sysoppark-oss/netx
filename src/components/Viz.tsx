@@ -56,12 +56,14 @@ export function RouteMap({ hops, from }: { hops: RouteHop[]; from: number }) {
   const [picked, setPicked] = useState<number | null>(null);
   const PER_ROW = 6;
   const GAP = 100;
+  // 줄 끝 역의 글자를 바깥쪽에 적을 자리를 양옆에 둔다.
+  const X0 = 110;
   const ROW = 78;
   // 0번은 내 PC. 줄이 바뀔 때마다 방향을 뒤집어 한 줄로 이어지게 한다.
   const at = (i: number) => {
     const row = Math.floor(i / PER_ROW);
     const col = i % PER_ROW;
-    return { x: 50 + (row % 2 === 0 ? col : PER_ROW - 1 - col) * GAP, y: 34 + row * ROW };
+    return { x: X0 + (row % 2 === 0 ? col : PER_ROW - 1 - col) * GAP, y: 34 + row * ROW };
   };
   const rows = Math.ceil((hops.length + 1) / PER_ROW);
   const states = hops.map((h) => hopState(h, from));
@@ -69,7 +71,7 @@ export function RouteMap({ hops, from }: { hops: RouteHop[]; from: number }) {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${50 + PER_ROW * GAP} ${rows * ROW + 6}`} className="w-full" style={{ maxHeight: rows * 110 }}>
+      <svg viewBox={`0 0 ${X0 * 2 + (PER_ROW - 1) * GAP} ${rows * ROW + 6}`} className="w-full" style={{ maxHeight: rows * 110 }}>
         {hops.map((h, i) => {
           const a = at(i);
           const b = at(i + 1);
@@ -89,11 +91,12 @@ export function RouteMap({ hops, from }: { hops: RouteHop[]; from: number }) {
         {hops.map((h, i) => {
           const p = at(i + 1);
           const bad = states[i] !== "ok";
-          // 줄 끝의 역은 아래로 내려가는 선과 글자가 겹치지 않게 글자를 안쪽으로 붙인다.
+          // 줄 끝의 역은 아래로 내려가는 선과 글자가 겹치지 않게 글자를 바깥쪽 옆에 적는다.
           const turn = (i + 1) % PER_ROW === PER_ROW - 1 && i + 1 < hops.length;
           const leftward = Math.floor((i + 1) / PER_ROW) % 2 === 1;
-          const tx = turn ? p.x + (leftward ? 14 : -14) : p.x;
-          const anchor = turn ? (leftward ? "start" : "end") : "middle";
+          const tx = turn ? p.x + (leftward ? -16 : 16) : p.x;
+          const anchor = turn ? (leftward ? "end" : "start") : "middle";
+          const ty = turn ? p.y - 22 : p.y;
           return (
             <g key={h.n} onClick={() => setPicked(picked === h.n ? null : h.n)} style={{ cursor: "pointer" }}>
               <title>{hopText(h, states[i])}</title>
@@ -103,10 +106,10 @@ export function RouteMap({ hops, from }: { hops: RouteHop[]; from: number }) {
               <text x={p.x} y={p.y + 3.5} fontSize="9" fill={INK} textAnchor="middle">
                 {h.n}
               </text>
-              <text x={tx} y={p.y + 25} fontSize="9" fill={bad ? HOP_COLOR[states[i]] : DIM} textAnchor={anchor}>
-                {clip(h.host, 17)}
+              <text x={tx} y={ty + 25} fontSize="9" fill={bad ? HOP_COLOR[states[i]] : DIM} textAnchor={anchor}>
+                {clip(h.host, turn ? 15 : 17)}
               </text>
-              <text x={tx} y={p.y + 36} fontSize="8.5" fill={DIM} textAnchor={anchor}>
+              <text x={tx} y={ty + 36} fontSize="8.5" fill={DIM} textAnchor={anchor}>
                 {h.loss >= 100 ? "응답 없음" : `${ms(h.avg)}ms${h.loss > 0 ? ` · 손실 ${h.loss.toFixed(0)}%` : ""}`}
               </text>
             </g>
@@ -186,7 +189,7 @@ export function RadarView({ hosts }: { hosts: RadarHost[] }) {
 
 // ---------------------------------------------------------------- 요새 도면
 
-export function FortressView({ doors }: { doors: Door[] }) {
+export function FortressView({ doors, more }: { doors: Door[]; more: number }) {
   const [picked, setPicked] = useState<number | null>(null);
   const W = 560;
   const H = 320;
@@ -210,7 +213,7 @@ export function FortressView({ doors }: { doors: Door[] }) {
           내 PC
         </text>
         <text x={cx} y={cy + 16} fontSize="10" fill={DIM} textAnchor="middle">
-          열린 문 {doors.length}개
+          열린 문 {doors.length + more}개{more > 0 ? ` (그림에는 ${doors.length}개)` : ""}
         </text>
         {doors.map((d, i) => {
           const a = (i / doors.length) * Math.PI * 2 - Math.PI / 2;
