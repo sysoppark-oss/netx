@@ -130,6 +130,14 @@ fn counters(iface: Option<&str>) -> (Option<u64>, Option<u64>) {
     }
 }
 
+/// 지금 쓰는 어댑터의 MAC 주소("aa:bb:cc:dd:ee:ff"). 알 수 없으면 None.
+pub fn my_mac(iface: Option<&str>) -> Option<String> {
+    let nets = sysinfo::Networks::new_with_refreshed_list();
+    let (_, data) = nets.iter().find(|(n, _)| Some(n.as_str()) == iface)?;
+    let mac = data.mac_address().to_string().to_lowercase();
+    (mac != "00:00:00:00:00:00").then_some(mac)
+}
+
 fn is_loopback(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n == "lo" || n.contains("loopback")

@@ -15,7 +15,7 @@ const PRESETS: Record<Exclude<Provider, "none">, { base_url: string; model: stri
   },
 };
 
-/** AI 연결 설정. API 키는 저장만 하고 다시 보여 주지 않는다. */
+/** 설정(AI 연결, 구성도용 SNMP, 자동 업데이트). API 키와 커뮤니티 문자열은 저장만 하고 다시 보여 주지 않는다. */
 export function SettingsDialog({
   initial,
   onClose,
@@ -34,6 +34,8 @@ export function SettingsDialog({
   });
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(initial.has_key);
+  const [community, setCommunity] = useState("");
+  const [hasSnmp, setHasSnmp] = useState(initial.has_snmp);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -56,9 +58,11 @@ export function SettingsDialog({
     setBusy(true);
     setStatus(null);
     try {
-      const view = await saveSettings(form, apiKey === "" ? null : apiKey);
+      const view = await saveSettings(form, apiKey === "" ? null : apiKey, community === "" ? null : community);
       setHasKey(view.has_key);
+      setHasSnmp(view.has_snmp);
       setApiKey("");
+      setCommunity("");
       onSaved(view);
       if (thenTest) setStatus({ ok: true, text: await testLlm() });
       else onClose();
@@ -82,13 +86,26 @@ export function SettingsDialog({
     }
   }
 
+  async function removeCommunity() {
+    setBusy(true);
+    try {
+      const view = await saveSettings(form, null, "");
+      setHasSnmp(view.has_snmp);
+      onSaved(view);
+    } catch (e) {
+      setStatus({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const input = "w-full rounded-md border border-line bg-raised px-3 py-2 text-sm outline-none focus:border-accent";
   const active = form.provider !== "none";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="w-full max-w-lg rounded-lg border border-line bg-panel p-6">
-        <h2 className="text-lg font-semibold">AI 연결 설정</h2>
+      <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-lg border border-line bg-panel p-6">
+        <h2 className="text-lg font-semibold">설정 · AI 연결</h2>
         <p className="mt-1 text-xs text-dim">
           AI는 상황을 읽고 도구와 옵션을 제안하며, 실행 결과를 요약합니다. 연결하지 않아도 레시피와 키워드 찾기는 동작합니다.
         </p>
@@ -170,6 +187,33 @@ export function SettingsDialog({
             )}
           </div>
         )}
+
+        <div className="mt-5 border-t border-line pt-4">
+          <label className="block text-xs text-dim">
+            구성도용 SNMP 커뮤니티 문자열 (선택) {hasSnmp && <span className="text-safe">(저장되어 있음)</span>}
+            <input
+              type="password"
+              value={community}
+              onChange={(e) => setCommunity(e.target.value)}
+              placeholder={hasSnmp ? "바꾸려면 새 값을 입력하세요" : "스위치·AP에 설정된 읽기 전용 값"}
+              autoComplete="off"
+              spellCheck={false}
+              className={`${input} mt-1 font-mono text-ink`}
+            />
+          </label>
+          <p className="mt-1 text-xs leading-relaxed text-dim">
+            넣어 두면 네트워크 구성도를 그릴 때 SNMP(v2c, 읽기 전용)에 답하는 스위치·AP에 물어, 어느 장비가 어느 포트에 물렸는지 선으로 그립니다. 값은 Windows 자격
+            증명 저장소에 보관하며 화면에 다시 표시하지 않습니다.
+            {hasSnmp && (
+              <button onClick={removeCommunity} disabled={busy} className="ml-2 text-danger underline">
+                저장된 값 지우기
+              </button>
+            )}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-caution">
+            v2c는 이 값을 암호화하지 않고 보냅니다. 읽기 전용이어도 같은 망의 공격자가 문자열을 얻으면 네트워크 구조를 읽어 갑니다.
+          </p>
+        </div>
 
         <label className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-sm">
           <input type="checkbox" checked={!form.manual_update} onChange={(e) => setForm({ ...form, manual_update: !e.target.checked })} />

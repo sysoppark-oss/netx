@@ -230,6 +230,9 @@ async fn neighbors() -> Vec<(Ipv4Addr, String)> {
     if cfg!(target_os = "windows") {
         const SCRIPT: &str = "$ErrorActionPreference='SilentlyContinue'; Get-NetNeighbor -AddressFamily IPv4 | Where-Object { $_.State -ne 'Unreachable' -and $_.State -ne 'Incomplete' } | ForEach-Object { \"$($_.IPAddress) $($_.LinkLayerAddress)\" }";
         crate::netinfo::run("powershell.exe", &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", SCRIPT]).await.map(|o| parse_neighbors_windows(&o)).unwrap_or_default()
+    } else if let Ok(fixed) = std::env::var("NETX_TEST_NEIGHBORS") {
+        // 개발용(리눅스에서 화면을 확인할 때): "ip mac" 줄을 이웃 목록 대신 쓴다. Windows 빌드에는 이 길이 없다.
+        parse_neighbors_windows(&fixed)
     } else {
         crate::netinfo::run("ip", &["-j", "-4", "neigh"]).await.map(|o| parse_neighbors_linux(&o)).unwrap_or_default()
     }
@@ -495,6 +498,30 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
         names.extend(local_name().map(|name| (ip, name)));
     }
 
+    // 내 PC의 MAC은 이웃 목록에 없으므로 어댑터에서 읽어 더한다(스위치의 MAC 표와 맞춰 보는 데 쓴다).
+    let mut macs = macs;
+    if let Some(ip) = me.filter(|ip| ips.contains(ip) && !macs.iter().any(|(m, _)| m == ip)) {
+        macs.extend(crate::netinfo::my_mac(info.iface.as_deref()).map(|mac| (ip, mac)));
+    }
+
+    // 스위치 연결 관계: 커뮤니티 문자열이 설정돼 있을 때만 SNMP(읽기 전용)로 묻는다.
+    let switches = match crate::settings::snmp_community() {
+        Some(community) => {
+            emit("SNMP로 스위치·AP에 연결 관계를 묻습니다. (읽기 전용, 답하는 장비만)".to_string());
+            let targets: Vec<(Ipv4Addr, SocketAddr)> = ips.iter().filter(|ip| Some(**ip) != me).map(|ip| (*ip, SocketAddr::new(IpAddr::V4(*ip), crate::snmp::PORT))).collect();
+            snmp_survey(&targets, &community).await
+        }
+        None => Vec::new(),
+    };
+    // 장비가 스스로 알려 준 이름(sysName)을 먼저 쓴다.
+    for sw in &switches {
+        if let Some(name) = &sw.name {
+            names.retain(|(ip, _)| *ip != sw.ip);
+            names.push((sw.ip, name.clone()));
+        }
+    }
+    let links = derive_links(&switches, &macs, &names, gateway);
+
     let show = |ip: Option<Ipv4Addr>| ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
     emit(format!("NET {cidr} GW {} ME {}", show(gateway), show(me)));
     for (ip, open) in &found {
@@ -504,8 +531,330 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
         let name = names.iter().find(|(n, _)| n == ip).map(|(_, n)| n.as_str()).unwrap_or("-");
         emit(format!("NODE {ip} {mac} {role} {ports} {name}"));
     }
+    for sw in &switches {
+        emit(format!("SNMP {} {} {} {}", sw.ip, sw.fdb.len(), sw.lldp.len(), sw.descr.as_deref().unwrap_or("-")));
+    }
+    for l in &links {
+        emit(format!("LINK {} {} {} {} {}", l.switch, l.port, l.device, l.via, l.shared));
+    }
     emit(format!("조사 끝: 장비 {}대를 찾았습니다.", found.len()));
     Ok(if found.is_empty() { 1 } else { 0 })
+}
+
+// ---- 스위치·AP 연결 관계 (SNMP). 패킷을 만들고 읽는 일은 `crate::snmp`가 하고, 여기서는 구성도에 쓸 모양으로 바꾼다. ----
+
+const SYS_DESCR: &str = "1.3.6.1.2.1.1.1.0";
+const SYS_NAME: &str = "1.3.6.1.2.1.1.5.0";
+/// LLDP 이웃 표의 칸들. 색인은 (시각 표시, 내 포트 번호, 이웃 번호)다.
+const LLDP_CHASSIS_KIND: &str = "1.0.8802.1.1.2.1.4.1.1.4";
+const LLDP_CHASSIS_ID: &str = "1.0.8802.1.1.2.1.4.1.1.5";
+const LLDP_SYS_NAME: &str = "1.0.8802.1.1.2.1.4.1.1.9";
+/// 브리지 MAC 표: 색인이 MAC 6바이트, 값이 포트 번호
+const FDB_PORT: &str = "1.3.6.1.2.1.17.4.3.1.2";
+/// VLAN을 쓰는 스위치의 MAC 표: 색인이 (VLAN 묶음 번호, MAC 6바이트)
+const QFDB_PORT: &str = "1.3.6.1.2.1.17.7.1.2.2.1.2";
+/// 브리지 포트 번호 → 인터페이스 번호, 인터페이스 번호 → 이름
+const BRIDGE_IFINDEX: &str = "1.3.6.1.2.1.17.1.4.1.2";
+const IF_NAME: &str = "1.3.6.1.2.1.31.1.1.1.1";
+
+const SNMP_TIMEOUT: Duration = Duration::from_secs(1);
+/// 장비 한 대에서 표를 읽는 데 쓰는 최대 시간
+const SNMP_DEVICE_LIMIT: Duration = Duration::from_secs(25);
+const MAX_FDB_ROWS: usize = 2048;
+
+/// LLDP로 알게 된 이웃 한 대
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Neighbor {
+    pub port: u32,
+    pub mac: Option<String>,
+    pub name: Option<String>,
+}
+
+/// SNMP에 답한 장비에서 읽은 것
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchInfo {
+    pub ip: Ipv4Addr,
+    pub name: Option<String>,
+    pub descr: Option<String>,
+    /// (MAC, 포트 번호)
+    pub fdb: Vec<(String, u32)>,
+    pub lldp: Vec<Neighbor>,
+    /// (포트 번호, 포트 이름)
+    pub port_names: Vec<(u32, String)>,
+}
+
+/// 구성도에 그을 선 하나: `device`가 `switch`의 `port`에 물려 있다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub switch: Ipv4Addr,
+    pub port: String,
+    pub device: Ipv4Addr,
+    /// lldp(이웃 알림으로 확인) 또는 fdb(MAC 표로 짐작)
+    pub via: &'static str,
+    /// 그 포트에서 보이는 MAC 수. 1이면 직접 물린 것, 더 많으면 사이에 다른 스위치·AP가 있다.
+    pub shared: usize,
+}
+
+/// 장비 설명은 출력 줄에 섞여 들어가므로 보이는 영문·숫자·기호와 빈칸만 남기고 80자로 자른다.
+pub fn clean_descr(raw: &str) -> Option<String> {
+    let kept: String = raw.chars().map(|c| if c.is_ascii_graphic() { c } else { ' ' }).collect();
+    let text: String = kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+    (!text.is_empty()).then_some(text)
+}
+
+/// 포트 이름은 한 칸에 들어가야 하므로 영문·숫자와 `/ . : - _`만 남기고 24자로 자른다.
+pub fn clean_port(raw: &str) -> Option<String> {
+    let name: String = raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | ':' | '-' | '_')).take(24).collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// OID 색인의 여섯 마디를 MAC 글자로
+fn mac_from_arcs(arcs: &[u32]) -> Option<String> {
+    (arcs.len() == 6 && arcs.iter().all(|a| *a <= 255)).then(|| arcs.iter().map(|a| format!("{a:02x}")).collect::<Vec<_>>().join(":"))
+}
+
+async fn snmp_rows(client: &mut crate::snmp::Client, root: &str, max: usize) -> Vec<(Vec<u32>, crate::snmp::Value)> {
+    let Ok(root) = root.parse::<crate::snmp::Oid>() else { return Vec::new() };
+    let rows = client.walk(&root, max).await.unwrap_or_default();
+    rows.into_iter().filter_map(|r| Some((r.oid.suffix_of(&root)?.to_vec(), r.value))).collect()
+}
+
+/// 장비 한 대에 묻는다. SNMP에 답하지 않으면 None.
+async fn snmp_probe(ip: Ipv4Addr, addr: SocketAddr, community: &str) -> Option<SwitchInfo> {
+    use crate::snmp::{Client, Oid};
+    // 먼저 한 번만 물어 SNMP에 답하는 장비인지 본다(답이 없는 장비가 대부분이다).
+    let mut first = Client::connect(addr, community, SNMP_TIMEOUT, 0).await.ok()?;
+    let name = first.get(&[SYS_NAME.parse::<Oid>().ok()?]).await.ok()?;
+    let descr = first.get(&[SYS_DESCR.parse::<Oid>().ok()?]).await.unwrap_or_default();
+    let text = |rows: &[crate::snmp::VarBind]| rows.first().and_then(|v| v.value.as_bytes()).map(|b| String::from_utf8_lossy(b).into_owned());
+    let mut info = SwitchInfo { ip, name: text(&name).and_then(|t| clean_name(&t)), descr: text(&descr).and_then(|t| clean_descr(&t)), fdb: vec![], lldp: vec![], port_names: vec![] };
+
+    let Ok(mut c) = Client::connect(addr, community, SNMP_TIMEOUT, 1).await else { return Some(info) };
+    let tables = async {
+        // LLDP 이웃: 색인의 둘째 마디가 내 포트 번호다.
+        let kinds = snmp_rows(&mut c, LLDP_CHASSIS_KIND, 256).await;
+        let names = snmp_rows(&mut c, LLDP_SYS_NAME, 256).await;
+        let mut lldp = Vec::new();
+        for (index, value) in snmp_rows(&mut c, LLDP_CHASSIS_ID, 256).await {
+            let Some(port) = index.get(1).copied().filter(|_| index.len() == 3) else { continue };
+            let kind = kinds.iter().find(|(i, _)| *i == index).and_then(|(_, v)| v.as_u64());
+            // 종류 4가 MAC 주소다. 종류를 알려 주지 않는 장비는 길이가 6바이트면 MAC으로 본다.
+            let mac = value.as_bytes().filter(|b| b.len() == 6 && kind.is_none_or(|k| k == 4)).and_then(|b| mac_from_arcs(&b.iter().map(|x| u32::from(*x)).collect::<Vec<_>>()));
+            let name = names.iter().find(|(i, _)| *i == index).and_then(|(_, v)| v.as_bytes()).and_then(|b| clean_name(&String::from_utf8_lossy(b)));
+            if mac.is_some() || name.is_some() {
+                lldp.push(Neighbor { port, mac, name });
+            }
+        }
+        // MAC 표: 기본 표가 비어 있으면 VLAN용 표를 읽는다(색인 맨 앞의 묶음 번호는 버린다).
+        let port_of = |v: &crate::snmp::Value| v.as_u64().and_then(|p| u32::try_from(p).ok()).filter(|p| *p > 0);
+        let mut fdb: Vec<(String, u32)> = snmp_rows(&mut c, FDB_PORT, MAX_FDB_ROWS).await.iter().filter_map(|(i, v)| Some((mac_from_arcs(i)?, port_of(v)?))).collect();
+        if fdb.is_empty() {
+            fdb = snmp_rows(&mut c, QFDB_PORT, MAX_FDB_ROWS).await.iter().filter_map(|(i, v)| Some((mac_from_arcs(i.get(1..)?)?, port_of(v)?))).collect();
+        }
+        fdb.sort();
+        fdb.dedup_by(|a, b| a.0 == b.0);
+        // 포트 이름: 번호보다 이름(ifName)이 장비 겉면의 표시와 맞는다.
+        let mut port_names: Vec<(u32, String)> = Vec::new();
+        if !fdb.is_empty() || !lldp.is_empty() {
+            let if_names: Vec<(u32, String)> = snmp_rows(&mut c, IF_NAME, 1024).await.iter().filter_map(|(i, v)| Some((*i.first()?, clean_port(&String::from_utf8_lossy(v.as_bytes()?))?))).collect();
+            let name_of = |ifindex: u32| if_names.iter().find(|(i, _)| *i == ifindex).map(|(_, n)| n.clone());
+            for (i, v) in snmp_rows(&mut c, BRIDGE_IFINDEX, 512).await {
+                if let (Some(port), Some(name)) = (i.first().copied(), port_of(&v).and_then(name_of)) {
+                    port_names.push((port, name));
+                }
+            }
+            // LLDP의 포트 번호는 보통 인터페이스 번호와 같다. 브리지 표에 없는 번호만 그렇게 채운다.
+            for n in &lldp {
+                if !port_names.iter().any(|(p, _)| *p == n.port) {
+                    port_names.extend(name_of(n.port).map(|name| (n.port, name)));
+                }
+            }
+        }
+        (fdb, lldp, port_names)
+    };
+    if let Ok((fdb, lldp, port_names)) = tokio::time::timeout(SNMP_DEVICE_LIMIT, tables).await {
+        info.fdb = fdb;
+        info.lldp = lldp;
+        info.port_names = port_names;
+    }
+    Some(info)
+}
+
+/// 여러 장비에 한꺼번에 묻고, 답한 장비만 주소 순으로 돌려준다.
+pub async fn snmp_survey(targets: &[(Ipv4Addr, SocketAddr)], community: &str) -> Vec<SwitchInfo> {
+    let mut set: JoinSet<Option<SwitchInfo>> = JoinSet::new();
+    for (ip, addr) in targets.iter().copied() {
+        let community = community.to_string();
+        set.spawn(async move { snmp_probe(ip, addr, &community).await });
+    }
+    let mut found = Vec::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok(Some(info)) = r {
+            found.push(info);
+        }
+    }
+    found.sort_by_key(|s| u32::from(s.ip));
+    found
+}
+
+/// 스위치들이 알려 준 표에서 "어느 장비가 어느 스위치의 어느 포트에 물렸는지"를 정한다.
+///
+/// - LLDP 이웃(장비가 스스로 알린 것)이 MAC 표(짐작)보다 먼저다.
+/// - 스위치마다 공유기의 MAC이 보이는 포트는 위로 올라가는 포트다. 그 포트에 함께 보이는 장비는 이 스위치에 물린 것이
+///   아니므로 선을 긋지 않는다(공유기 자신만 긋는다).
+/// - 한 장비가 여러 스위치에서 보이면 그 포트의 MAC 수가 가장 적은 스위치에 붙인다(가장 가까운 스위치).
+pub fn derive_links(switches: &[SwitchInfo], macs: &[(Ipv4Addr, String)], names: &[(Ipv4Addr, String)], gateway: Option<Ipv4Addr>) -> Vec<Link> {
+    let label = |sw: &SwitchInfo, port: u32| sw.port_names.iter().find(|(p, _)| *p == port).map(|(_, n)| n.clone()).unwrap_or_else(|| port.to_string());
+    let gateway_mac = gateway.and_then(|g| macs.iter().find(|(ip, _)| *ip == g)).map(|(_, m)| m.as_str());
+    // (LLDP가 아니면 1, 그 포트의 MAC 수, 스위치 주소)가 작은 것이 이긴다.
+    let mut best: Vec<((u8, usize, u32), Link)> = Vec::new();
+    let mut offer = |rank: (u8, usize, u32), link: Link| match best.iter_mut().find(|(_, l)| l.device == link.device) {
+        Some(slot) if rank < slot.0 => *slot = (rank, link),
+        Some(_) => {}
+        None => best.push((rank, link)),
+    };
+    for sw in switches {
+        let on_port = |port: u32| sw.fdb.iter().filter(|(_, p)| *p == port).count();
+        for n in &sw.lldp {
+            let by_mac = n.mac.as_deref().and_then(|m| macs.iter().find(|(_, mac)| mac == m)).map(|(ip, _)| *ip);
+            let by_name = || n.name.as_deref().and_then(|x| names.iter().find(|(_, name)| name.eq_ignore_ascii_case(x))).map(|(ip, _)| *ip);
+            if let Some(device) = by_mac.or_else(by_name).filter(|d| *d != sw.ip) {
+                offer((0, 1, u32::from(sw.ip)), Link { switch: sw.ip, port: label(sw, n.port), device, via: "lldp", shared: on_port(n.port).max(1) });
+            }
+        }
+        let uplink = gateway_mac.and_then(|g| sw.fdb.iter().find(|(m, _)| m == g)).map(|(_, p)| *p);
+        for (device, mac) in macs.iter().filter(|(ip, _)| *ip != sw.ip) {
+            let Some(port) = sw.fdb.iter().find(|(m, _)| m == mac).map(|(_, p)| *p) else { continue };
+            if Some(port) == uplink && Some(*device) != gateway {
+                continue;
+            }
+            let shared = on_port(port);
+            offer((1, shared, u32::from(sw.ip)), Link { switch: sw.ip, port: label(sw, port), device: *device, via: "fdb", shared });
+        }
+    }
+    let mut links: Vec<Link> = best.into_iter().map(|(_, l)| l).collect();
+    links.sort_by_key(|l| (u32::from(l.switch), u32::from(l.device)));
+    links
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    fn ip(last: u8) -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 0, last)
+    }
+
+    fn mac(last: u8) -> String {
+        format!("02:00:00:00:00:{last:02x}")
+    }
+
+    fn switch(last: u8, fdb: &[(u8, u32)]) -> SwitchInfo {
+        SwitchInfo { ip: ip(last), name: None, descr: None, fdb: fdb.iter().map(|(m, p)| (mac(*m), *p)).collect(), lldp: vec![], port_names: vec![] }
+    }
+
+    #[test]
+    fn text_from_devices_is_cleaned() {
+        assert_eq!(clean_descr("  Managed\tSwitch\r\n 8-port <b>v1.2</b> \u{d55c}").as_deref(), Some("Managed Switch 8-port <b>v1.2</b>"));
+        assert_eq!(clean_descr(&"x".repeat(200)).map(|d| d.len()), Some(80));
+        assert_eq!(clean_descr(" \n "), None);
+        assert_eq!(clean_port("GigabitEthernet1/0/3").as_deref(), Some("GigabitEthernet1/0/3"));
+        assert_eq!(clean_port("Port 3 <x>").as_deref(), Some("Port3x"));
+        assert_eq!(clean_port("  "), None);
+        assert_eq!(mac_from_arcs(&[0, 17, 34, 51, 68, 255]).as_deref(), Some("00:11:22:33:44:ff"));
+        assert_eq!(mac_from_arcs(&[0, 17, 34, 51, 68]), None);
+        assert_eq!(mac_from_arcs(&[0, 17, 34, 51, 68, 256]), None);
+    }
+
+    #[test]
+    fn devices_attach_to_the_nearest_switch_port() {
+        // 공유기(.1) ─ 스위치 A(.21) ─ 스위치 B(.22). PC .30은 A의 3번, PC .40과 .41은 B의 2번·5번.
+        // 휴대폰 .50은 공유기의 무선에 붙어 있어 두 스위치 모두 위로 올라가는 포트에서 보인다.
+        let macs: Vec<(Ipv4Addr, String)> = [1u8, 21, 22, 30, 40, 41, 50].iter().map(|n| (ip(*n), mac(*n))).collect();
+        let a = switch(21, &[(1, 8), (50, 8), (30, 3), (22, 7), (40, 7), (41, 7)]);
+        let b = switch(22, &[(1, 1), (50, 1), (21, 1), (30, 1), (40, 2), (41, 5)]);
+        let links = derive_links(&[a.clone(), b.clone()], &macs, &[], Some(ip(1)));
+        let show: Vec<String> = links.iter().map(|l| format!("{}:{}>{} {} {}", l.switch.octets()[3], l.port, l.device.octets()[3], l.via, l.shared)).collect();
+        assert_eq!(show, ["21:8>1 fdb 2", "21:7>22 fdb 3", "21:3>30 fdb 1", "22:2>40 fdb 1", "22:5>41 fdb 1"]);
+        // 공유기를 모르면 위로 올라가는 포트를 가릴 수 없다. 그래도 가장 한가한 포트로 붙인다.
+        let blind = derive_links(&[a, b], &macs, &[], None);
+        assert!(blind.iter().any(|l| l.device == ip(40) && l.switch == ip(22) && l.shared == 1));
+        assert!(derive_links(&[], &macs, &[], Some(ip(1))).is_empty());
+    }
+
+    #[test]
+    fn lldp_wins_over_the_mac_table_and_port_names_are_used() {
+        let macs = vec![(ip(1), mac(1)), (ip(21), mac(21)), (ip(60), mac(60))];
+        let names = vec![(ip(70), "ap-lobby".to_string())];
+        let mut sw = switch(21, &[(1, 8), (60, 4), (99, 4)]);
+        sw.lldp = vec![Neighbor { port: 4, mac: Some(mac(60)), name: None }, Neighbor { port: 6, mac: None, name: Some("AP-Lobby".into()) }, Neighbor { port: 9, mac: Some(mac(21)), name: None }];
+        sw.port_names = vec![(4, "ge-0/0/4".into())];
+        let links = derive_links(&[sw], &macs, &names, Some(ip(1)));
+        let find = |d: u8| links.iter().find(|l| l.device == ip(d)).cloned();
+        assert_eq!(find(60).map(|l| (l.port, l.via, l.shared)), Some(("ge-0/0/4".to_string(), "lldp", 2)));
+        assert_eq!(find(70).map(|l| (l.port, l.via)), Some(("6".to_string(), "lldp")), "이름으로 맞춘 이웃");
+        assert!(links.iter().all(|l| l.device != l.switch), "자기 자신에게는 선을 긋지 않는다");
+    }
+
+    /// 가짜 스위치: 받은 OID 표로 GET·GETNEXT에 답한다.
+    async fn fake_switch(rows: &[(&str, u8, Vec<u8>)]) -> SocketAddr {
+        use crate::snmp::{ber, Oid, Request};
+        let table: std::collections::BTreeMap<Oid, (u8, Vec<u8>)> = rows.iter().map(|(o, t, b)| (o.parse().unwrap(), (*t, b.clone()))).collect();
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let addr = sock.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            loop {
+                let Ok((n, from)) = sock.recv_from(&mut buf).await else { return };
+                let Some((kind, community, id, asked)) = ber::tests::read_request(&buf[..n]) else { continue };
+                if community != b"ro-test" {
+                    continue;
+                }
+                let hit = match kind {
+                    Request::Get => table.get_key_value(&asked),
+                    Request::GetNext => table.range((std::ops::Bound::Excluded(asked.clone()), std::ops::Bound::Unbounded)).next(),
+                };
+                let reply = match hit {
+                    Some((o, (tag, body))) => ber::tests::response(id, 0, &[(o, *tag, body.clone())]),
+                    None => ber::tests::response(id, 0, &[(&asked, 0x82, vec![])]),
+                };
+                let _ = sock.send_to(&reply, from).await;
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn reads_a_switch_over_snmp() {
+        let addr = fake_switch(&[
+            ("1.3.6.1.2.1.1.1.0", 0x04, b"Managed Switch\r\n8-port".to_vec()),
+            ("1.3.6.1.2.1.1.5.0", 0x04, b"sw office".to_vec()),
+            // LLDP: 5번 포트에 MAC으로 알린 이웃, 6번 포트에 이름만 알린 이웃
+            ("1.0.8802.1.1.2.1.4.1.1.4.0.5.1", 0x02, vec![4]),
+            ("1.0.8802.1.1.2.1.4.1.1.4.0.6.1", 0x02, vec![7]),
+            ("1.0.8802.1.1.2.1.4.1.1.5.0.5.1", 0x04, vec![2, 0, 0, 0, 0, 0x28]),
+            ("1.0.8802.1.1.2.1.4.1.1.5.0.6.1", 0x04, b"ap0001".to_vec()),
+            ("1.0.8802.1.1.2.1.4.1.1.9.0.6.1", 0x04, b"ap-lobby".to_vec()),
+            // MAC 표
+            ("1.3.6.1.2.1.17.4.3.1.2.2.0.0.0.0.1", 0x02, vec![8]),
+            ("1.3.6.1.2.1.17.4.3.1.2.2.0.0.0.0.30", 0x02, vec![3]),
+            ("1.3.6.1.2.1.17.4.3.1.2.2.0.0.0.0.40", 0x02, vec![0]),
+            // 포트 이름: 브리지 포트 3 → 인터페이스 103 → "ge3"
+            ("1.3.6.1.2.1.17.1.4.1.2.3", 0x02, vec![103]),
+            ("1.3.6.1.2.1.31.1.1.1.1.5", 0x04, b"ge5".to_vec()),
+            ("1.3.6.1.2.1.31.1.1.1.1.103", 0x04, b"ge3".to_vec()),
+        ])
+        .await;
+        let found = snmp_survey(&[(ip(21), addr)], "ro-test").await;
+        assert_eq!(found.len(), 1);
+        let sw = &found[0];
+        assert_eq!((sw.name.as_deref(), sw.descr.as_deref()), (Some("swoffice"), Some("Managed Switch 8-port")));
+        assert_eq!(sw.fdb, [(mac(1), 8), (mac(30), 3)], "포트 0은 버린다");
+        assert_eq!(sw.lldp, [Neighbor { port: 5, mac: Some(mac(0x28)), name: None }, Neighbor { port: 6, mac: None, name: Some("ap-lobby".into()) }]);
+        assert_eq!(sw.port_names, [(3, "ge3".to_string()), (5, "ge5".to_string())]);
+        // 커뮤니티 문자열이 틀리면 답이 없어 목록에 들지 않는다.
+        assert!(snmp_survey(&[(ip(21), addr)], "wrong").await.is_empty());
+    }
 }
 
 #[cfg(test)]

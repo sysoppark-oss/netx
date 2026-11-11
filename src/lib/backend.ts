@@ -125,13 +125,13 @@ export async function briefRun(runId: number, level: UserLevel): Promise<Briefin
 }
 
 export async function getSettings(): Promise<SettingsView> {
-  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, manual_update: false, has_key: false };
+  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, manual_update: false, has_key: false, has_snmp: false };
   return invoke<SettingsView>("get_settings");
 }
 
-/** apiKey가 null이면 저장된 키를 그대로 두고, 빈 문자열이면 지운다. */
-export async function saveSettings(settings: Settings, apiKey: string | null): Promise<SettingsView> {
-  return invoke<SettingsView>("save_settings", { settings, apiKey });
+/** apiKey와 snmpCommunity는 null이면 저장된 값을 그대로 두고, 빈 문자열이면 지운다. */
+export async function saveSettings(settings: Settings, apiKey: string | null, snmpCommunity: string | null = null): Promise<SettingsView> {
+  return invoke<SettingsView>("save_settings", { settings, apiKey, snmpCommunity });
 }
 
 export async function testLlm(): Promise<string> {

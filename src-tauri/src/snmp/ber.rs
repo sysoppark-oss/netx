@@ -245,7 +245,7 @@ pub fn decode_response(packet: &[u8]) -> Result<Response, Error> {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub mod tests {
     use super::*;
 
     fn oid(text: &str) -> Oid {

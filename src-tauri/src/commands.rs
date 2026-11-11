@@ -414,16 +414,18 @@ pub struct SettingsView {
     pub settings: Settings,
     /// API 키가 저장되어 있는지. 키 자체는 화면으로 보내지 않는다.
     pub has_key: bool,
+    /// SNMP 커뮤니티 문자열이 저장되어 있는지. 값 자체는 화면으로 보내지 않는다.
+    pub has_snmp: bool,
 }
 
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
-    Ok(SettingsView { settings: settings::load(&data_dir(&app)?), has_key: settings::api_key().is_some() })
+    Ok(SettingsView { settings: settings::load(&data_dir(&app)?), has_key: settings::api_key().is_some(), has_snmp: settings::snmp_community().is_some() })
 }
 
-/// 설정을 저장한다. `api_key`가 없으면 키는 그대로 두고, 빈 문자열이면 지운다.
+/// 설정을 저장한다. `api_key`와 `snmp_community`는 없으면 그대로 두고, 빈 문자열이면 지운다.
 #[tauri::command]
-pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>) -> Result<SettingsView, String> {
+pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>, snmp_community: Option<String>) -> Result<SettingsView, String> {
     let dir = data_dir(&app)?;
     settings::save(&dir, &settings)?;
     if let Some(key) = api_key {
@@ -432,6 +434,11 @@ pub fn save_settings(app: AppHandle, settings: Settings, api_key: Option<String>
             return Err("API 키 형식이 올바르지 않습니다".into());
         }
         settings::set_api_key(key)?;
+    }
+    if let Some(community) = snmp_community {
+        let community = community.trim();
+        settings::check_community(community)?;
+        settings::set_snmp_community(community)?;
     }
     get_settings(app)
 }

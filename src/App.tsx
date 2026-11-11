@@ -383,7 +383,7 @@ export default function App() {
 
         <button
           onClick={() => setSettingsOpen(true)}
-          title="AI 연결 설정"
+          title="설정 (AI 연결, 구성도용 SNMP, 자동 업데이트)"
           className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
             aiOn ? "border-safe/40 text-safe" : "border-line text-dim"
           }`}

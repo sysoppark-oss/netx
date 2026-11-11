@@ -226,6 +226,19 @@ export interface TopoNode {
   ports: number[];
   /** 장비 이름(NetBIOS 이름 또는 역방향 DNS). 알아내지 못하면 null */
   name: string | null;
+  /** SNMP에 답한 장비가 알려 준 설명 */
+  descr: string | null;
+}
+
+/** device가 switch의 port에 물려 있다 (SNMP로 알아낸 연결) */
+export interface TopoLink {
+  switch: string;
+  port: string;
+  device: string;
+  /** lldp: 장비가 스스로 알림, fdb: MAC 표로 짐작 */
+  via: "lldp" | "fdb";
+  /** 그 포트에서 보이는 MAC 수. 2 이상이면 사이에 다른 스위치·AP가 있다 */
+  shared: number;
 }
 
 export interface Topology {
@@ -233,6 +246,7 @@ export interface Topology {
   gateway: string | null;
   me: string | null;
   nodes: TopoNode[];
+  links: TopoLink[];
 }
 
 /** 포트를 쓰고 있는 Windows 프로세스 */
@@ -295,4 +309,6 @@ export interface UpdateStatus {
 
 export interface SettingsView extends Settings {
   has_key: boolean;
+  /** SNMP 커뮤니티 문자열이 저장되어 있는지 (값은 화면으로 오지 않는다) */
+  has_snmp: boolean;
 }

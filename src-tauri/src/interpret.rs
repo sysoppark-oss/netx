@@ -69,6 +69,20 @@ pub struct Topology {
     pub gateway: Option<String>,
     pub me: Option<String>,
     pub nodes: Vec<Node>,
+    /// 스위치·AP에 SNMP로 물어 알아낸 연결(커뮤니티 문자열을 설정했고 답하는 장비가 있을 때만)
+    pub links: Vec<TopoLink>,
+}
+
+/// `device`가 `switch`의 `port`에 물려 있다.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TopoLink {
+    pub switch: String,
+    pub port: String,
+    pub device: String,
+    /// lldp(장비가 스스로 알림) 또는 fdb(MAC 표로 짐작)
+    pub via: String,
+    /// 그 포트에서 보이는 MAC 수. 2 이상이면 사이에 다른 스위치·AP가 있다.
+    pub shared: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +98,8 @@ pub struct Node {
     pub ports: Vec<u16>,
     /// 장비 이름(NetBIOS 이름 또는 역방향 DNS). 알아내지 못하면 None
     pub name: Option<String>,
+    /// SNMP에 답한 장비가 알려 준 설명(sysDescr)
+    pub descr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -642,13 +658,14 @@ fn guess_kind(role: &str, ports: &[u16], vendor: &str) -> (&'static str, &'stati
     }
 }
 
-/// 내부 네트워크 조사: "NET <대역> GW <gw> ME <me>"와 "NODE <ip> <mac> <역할> <포트> [이름]"
+/// 내부 네트워크 조사: "NET <대역> GW <gw> ME <me>"와 "NODE <ip> <mac> <역할> <포트> [이름]".
+/// SNMP로 물었으면 "SNMP <ip> <MAC 표 줄 수> <LLDP 이웃 수> <설명…>"과 "LINK <스위치> <포트> <장비> <lldp|fdb> <그 포트의 MAC 수>"가 더 온다.
 fn netmap(lines: &[String]) -> Option<StepResult> {
     let net = lines.iter().find(|l| l.starts_with("NET "))?;
     let c: Vec<&str> = net.split_whitespace().collect();
     let pick = |key: &str| c.iter().position(|w| *w == key).and_then(|i| c.get(i + 1)).filter(|v| **v != "-").map(|v| v.to_string());
     let cidr = c.get(1)?.to_string();
-    let nodes: Vec<Node> = lines
+    let mut nodes: Vec<Node> = lines
         .iter()
         .filter_map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
@@ -660,12 +677,36 @@ fn netmap(lines: &[String]) -> Option<StepResult> {
             let name = f.get(5).filter(|n| **n != "-").and_then(|n| crate::engine::builtin::clean_name(n));
             let v = mac.as_deref().map(vendor).unwrap_or("");
             let (kind, label) = guess_kind(f[3], &ports, v);
-            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports, name })
+            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports, name, descr: None })
         })
         .take(1024)
         .collect();
     if nodes.is_empty() {
         return Some(StepResult::new(Light::Yellow, "장비를 찾지 못했습니다. 대역이 맞는지 확인하세요."));
+    }
+    // SNMP에 답한 장비: 설명을 붙이고, 표(MAC 표나 LLDP 이웃)가 있으면 스위치로 본다.
+    for l in lines {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let [tag, ip, fdb, lldp, descr @ ..] = f.as_slice() else { continue };
+        let (Ok(fdb), Ok(lldp)) = (fdb.parse::<u32>(), lldp.parse::<u32>()) else { continue };
+        let Some(node) = nodes.iter_mut().find(|n| *tag == "SNMP" && n.ip == *ip) else { continue };
+        node.descr = crate::engine::builtin::clean_descr(&descr.join(" ")).filter(|d| d != "-");
+        if node.role == "host" && fdb + lldp > 0 {
+            node.kind = "network".into();
+            node.label = "스위치".into();
+        }
+    }
+    let known = |ip: &str| nodes.iter().any(|n| n.ip == ip);
+    let mut links: Vec<TopoLink> = Vec::new();
+    for l in lines {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let ["LINK", switch, port, device, via, shared] = f.as_slice() else { continue };
+        let shared = shared.parse::<u32>().unwrap_or(0);
+        let port_ok = crate::engine::builtin::clean_port(port).as_deref() == Some(*port);
+        if switch == device || !known(switch) || !known(device) || !port_ok || !matches!(*via, "lldp" | "fdb") || shared == 0 || links.len() >= 1024 || links.iter().any(|x| x.device == *device) {
+            continue;
+        }
+        links.push(TopoLink { switch: switch.to_string(), port: port.to_string(), device: device.to_string(), via: via.to_string(), shared });
     }
     let count = |k: &str| nodes.iter().filter(|n| n.kind == k).count();
     let targets = nodes
@@ -680,8 +721,12 @@ fn netmap(lines: &[String]) -> Option<StepResult> {
         .fact("프린터", format!("{}대", count("printer")))
         .fact("휴대폰·태블릿", format!("{}대", count("phone")))
         .fact("종류 모름", format!("{}대", count("unknown")));
+    if !links.is_empty() {
+        r.text.push_str(&format!(" 스위치에 SNMP로 물어 연결 {}개를 선으로 그렸습니다.", links.len()));
+        r = r.fact("스위치 연결", format!("{}개", links.len()));
+    }
     r.targets = targets;
-    r.topology = Some(Topology { cidr, gateway: pick("GW"), me: pick("ME"), nodes });
+    r.topology = Some(Topology { cidr, gateway: pick("GW"), me: pick("ME"), nodes, links });
     Some(r)
 }
 
@@ -881,6 +926,21 @@ mod tests {
         assert_eq!(odd.nodes[0].name.as_deref(), Some("bpcb"));
         assert!(r.targets.iter().all(|x| x.host != "192.168.0.12"));
         assert!(done("netmap", "x", 0).topology.is_none());
+    }
+
+    #[test]
+    fn netmap_reads_switch_links() {
+        let out = "NET 192.168.0.0/24 GW 192.168.0.1 ME 192.168.0.12\nNODE 192.168.0.1 88:36:6c:00:00:01 gateway 53,80 -\nNODE 192.168.0.12 02:00:00:00:00:12 me - DESKTOP-ABC\nNODE 192.168.0.21 02:00:00:00:00:21 host 23,80 sw-office\nNODE 192.168.0.30 02:00:00:00:00:30 host 445 -\nNODE 192.168.0.40 02:00:00:00:00:40 host - -\nSNMP 192.168.0.21 5 1 Managed Switch <b>8-port</b>\nSNMP 192.168.0.30 0 0 -\nSNMP 10.9.9.9 3 0 stray\nLINK 192.168.0.21 8 192.168.0.1 fdb 3\nLINK 192.168.0.21 ge-0/0/3 192.168.0.12 fdb 1\nLINK 192.168.0.21 4 192.168.0.30 lldp 1\nLINK 192.168.0.21 5 192.168.0.30 fdb 1\nLINK 192.168.0.21 6 192.168.0.99 fdb 1\nLINK 192.168.0.21 7 192.168.0.21 fdb 1\nLINK 192.168.0.21 <x> 192.168.0.40 fdb 1\nLINK 192.168.0.21 9 192.168.0.40 snmp 1\nLINK 192.168.0.21 9 192.168.0.40 fdb 0\n조사 끝: 장비 5대를 찾았습니다.";
+        let r = done("netmap", out, 0);
+        let t = r.topology.unwrap();
+        let sw = &t.nodes[2];
+        assert_eq!((sw.kind.as_str(), sw.label.as_str(), sw.descr.as_deref()), ("network", "스위치", Some("Managed Switch <b>8-port</b>")));
+        assert_eq!((t.nodes[3].kind.as_str(), t.nodes[3].descr.as_deref()), ("pc", None), "표가 없는 장비는 스위치가 아니다");
+        let links: Vec<(&str, &str, &str, u32)> = t.links.iter().map(|l| (l.port.as_str(), l.device.as_str(), l.via.as_str(), l.shared)).collect();
+        // 모르는 장비, 자기 자신, 이상한 포트 글자, 모르는 방식, 0은 버리고, 장비마다 첫 줄만 쓴다.
+        assert_eq!(links, [("8", "192.168.0.1", "fdb", 3), ("ge-0/0/3", "192.168.0.12", "fdb", 1), ("4", "192.168.0.30", "lldp", 1)]);
+        assert!(r.text.contains("연결 3개"));
+        assert!(done("netmap", "NET 10.0.0.0/24 GW - ME -\nNODE 10.0.0.5 - host - -", 0).topology.unwrap().links.is_empty());
     }
 
     #[test]

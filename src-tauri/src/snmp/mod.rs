@@ -40,10 +40,6 @@ impl Oid {
     pub fn suffix_of(&self, root: &Oid) -> Option<&[u32]> {
         self.0.strip_prefix(root.arcs()).filter(|rest| !rest.is_empty())
     }
-    /// 뒤에 마디를 더 붙인 OID
-    pub fn child(&self, more: &[u32]) -> Oid {
-        Oid(self.0.iter().chain(more).copied().collect())
-    }
 }
 
 impl FromStr for Oid {
@@ -239,7 +235,7 @@ mod tests {
             assert!(bad.parse::<Oid>().is_err(), "{bad}");
         }
         let root = oid("1.3.6.1.2.1.17.4.3.1.2");
-        assert_eq!(root.child(&[0, 17, 34]).suffix_of(&root), Some(&[0u32, 17, 34][..]));
+        assert_eq!(oid("1.3.6.1.2.1.17.4.3.1.2.0.17.34").suffix_of(&root), Some(&[0u32, 17, 34][..]));
         assert_eq!(root.suffix_of(&root), None);
         assert_eq!(oid("1.3.6.1.2.1.17.4.3.1.3.1").suffix_of(&root), None);
         // 사전식 순서: 표를 읽을 때 "앞으로만 간다"를 확인하는 데 쓴다.
