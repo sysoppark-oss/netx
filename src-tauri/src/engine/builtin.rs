@@ -377,6 +377,12 @@ fn query_id(ip: Ipv4Addr, salt: u32) -> u16 {
     (v ^ (v >> 16)) as u16
 }
 
+/// 이 PC의 이름. 네트워크로 묻지 않고 운영체제가 알려 주는 값을 읽는다(Windows는 COMPUTERNAME).
+pub fn local_name() -> Option<String> {
+    let raw = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).or_else(|_| std::fs::read_to_string("/etc/hostname")).ok()?;
+    clean_name(raw.trim())
+}
+
 /// 장비들의 이름을 한꺼번에 묻는다. NetBIOS 이름이 있으면 그것을, 없으면 역방향 DNS 이름을 쓴다.
 async fn lookup_names(ips: &[Ipv4Addr], dns: Option<Ipv4Addr>) -> Vec<(Ipv4Addr, String)> {
     let mut set: JoinSet<Option<(Ipv4Addr, String)>> = JoinSet::new();
@@ -483,7 +489,11 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     // 장비 이름(NetBIOS, 역방향 DNS)을 한꺼번에 묻는다. 장비마다 1초까지만 기다린다.
     let dns: Option<Ipv4Addr> = info.dns.first().and_then(|s| s.parse().ok());
     let ips: Vec<Ipv4Addr> = found.iter().map(|(h, _)| *h).collect();
-    let names = lookup_names(&ips, dns).await;
+    let mut names = lookup_names(&ips, dns).await;
+    // 내 PC는 스스로에게 답하지 않는 경우가 많으므로, 이름을 못 얻었으면 운영체제가 아는 이름을 쓴다.
+    if let Some(ip) = me.filter(|ip| ips.contains(ip) && !names.iter().any(|(n, _)| n == ip)) {
+        names.extend(local_name().map(|name| (ip, name)));
+    }
 
     let show = |ip: Option<Ipv4Addr>| ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
     emit(format!("NET {cidr} GW {} ME {}", show(gateway), show(me)));
