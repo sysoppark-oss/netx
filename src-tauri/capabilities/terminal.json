@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "terminal",
+  "description": "NetX 터미널 창 권한. 터미널 명령과 말씀 표시만 허용한다. 진단 실행, 설정, 업데이트 명령은 이 창에서 부를 수 없다.",
+  "windows": ["terminal"],
+  "permissions": [
+    "core:event:default",
+    "core:window:default",
+    "allow-term-take-preset",
+    "allow-term-ports",
+    "allow-term-open",
+    "allow-term-write",
+    "allow-term-resize",
+    "allow-term-close",
+    "allow-term-folder",
+    "allow-get-word"
+  ]
+}

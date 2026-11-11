@@ -34,3 +34,21 @@ pub fn log(dir: &Path, entry: &AuditEntry) {
         let _ = writeln!(f, "{line}");
     }
 }
+
+/// 터미널 접속 기록. 종류, 대상, 사용자 이름만 남긴다(암호, 친 글자, 화면 내용은 남기지 않는다).
+#[derive(Serialize)]
+struct TerminalEntry<'a> {
+    time: u64,
+    source: &'a str,
+    kind: &'a str,
+    target: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<&'a str>,
+}
+
+pub fn log_terminal(dir: &Path, kind: &str, target: &str, user: Option<&str>) {
+    let Ok(line) = serde_json::to_string(&TerminalEntry { time: now(), source: "terminal", kind, target, user }) else { return };
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("audit.log")) {
+        let _ = writeln!(f, "{line}");
+    }
+}

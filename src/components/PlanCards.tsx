@@ -1,6 +1,7 @@
 import { WordCard } from "./Word";
 import { useEffect, useRef, useState } from "react";
 import { killProcess, openTarget } from "../lib/backend";
+import { openTerminal } from "../lib/term";
 import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
 import { ChartView } from "./Charts";
 import { TopologyView } from "./Topology";
@@ -471,7 +472,7 @@ function ProcessList({ processes, level }: { processes: Proc[]; level: UserLevel
 
 const WEB_PORTS = new Set([80, 443, 8000, 8080, 8081, 8443, 8888, 9443]);
 
-/** 열린 포트 목록. 웹은 브라우저로, SSH·Telnet은 새 터미널 창으로 바로 접속해 본다. */
+/** 열린 포트 목록. 웹은 브라우저로, SSH·Telnet은 NetX 터미널 창으로 바로 접속해 본다. */
 function TargetList({ targets, allowTerminal }: { targets: Target[]; allowTerminal: boolean }) {
   const [user, setUser] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -479,7 +480,11 @@ function TargetList({ targets, allowTerminal }: { targets: Target[]; allowTermin
 
   async function open(t: Target, kind: "web" | "ssh" | "telnet") {
     try {
-      setMessage({ ok: true, text: `${t.host}:${t.port} · ${await openTarget(t.host, t.port, kind, kind === "ssh" ? user : null)}` });
+      if (kind === "web") setMessage({ ok: true, text: `${t.host}:${t.port} · ${await openTarget(t.host, t.port, kind, null)}` });
+      else {
+        await openTerminal({ kind, host: t.host, port: t.port, user: kind === "ssh" ? user.trim() : null });
+        setMessage({ ok: true, text: `${t.host}:${t.port} · NetX 터미널 창에서 엽니다. 암호는 그 창에서 입력하세요.` });
+      }
     } catch (e) {
       setMessage({ ok: false, text: String(e) });
     }
@@ -502,7 +507,7 @@ function TargetList({ targets, allowTerminal }: { targets: Target[]; allowTermin
             />
           </label>
         )}
-        {hasSsh && <span className="text-xs text-dim">암호는 열리는 터미널 창에서 직접 입력합니다.</span>}
+        {hasSsh && <span className="text-xs text-dim">암호는 열리는 NetX 터미널 창에서 직접 입력합니다.</span>}
       </div>
       {message && <p className={`mt-1 text-xs ${message.ok ? "text-safe" : "text-danger"}`}>{message.text}</p>}
       <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
@@ -526,13 +531,13 @@ function TargetList({ targets, allowTerminal }: { targets: Target[]; allowTermin
                     onClick={() => open(t, "ssh")}
                     disabled={user.trim() === ""}
                     className={button}
-                    title={user.trim() === "" ? "위에 SSH 사용자 이름을 먼저 적으세요" : "새 터미널 창에서 ssh로 접속합니다"}
+                    title={user.trim() === "" ? "위에 SSH 사용자 이름을 먼저 적으세요" : "NetX 터미널 창에서 SSH로 접속합니다"}
                   >
                     터미널 접속 (SSH)
                   </button>
                 )}
                 {allowTerminal && telnet && (
-                  <button onClick={() => open(t, "telnet")} className={button} title="새 터미널 창에서 telnet으로 접속합니다. Windows에 Telnet 클라이언트가 켜져 있어야 합니다.">
+                  <button onClick={() => open(t, "telnet")} className={button} title="NetX 터미널 창에서 Telnet으로 접속합니다 (내장 Telnet, 암호화되지 않음)">
                     터미널 접속 (Telnet)
                   </button>
                 )}

@@ -8,7 +8,7 @@
 
 - 사용자 등급 5단계: 일반사용자, 초급·중급·고급 엔지니어, 전산관리자(OP)
 - 진단 도구 레지스트리(ping/fping, tcpdump, mtr, ss, dig, nc, curl, lsof, iperf3 + 확장)
-- 넷엑스 터미널: 시리얼 콘솔, SSH, Telnet, SFTP/FTP, TFTP 서버
+- 넷엑스 터미널(별도 창): 시리얼 콘솔, SSH, Telnet, FTP, TFTP 클라이언트
 - 시각화 4종: 패킷 하이웨이, 라우팅 노선도, 요새 도면, 소나 레이더
 - 스토리방화벽 연동(별도 창, 전체 기능)
 
@@ -24,6 +24,15 @@ v0.1 개발안: [docs/DEV_PLAN_v0.1.md](docs/DEV_PLAN_v0.1.md)
 - 실행: `npm install` → `npm run tauri dev`
 - 백엔드 테스트: `cd src-tauri && cargo test`
 - 설치 파일: `main`에 푸시하면 GitHub Actions가 Windows 설치 파일(.exe, .msi)을 만듭니다. Actions 실행 화면의 Artifacts에서 내려받습니다.
+
+## 넷엑스 터미널
+
+- 머리줄의 [터미널]을 누르면 별도 창이 열립니다. 탭마다 접속 하나: SSH, Telnet, 시리얼, FTP, TFTP. 스캔 결과의 [터미널 접속] 단추도 이 창을 엽니다.
+- 암호를 적는 칸이 없습니다. 암호는 접속한 뒤 터미널 안의 프롬프트에 직접 입력하며, NetX는 저장하거나 기록하지 않습니다. 감사 로그에는 접속 종류, 대상, 사용자 이름만 남습니다.
+- SSH는 Windows에 들어 있는 OpenSSH 클라이언트를 창 안에서 실행합니다(호스트 키 확인과 키 파일은 OpenSSH가 다룹니다). Telnet, 시리얼, FTP, TFTP는 NetX에 들어 있습니다. Telnet·FTP·TFTP는 암호화되지 않습니다.
+- FTP·TFTP 파일은 전송 폴더 안에서만 주고받습니다([전송 폴더 열기]). 받은 파일은 같은 이름이 있어도 덮어쓰지 않고 `이름-1`처럼 새 이름으로 둡니다. 명령은 접속한 뒤 `help`.
+- 복사는 글자를 고른 뒤 Ctrl+C(또는 Ctrl+Shift+C), 붙여넣기는 Ctrl+V. 접속이 열려 있는 동안은 자동 업데이트 설치를 미룹니다.
+- 리눅스에서 눌러 볼 때는 `scripts/term_fakes.py`(가짜 Telnet·FTP·TFTP·시리얼 상대)를 씁니다.
 
 ## 자동 업데이트
 

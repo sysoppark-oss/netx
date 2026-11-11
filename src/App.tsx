@@ -4,6 +4,7 @@ import { BriefPanel } from "./components/BriefPanel";
 import { NetBar } from "./components/NetBar";
 import { UpdateBar } from "./components/UpdateBar";
 import { AboutDialog, WordCard } from "./components/Word";
+import { openTerminal } from "./lib/term";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -332,6 +333,14 @@ export default function App() {
           </span>
           <button type="button" onClick={() => setAboutOpen(true)} className="text-xs text-dim underline decoration-dotted hover:text-ink">
             정보
+          </button>
+          <button
+            type="button"
+            onClick={() => openTerminal().catch((e) => setError(String(e)))}
+            title="넷엑스 터미널: 시리얼, SSH, Telnet, FTP, TFTP 접속 (별도 창)"
+            className="ml-1 rounded border border-line px-2 py-0.5 text-xs text-dim hover:border-accent hover:text-accent"
+          >
+            터미널
           </button>
         </div>
 

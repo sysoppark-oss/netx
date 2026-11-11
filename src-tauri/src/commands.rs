@@ -148,6 +148,11 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
 
 // ---- 자동 업데이트 ----
 
+/// 실행 중인 작업이나 열려 있는 터미널 접속이 있는지 (있으면 자동 업데이트 설치를 미룬다)
+fn busy() -> bool {
+    engine::busy() || crate::term::busy()
+}
+
 fn update_status(app: &AppHandle, state: &'static str, commit: &str, message: impl Into<String>) {
     let _ = app.emit("update:status", crate::updater::Status { state, commit: commit.chars().take(7).collect(), message: message.into() });
 }
@@ -161,19 +166,19 @@ async fn install_update(app: &AppHandle, m: &crate::updater::Manifest) -> Result
     if !crate::updater::installs(crate::updater::CHANNEL) {
         return Err("이 채널은 NetX가 직접 설치하지 않습니다.".into());
     }
-    if engine::busy() {
+    if busy() {
         update_status(app, "available", &m.commit, UPDATE_DEFERRED);
         return Ok(());
     }
     update_status(app, "downloading", &m.commit, "새 버전을 내려받고 있습니다.");
     let path = crate::updater::download(m, &data_dir(app)?.join("update")).await?;
-    if engine::busy() {
+    if busy() {
         update_status(app, "available", &m.commit, UPDATE_DEFERRED);
         return Ok(());
     }
     update_status(app, "installing", &m.commit, "새 버전을 설치합니다. NetX가 잠시 닫혔다가 다시 열립니다.");
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    if engine::busy() {
+    if busy() {
         update_status(app, "available", &m.commit, UPDATE_DEFERRED);
         return Ok(());
     }
@@ -199,7 +204,7 @@ pub fn watch_updates(app: AppHandle) {
             // 인터넷이 없을 때마다 알리지는 않는다. 설치를 시도하다 실패한 경우만 알린다.
             if let Ok(Some(m)) = crate::updater::check().await {
                 let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true);
-                match crate::updater::decide(crate::updater::CHANNEL, first, manual, engine::busy()) {
+                match crate::updater::decide(crate::updater::CHANNEL, first, manual, busy()) {
                     Action::Notice => update_status(&app, "notice", &m.commit, UPDATE_NOTICE),
                     Action::Offer => update_status(&app, "available", &m.commit, "새 버전이 있습니다."),
                     Action::Defer => update_status(&app, "available", &m.commit, UPDATE_DEFERRED),

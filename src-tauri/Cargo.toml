@@ -30,6 +30,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sha2 = "0.10"
 minisign-verify = "0.2"
 base64 = "0.22"
+portable-pty = "0.9"
+serialport = { version = "4", default-features = false }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"

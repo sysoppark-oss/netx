@@ -21,6 +21,7 @@ mod security;
 mod settings;
 mod setup;
 mod snmp;
+mod term;
 mod updater;
 mod word;
 
@@ -35,6 +36,16 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        // 본창을 닫으면 터미널 창도 닫는다(터미널 창만 남으면 본창을 다시 열 길이 없다).
+        .on_window_event(|window, event| {
+            use tauri::Manager;
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                term::close_all();
+                if let Some(terminal) = window.app_handle().get_webview_window("terminal") {
+                    let _ = terminal.close();
+                }
+            }
+        })
         .setup(|app| {
             commands::watch_updates(app.handle().clone());
             Ok(())
@@ -66,7 +77,15 @@ pub fn run() {
             commands::save_topology,
             commands::apply_update,
             commands::get_word,
-            commands::open_church_mail
+            commands::open_church_mail,
+            term::cmd::open_terminal,
+            term::cmd::term_take_preset,
+            term::cmd::term_ports,
+            term::cmd::term_open,
+            term::cmd::term_write,
+            term::cmd::term_resize,
+            term::cmd::term_close,
+            term::cmd::term_folder
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-term-take-preset"
+description = "Enables the term_take_preset command without any pre-configured scope."
+commands.allow = ["term_take_preset"]
+
+[[permission]]
+identifier = "deny-term-take-preset"
+description = "Denies the term_take_preset command without any pre-configured scope."
+commands.deny = ["term_take_preset"]
