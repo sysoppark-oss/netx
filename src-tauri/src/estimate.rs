@@ -19,8 +19,10 @@ pub fn estimate_secs(tool: &str, argv: &[String]) -> Option<u32> {
         "curl" => value_of(argv, &["-m", "--max-time"])?,
         "winports" => 4.0,
         "netmap" => {
-            let hosts = argv.iter().find(|a| *a != "--").and_then(|t| crate::engine::builtin::cidr_hosts(t)).map(|h| h.len()).unwrap_or(254) as f64;
-            (hosts * 13.0 / 256.0).ceil() * 0.8 + 6.0
+            let o = crate::engine::builtin::MapOptions::parse(argv).ok()?;
+            let hosts = crate::engine::builtin::cidr_hosts(&o.target).map(|h| h.len()).unwrap_or(254) as f64;
+            // 닫힌 포트는 제한 시간까지 기다리고 256개씩 동시에 시도한다. 핑·mDNS는 함께 돌고, 첫 응답 읽기는 몇 초 더.
+            (hosts * o.ports.len() as f64 / 256.0).ceil() * o.timeout.as_secs_f64() + 6.0 + if o.banner { 4.0 } else { 0.0 }
         }
         "portscan" => {
             let v: Vec<&String> = argv.iter().filter(|a| *a != "--").collect();

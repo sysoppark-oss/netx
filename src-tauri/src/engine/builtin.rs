@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::{TcpStream, UdpSocket};
+
+use super::probe;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -413,12 +415,87 @@ async fn lookup_names(ips: &[Ipv4Addr], dns: Option<Ipv4Addr>) -> Vec<(Ipv4Addr,
 }
 
 /// 내부 네트워크 조사. 출력: `NET <대역> GW <게이트웨이|-> ME <내 주소|->` 한 줄과 장비마다 `NODE <ip> <mac|-> <역할> <열린 포트|-> <이름|->`.
-pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> Result<i32, String> {
-    let mut values = argv.iter().filter(|a| *a != "--");
-    let target = values.next().ok_or("대역이 없습니다")?;
-    if values.next().is_some() {
-        return Err("인자가 너무 많습니다".into());
+/// 정밀 조사(`--deep`)에서 두드리는 포트: 기본 13종에 관리·프린터·NAS·카메라·DB·원격 포트를 더했다.
+const DEEP_PORTS: &[u16] = &[
+    21, 22, 23, 25, 53, 80, 81, 88, 110, 111, 135, 139, 143, 179, 389, 443, 445, 515, 548, 554, 631, 873, 993, 1433, 1521, 1883, 2049, 3000, 3306, 3389, 5000, 5001, 5432, 5900, 5985, 6379, 7547, 8000, 8008, 8080, 8081, 8443,
+    8888, 9000, 9100, 9200, 62078,
+];
+
+/// `netmap`의 옵션
+#[derive(Debug, PartialEq)]
+pub struct MapOptions {
+    pub target: String,
+    pub ports: Vec<u16>,
+    pub ping: bool,
+    pub banner: bool,
+    pub mdns: bool,
+    pub snmp: bool,
+    pub timeout: Duration,
+}
+
+impl MapOptions {
+    pub fn parse(argv: &[String]) -> Result<MapOptions, String> {
+        let mut o = MapOptions { target: String::new(), ports: MAP_PORTS.to_vec(), ping: false, banner: false, mdns: false, snmp: true, timeout: CONNECT_TIMEOUT };
+        let (mut deep, mut custom) = (false, None);
+        let mut it = argv.iter();
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "--" => {}
+                "--deep" => deep = true,
+                "--ping" => o.ping = true,
+                "--banner" => o.banner = true,
+                "--mdns" => o.mdns = true,
+                "--snmp" => o.snmp = true,
+                "--no-snmp" => o.snmp = false,
+                "--ports" => custom = Some(parse_ports(it.next().ok_or("--ports 뒤에 포트 목록을 적습니다")?)?),
+                "--timeout" => {
+                    let ms = it.next().and_then(|v| v.parse::<u64>().ok()).filter(|ms| (200..=5000).contains(ms)).ok_or("--timeout은 200~5000(밀리초)입니다")?;
+                    o.timeout = Duration::from_millis(ms);
+                }
+                a if a.starts_with('-') => return Err(format!("모르는 옵션입니다: {a}")),
+                a if o.target.is_empty() => o.target = a.to_string(),
+                _ => return Err("인자가 너무 많습니다".into()),
+            }
+        }
+        if o.target.is_empty() {
+            return Err("대역이 없습니다".into());
+        }
+        // 포트를 직접 적었으면 그것을, 아니면 정밀 조사일 때 넓은 목록을 쓴다.
+        o.ports = custom.unwrap_or_else(|| if deep { DEEP_PORTS.to_vec() } else { MAP_PORTS.to_vec() });
+        Ok(o)
     }
+}
+
+/// 대역 전체에 핑을 보내 답한 주소와 응답 시간을 모은다(한 번 더 시도).
+async fn ping_sweep(hosts: Vec<Ipv4Addr>, timeout: Duration) -> Vec<(Ipv4Addr, f64)> {
+    use crate::basic::icmp::{Echo, probe as echo, system};
+    let prober = system();
+    let gate = Arc::new(Semaphore::new(64));
+    let wait_ms = timeout.as_millis().min(5000) as u32;
+    let mut set: JoinSet<Option<(Ipv4Addr, f64)>> = JoinSet::new();
+    for ip in hosts {
+        let (prober, gate) = (prober.clone(), gate.clone());
+        set.spawn(async move {
+            let _permit = gate.acquire().await;
+            for _ in 0..2 {
+                if let Echo::Reply { ms, .. } = echo(&prober, ip, 64, wait_ms, 32).await {
+                    return Some((ip, ms));
+                }
+            }
+            None
+        });
+    }
+    let mut out = Vec::new();
+    while let Some(r) = set.join_next().await {
+        out.extend(r.ok().flatten());
+    }
+    out.sort_by_key(|(ip, _)| u32::from(*ip));
+    out
+}
+
+pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> Result<i32, String> {
+    let MapOptions { target, ports, ping, banner, mdns, snmp, timeout } = MapOptions::parse(argv)?;
+    let target = &target;
     let info = crate::netinfo::current().await;
     let me: Option<Ipv4Addr> = info.ip.as_deref().and_then(|s| s.parse().ok());
     let gateway: Option<Ipv4Addr> = info.gateway.as_deref().and_then(|s| s.parse().ok());
@@ -435,20 +512,29 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     if !hosts.iter().all(|h| h.is_private() || h.is_loopback() || h.is_link_local()) && target == "auto" {
         return Err("내 네트워크가 사설 대역이 아닙니다. 조사할 대역을 직접 적어 주세요.".into());
     }
-    emit(format!("{cidr} 대역의 주소 {}개를 조사합니다. (포트 {}종 연결 시도 + 이웃 목록)", hosts.len(), MAP_PORTS.len()));
+    if hosts.len() * ports.len() > MAX_PROBES {
+        return Err(format!("범위가 너무 넓습니다(장비 {}대 × 포트 {}개). 대역을 좁히거나 포트를 줄이세요.", hosts.len(), ports.len()));
+    }
+    let extras: Vec<&str> = [(ping, "핑"), (mdns, "mDNS·UPnP"), (banner, "포트 첫 응답")].iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect();
+    emit(format!("{cidr} 대역의 주소 {}개를 조사합니다. (포트 {}종 연결 시도 + 이웃 목록{})", hosts.len(), ports.len(), extras.iter().map(|e| format!(" + {e}")).collect::<String>()));
+
+    // 핑과 mDNS·UPnP는 연결 시도와 함께 돌린다.
+    let ping_task = ping.then(|| tauri::async_runtime::spawn(ping_sweep(hosts.clone(), timeout)));
+    let cast_task = mdns.then(|| tauri::async_runtime::spawn(async move { (probe::mdns(probe::MDNS, Duration::from_millis(2500)).await, probe::ssdp(probe::SSDP, Duration::from_millis(2500)).await) }));
 
     // 연결되거나(열림) 거절당하면(닫힘) 켜져 있는 장비다. 응답이 없으면 알 수 없다.
     let gate = Arc::new(Semaphore::new(CONCURRENCY));
     let mut set: JoinSet<(Ipv4Addr, Vec<u16>, bool)> = JoinSet::new();
     for host in hosts.iter().copied() {
         let gate = gate.clone();
+        let ports = ports.clone();
         set.spawn(async move {
             let mut probes: JoinSet<(u16, u8)> = JoinSet::new();
-            for port in MAP_PORTS.iter().copied() {
+            for port in ports.iter().copied() {
                 let gate = gate.clone();
                 probes.spawn(async move {
                     let Ok(_permit) = gate.acquire().await else { return (port, 0) };
-                    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(SocketAddr::new(IpAddr::V4(host), port))).await {
+                    match tokio::time::timeout(timeout, TcpStream::connect(SocketAddr::new(IpAddr::V4(host), port))).await {
                         Ok(Ok(_)) => (port, 2),
                         Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => (port, 1),
                         _ => (port, 0),
@@ -474,6 +560,21 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     while let Some(r) = set.join_next().await {
         if let Ok((host, open, true)) = r {
             found.push((host, open));
+        }
+    }
+
+    // 핑에 답한 장비, mDNS·UPnP에 답한 장비도 켜져 있는 장비다.
+    let pings: Vec<(Ipv4Addr, f64)> = match ping_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let (services, upnp) = match cast_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => (Vec::new(), Vec::new()),
+    };
+    for ip in pings.iter().map(|(ip, _)| *ip).chain(services.iter().map(|(ip, _)| *ip)).chain(upnp.iter().map(|(ip, _)| *ip)) {
+        if hosts.contains(&ip) && !found.iter().any(|(h, _)| *h == ip) {
+            found.push((ip, vec![]));
         }
     }
 
@@ -505,7 +606,7 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     }
 
     // 스위치 연결 관계: 커뮤니티 문자열이 설정돼 있을 때만 SNMP(읽기 전용)로 묻는다.
-    let switches = match crate::settings::snmp_community() {
+    let switches = match crate::settings::snmp_community().filter(|_| snmp) {
         Some(community) => {
             emit("SNMP로 스위치·AP에 연결 관계를 묻습니다. (읽기 전용, 답하는 장비만)".to_string());
             let targets: Vec<(Ipv4Addr, SocketAddr)> = ips.iter().filter(|ip| Some(**ip) != me).map(|ip| (*ip, SocketAddr::new(IpAddr::V4(*ip), crate::snmp::PORT))).collect();
@@ -533,6 +634,40 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     }
     for sw in &switches {
         emit(format!("SNMP {} {} {} {}", sw.ip, sw.fdb.len(), sw.lldp.len(), sw.descr.as_deref().unwrap_or("-")));
+    }
+    // 덧붙임 조사 결과: "INFO <ip> <ping|mdns|upnp|banner> <글…>"
+    for (ip, ms) in pings.iter().filter(|(ip, _)| ips.contains(ip)) {
+        emit(format!("INFO {ip} ping {ms:.2}"));
+    }
+    for (ip, labels) in services.iter().filter(|(ip, l)| ips.contains(ip) && !l.is_empty()) {
+        emit(format!("INFO {ip} mdns {}", labels.join(", ")));
+    }
+    for (ip, server) in upnp.iter().filter(|(ip, _)| ips.contains(ip)) {
+        emit(format!("INFO {ip} upnp {server}"));
+    }
+    if banner {
+        // 열린 포트 가운데 첫 응답을 읽을 줄 아는 것만, 장비마다 네 개까지.
+        let mut tasks: JoinSet<(Ipv4Addr, u16, Option<String>)> = JoinSet::new();
+        let gate = Arc::new(Semaphore::new(32));
+        for (ip, open) in found.iter().filter(|(ip, _)| Some(*ip) != me) {
+            for port in open.iter().copied().filter(|p| probe::TALK_FIRST.contains(p) || probe::WEB.contains(p)).take(4) {
+                let (gate, ip) = (gate.clone(), *ip);
+                tasks.spawn(async move {
+                    let _permit = gate.acquire().await;
+                    (ip, port, probe::banner(SocketAddr::new(IpAddr::V4(ip), port)).await)
+                });
+            }
+        }
+        let mut banners = Vec::new();
+        while let Some(r) = tasks.join_next().await {
+            if let Ok((ip, port, Some(text))) = r {
+                banners.push((ip, port, text));
+            }
+        }
+        banners.sort();
+        for (ip, port, text) in banners {
+            emit(format!("INFO {ip} banner {port} {text}"));
+        }
     }
     for l in &links {
         emit(format!("LINK {} {} {} {} {}", l.switch, l.port, l.device, l.via, l.shared));
@@ -854,6 +989,31 @@ mod switch_tests {
         assert_eq!(sw.port_names, [(3, "ge3".to_string()), (5, "ge5".to_string())]);
         // 커뮤니티 문자열이 틀리면 답이 없어 목록에 들지 않는다.
         assert!(snmp_survey(&[(ip(21), addr)], "wrong").await.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod map_option_tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn options() {
+        let o = MapOptions::parse(&s(&["192.168.0.0/24"])).unwrap();
+        assert_eq!((o.ports.len(), o.ping, o.banner, o.mdns, o.snmp, o.timeout), (13, false, false, false, true, CONNECT_TIMEOUT));
+        let o = MapOptions::parse(&s(&["--deep", "--ping", "--mdns", "--banner", "--no-snmp", "--timeout", "1500", "--", "auto"])).unwrap();
+        assert_eq!((o.target.as_str(), o.ports.len(), o.ping, o.banner, o.mdns, o.snmp, o.timeout), ("auto", DEEP_PORTS.len(), true, true, true, false, Duration::from_millis(1500)));
+        // 정밀 조사 목록은 기본 목록을 모두 품고, 중복이 없고, 50개를 넘지 않는다.
+        assert!(MAP_PORTS.iter().all(|p| DEEP_PORTS.contains(p)) && DEEP_PORTS.len() <= MAX_PORTS);
+        assert!(DEEP_PORTS.windows(2).all(|w| w[0] < w[1]));
+        // 포트를 직접 적으면 --deep보다 앞선다.
+        assert_eq!(MapOptions::parse(&s(&["--deep", "--ports", "22,80", "10.0.0.0/24"])).unwrap().ports, [22, 80]);
+        for bad in [vec![], vec!["--ping"], vec!["--timeout", "50", "a"], vec!["--timeout", "a"], vec!["--ports", "0", "a"], vec!["--ports"], vec!["--fast", "a"], vec!["a", "b"]] {
+            assert!(MapOptions::parse(&s(&bad)).is_err(), "{bad:?}");
+        }
     }
 }
 

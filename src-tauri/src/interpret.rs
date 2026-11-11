@@ -135,6 +135,10 @@ pub struct Node {
     pub name: Option<String>,
     /// SNMP에 답한 장비가 알려 준 설명(sysDescr)
     pub descr: Option<String>,
+    /// 핑 응답 시간(ms). 핑을 보내지 않았거나 답이 없으면 None
+    pub ping_ms: Option<f64>,
+    /// 덧붙임 조사에서 알아낸 것: mDNS 서비스, UPnP 이름, 포트 첫 응답
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -755,7 +759,7 @@ fn netmap(lines: &[String]) -> Option<StepResult> {
             let name = f.get(5).filter(|n| **n != "-").and_then(|n| crate::engine::builtin::clean_name(n));
             let v = mac.as_deref().map(vendor).unwrap_or("");
             let (kind, label) = guess_kind(f[3], &ports, v);
-            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports, name, descr: None })
+            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports, name, descr: None, ping_ms: None, notes: vec![] })
         })
         .take(1024)
         .collect();
@@ -773,6 +777,28 @@ fn netmap(lines: &[String]) -> Option<StepResult> {
             node.kind = "network".into();
             node.label = "스위치".into();
         }
+    }
+    // 덧붙임 조사: "INFO <ip> <ping|mdns|upnp|banner> <글…>"
+    for l in lines {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let ["INFO", ip, kind, rest @ ..] = f.as_slice() else { continue };
+        let Some(node) = nodes.iter_mut().find(|n| n.ip == *ip) else { continue };
+        let text = crate::engine::probe::tidy(&rest.join(" ")).unwrap_or_default();
+        match *kind {
+            "ping" => node.ping_ms = text.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0),
+            "mdns" if !text.is_empty() => {
+                // 스스로 프린터라고 알린 장비는 프린터다.
+                if node.role == "host" && text.contains("프린터") {
+                    node.kind = "printer".into();
+                    node.label = "프린터".into();
+                }
+                node.notes.push(format!("mDNS: {text}"));
+            }
+            "upnp" if !text.is_empty() => node.notes.push(format!("UPnP: {text}")),
+            "banner" if rest.first().is_some_and(|p| p.parse::<u16>().is_ok()) && rest.len() > 1 => node.notes.push(format!("포트 {}: {}", rest[0], crate::engine::probe::tidy(&rest[1..].join(" ")).unwrap_or_default())),
+            _ => {}
+        }
+        node.notes.truncate(8);
     }
     let known = |ip: &str| nodes.iter().any(|n| n.ip == ip);
     let mut links: Vec<TopoLink> = Vec::new();
@@ -1027,6 +1053,16 @@ mod tests {
         assert_eq!(odd.nodes[0].name.as_deref(), Some("bpcb"));
         assert!(r.targets.iter().all(|x| x.host != "192.168.0.12"));
         assert!(done("netmap", "x", 0).topology.is_none());
+    }
+
+    #[test]
+    fn netmap_reads_extra_findings() {
+        let out = "NET 192.168.0.0/24 GW 192.168.0.1 ME 192.168.0.12\nNODE 192.168.0.1 - gateway 80 -\nNODE 192.168.0.30 - host - -\nNODE 192.168.0.40 - host 22,80 -\nINFO 192.168.0.1 ping 0.52\nINFO 192.168.0.1 upnp Linux/3.10 UPnP/1.0 ipTIME/1.0\nINFO 192.168.0.30 mdns 프린터, AirPlay\nINFO 192.168.0.40 banner 22 SSH-2.0-OpenSSH_9.6\nINFO 192.168.0.40 banner 80 nginx · \"NAS\"\nINFO 192.168.0.40 banner x 깨진 줄\nINFO 192.168.0.40 ping -1\nINFO 10.9.9.9 ping 1.0\nINFO 192.168.0.40 weird x";
+        let t = done("netmap", out, 0).topology.unwrap();
+        assert_eq!((t.nodes[0].ping_ms, t.nodes[0].notes.as_slice()), (Some(0.52), &["UPnP: Linux/3.10 UPnP/1.0 ipTIME/1.0".to_string()][..]));
+        assert_eq!((t.nodes[1].kind.as_str(), t.nodes[1].notes[0].as_str()), ("printer", "mDNS: 프린터, AirPlay"));
+        assert_eq!(t.nodes[2].notes, ["포트 22: SSH-2.0-OpenSSH_9.6", "포트 80: nginx · \"NAS\""]);
+        assert_eq!(t.nodes[2].ping_ms, None);
     }
 
     #[test]

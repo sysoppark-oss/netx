@@ -26,6 +26,7 @@ use crate::env_check::{decode_wsl_output, hide_console_window};
 
 pub mod windows;
 pub mod builtin;
+pub mod probe;
 
 /// 한 단계의 출력 상한. 넘으면 실행을 멈춘다.
 const MAX_LINES: usize = 5000;

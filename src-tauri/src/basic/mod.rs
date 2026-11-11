@@ -10,7 +10,7 @@
 //! 외부 프로그램을 띄우지 않는다(리눅스 개발 환경의 ICMP만 예외, `icmp` 참고).
 
 mod args;
-mod dns;
+pub(crate) mod dns;
 mod http;
 pub mod icmp;
 mod ping;

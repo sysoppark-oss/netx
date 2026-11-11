@@ -271,6 +271,10 @@ export interface TopoNode {
   name: string | null;
   /** SNMP에 답한 장비가 알려 준 설명 */
   descr: string | null;
+  /** 핑 응답 시간(ms). 핑을 보내지 않았거나 답이 없으면 null */
+  ping_ms: number | null;
+  /** 덧붙임 조사에서 알아낸 것(mDNS 서비스, UPnP 이름, 포트 첫 응답) */
+  notes: string[];
 }
 
 /** device가 switch의 port에 물려 있다 (SNMP로 알아낸 연결) */

@@ -189,6 +189,12 @@ pub fn parse(p: &[u8], id: u16) -> Option<Answer> {
     Some(Answer { rcode, truncated, records })
 }
 
+/// 답 패킷에 든 PTR 레코드의 이름들(mDNS 서비스 찾기에 쓴다). 번호는 따지지 않는다.
+pub fn ptr_names(p: &[u8]) -> Vec<String> {
+    let Some(id) = u16_at(p, 0) else { return Vec::new() };
+    parse(p, id).map(|a| a.records.into_iter().filter(|r| r.rtype == 12).map(|r| r.data).collect()).unwrap_or_default()
+}
+
 fn rcode_name(code: u8) -> String {
     match code {
         0 => "NOERROR".into(),

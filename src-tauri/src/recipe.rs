@@ -129,7 +129,16 @@ fn built_args(recipe_id: &str, step: usize, vars: &BTreeMap<String, String>) -> 
                 }
             }))
         }
-        ("network_map", 0) => Some(Ok(own(&[get("cidr").unwrap_or("auto")]))),
+        ("network_map", 0) => {
+            // 조사 깊이는 고정된 옵션 묶음으로 바꾼다.
+            let mut args = own(match get("depth").unwrap_or("normal") {
+                "quick" => &[],
+                "deep" => &["--deep", "--ping", "--mdns", "--banner"],
+                _ => &["--ping", "--mdns"],
+            });
+            args.push(get("cidr").unwrap_or("auto").to_string());
+            Some(Ok(args))
+        }
         ("bandwidth", 0) => {
             let mut args = own(&["-c", get("server")?, "-p", get("port").unwrap_or("5201"), "-t", get("secs").unwrap_or("10"), "-P", "4", "--connect-timeout", "5000"]);
             if get("direction") != Some("upload") {

@@ -354,6 +354,11 @@ export function TopologyView({ topology }: { topology: Topology }) {
               : []),
             ...(pickedPorts.length > 0 ? [["물린 장비", pickedPorts.map((l) => `${l.port}: ${nameOf(l.device)}`).join(", ")]] : []),
             ...(picked.descr ? [["장비 설명", picked.descr]] : []),
+            ...(picked.ping_ms != null ? [["핑", `${picked.ping_ms < 10 ? picked.ping_ms.toFixed(2) : picked.ping_ms.toFixed(1)}ms`]] : []),
+            ...(picked.notes ?? []).map((n) => {
+              const at = n.indexOf(": ");
+              return [n.slice(0, at), n.slice(at + 2)];
+            }),
           ].map(([k, v]) => (
             <div key={k} className="flex gap-1.5">
               <dt className="shrink-0 text-dim">{k}</dt>
