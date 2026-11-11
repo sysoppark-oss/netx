@@ -3,14 +3,17 @@
 //!
 //! - 주소는 코드에 고정되어 있고 HTTPS만 쓴다. 다른 곳으로 넘겨 보내는 응답(리다이렉트)은 따르지 않는다.
 //! - 채널(main, dev)과 커밋은 빌드할 때 박아 넣는다(build.rs). 직접 빌드한 실행 파일은 채널이 없어 업데이트하지 않는다.
-//! - 설치 파일에 별도 전자서명은 없다. 믿는 근거는 GitHub 저장소와 HTTPS, 그리고 같은 곳에 올라온 SHA-256이다.
-//!   그래서 정식판(main 채널)은 업데이트 서명 검증이 들어가기 전까지 설치하지 않고 알리기만 한다(`installs`).
+//! - 설치 파일은 업데이트 서명(Tauri 서명 도구가 만드는 minisign 서명, 스토리방화벽과 같은 방식)을 확인한 뒤에만 실행한다.
+//!   공개 키는 이 파일에 들어 있고(`PUBLIC_KEY`), 개인 키는 저장소 비밀값에만 있다. 서명 파일(`<설치 파일>.sig`)이
+//!   없거나 맞지 않으면 설치하지 않는다. 같은 곳에 올라온 SHA-256도 함께 확인한다.
+//!   정식판(main 채널)은 서명 검증을 노트북에서 확인하기 전까지 설치하지 않고 알리기만 한다(`installs`).
 //! - 실행 중인 작업이 있으면 설치를 미룬다(`decide`). 설치하면 NetX가 닫히기 때문이다.
 //! - 보내는 것은 정해진 주소의 파일을 달라는 요청뿐이다. 이 PC의 이름, 설정, 진단 결과는 보내지 않는다.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use base64::Engine;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -18,6 +21,12 @@ pub const COMMIT: &str = env!("NETX_BUILD_COMMIT");
 pub const CHANNEL: &str = env!("NETX_BUILD_CHANNEL");
 const BUILT_UNIX: &str = env!("NETX_BUILD_UNIX");
 const BASE: &str = "https://raw.githubusercontent.com/sysoppark-oss/netx";
+/// 업데이트 서명을 확인하는 공개 키(Tauri 형식: minisign 공개 키 파일을 base64로 감싼 것). 공개해도 되는 값이다.
+/// 짝이 되는 개인 키는 GitHub 저장소 비밀값 `TAURI_SIGNING_PRIVATE_KEY`에만 있다. 키를 바꾸면 이미 설치된 판은
+/// 새 서명을 확인하지 못하므로 손으로 다시 설치해야 한다.
+pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4MDk0RkM2MUI4MDlGNDgKUldSSW40QWJ4azhKdURLOFNmMXVOblJaL1VlbXExRTE2QngvZWNQemNKOXJpNzhMaDhkb0lPckYK";
+/// 서명 파일로 받을 수 있는 가장 큰 크기
+const MAX_SIG_BYTES: usize = 4096;
 /// 설치 파일로 받을 수 있는 가장 큰 크기
 const MAX_SETUP_BYTES: usize = 80 * 1024 * 1024;
 
@@ -140,13 +149,28 @@ pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 설치 파일을 내려받아 SHA-256이 맞을 때만 `dir`에 저장한다.
+fn unwrap_base64(text: &str) -> Option<String> {
+    String::from_utf8(base64::engine::general_purpose::STANDARD.decode(text.trim()).ok()?).ok()
+}
+
+/// `data`가 `public_key`의 짝인 개인 키로 서명된 것인지 확인한다.
+/// `sig_file`은 Tauri 서명 도구가 만든 `.sig` 파일의 내용, `public_key`는 Tauri 형식 공개 키다.
+pub fn verify_signature(data: &[u8], sig_file: &str, public_key: &str) -> Result<(), String> {
+    const BAD: &str = "설치 파일의 서명을 확인하지 못했습니다. 설치하지 않았습니다.";
+    let key = unwrap_base64(public_key).and_then(|k| minisign_verify::PublicKey::decode(&k).ok()).ok_or("업데이트 공개 키가 올바르지 않습니다.")?;
+    let sig = unwrap_base64(sig_file).and_then(|s| minisign_verify::Signature::decode(&s).ok()).ok_or(BAD)?;
+    key.verify(data, &sig, true).map_err(|_| BAD.to_string())
+}
+
+/// 설치 파일과 서명을 내려받아 SHA-256과 서명이 모두 맞을 때만 `dir`에 저장한다.
 pub async fn download(m: &Manifest, dir: &Path) -> Result<PathBuf, String> {
     let name = setup_name(CHANNEL).ok_or("업데이트 채널이 없습니다")?;
     let data = fetch(name, MAX_SETUP_BYTES).await?;
     if sha256_hex(&data) != m.sha256 {
         return Err("내려받은 설치 파일이 올라온 것과 다릅니다(SHA-256 불일치). 설치하지 않았습니다.".into());
     }
+    let sig = fetch(&format!("{name}.sig"), MAX_SIG_BYTES).await.map_err(|e| format!("설치 파일의 서명을 받지 못했습니다. 설치하지 않았습니다. ({e})"))?;
+    verify_signature(&data, &String::from_utf8_lossy(&sig), PUBLIC_KEY)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("업데이트 폴더를 만들지 못했습니다: {e}"))?;
     let path = dir.join(name);
     std::fs::write(&path, &data).map_err(|e| format!("설치 파일을 저장하지 못했습니다: {e}"))?;
@@ -201,6 +225,39 @@ mod tests {
         assert_eq!(decide("dev", true, true, true), Action::Offer);
         assert_eq!(decide("dev", false, false, false), Action::Offer);
         assert_eq!(decide("dev", false, false, true), Action::Offer);
+    }
+
+    // 시험용으로 한 번 만들고 버린 키와, 그 키로 `tauri signer sign`이 만든 서명
+    const TEST_PUB: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU3RDQyNDM4OEFBRjhBMjAKUldRZ2lxK0tPQ1RVVjBpY2w3L3FkME1xcEtndTIvV2JGcVByd2hEd2Z1cTVpN0N4VGpOQndsazUK";
+    const TEST_SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRZ2lxK0tPQ1RVVndrMGUxQU5lbHdBaXUxdTZLQXJlNXk0MDIvR3hMY2lWd1NVazBTd2dCUTkvd2hweEFFeUladWF1bmlhcjgzUUNkdEdRVDhwdXFZZUtiakdMeHlzNVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzc1ODkzCWZpbGU6cGF5bG9hZC5iaW4Kb0dwRnhtTFBjUlBRTHVmSmQrVFRZemw1blhISGNjY0lyYmNZZ2dVanl1OGZaMzJ4WCtyZ0x3R1A1MUlpSjdYc0lUR3BOVzFUU3RnVnlxR2VzMkN4QkE9PQo=";
+    const TEST_DATA: &[u8] = b"netx signature test payload\n";
+
+    #[test]
+    fn signature_must_match_data_and_key() {
+        assert_eq!(verify_signature(TEST_DATA, TEST_SIG, TEST_PUB), Ok(()));
+        assert_eq!(verify_signature(TEST_DATA, &format!("  {TEST_SIG}\r\n"), TEST_PUB), Ok(()), "앞뒤 공백과 줄바꿈은 괜찮다");
+        // 내용이 한 글자라도 다르면 거절
+        assert!(verify_signature(b"netx signature test payloae\n", TEST_SIG, TEST_PUB).is_err());
+        assert!(verify_signature(b"", TEST_SIG, TEST_PUB).is_err());
+        // 다른 키(실제 배포 키)로는 확인되지 않는다.
+        assert!(verify_signature(TEST_DATA, TEST_SIG, PUBLIC_KEY).is_err());
+        // 서명이 없거나 깨졌으면 거절
+        for bad in ["", "not base64 !!", "aGVsbG8=", "<html>404</html>", &TEST_SIG[..TEST_SIG.len() - 8]] {
+            assert!(verify_signature(TEST_DATA, bad, TEST_PUB).is_err(), "{bad}");
+        }
+        // 서명 한 글자를 바꾼 것
+        let mut forged = TEST_SIG.to_string();
+        forged.replace_range(120..121, if &TEST_SIG[120..121] == "A" { "B" } else { "A" });
+        assert!(verify_signature(TEST_DATA, &forged, TEST_PUB).is_err());
+        // 공개 키가 깨졌으면 그 사실을 알린다.
+        assert!(verify_signature(TEST_DATA, TEST_SIG, "xx").unwrap_err().contains("공개 키"));
+    }
+
+    #[test]
+    fn embedded_public_key_is_readable() {
+        let text = unwrap_base64(PUBLIC_KEY).expect("base64");
+        assert!(text.starts_with("untrusted comment: minisign public key: B8094FC61B809F48"));
+        assert!(minisign_verify::PublicKey::decode(&text).is_ok());
     }
 
     #[test]

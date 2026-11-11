@@ -6,6 +6,7 @@ name: Windows 빌드
 # (스토리방화벽 개발판과 같은 방식: 커밋 하나짜리 고아 브랜치를 덮어쓴다).
 # 설치된 NetX는 자기 채널의 manifest.txt를 보고 새 빌드가 올라오면 스스로 업데이트한다(src-tauri/src/updater.rs).
 # manifest.txt의 형식과 파일 이름을 바꾸면 updater.rs도 함께 바꿔야 한다.
+# 설치 파일에는 업데이트 서명(<설치 파일>.sig)을 함께 올린다. 서명 키는 저장소 비밀값 TAURI_SIGNING_PRIVATE_KEY(와 _PASSWORD).
 on:
   push:
     branches: [main, dev]
@@ -59,6 +60,9 @@ jobs:
       - name: 설치 파일을 <브랜치>-builds 브랜치에 게시
         if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           $setup = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
           $d = Join-Path $env:RUNNER_TEMP "devbuilds"
@@ -66,6 +70,12 @@ jobs:
           $branch = "$env:GITHUB_REF_NAME-builds"
           $name = if ($env:GITHUB_REF_NAME -eq 'dev') { "NetX-dev-setup.exe" } else { "NetX-setup.exe" }
           Copy-Item $setup.FullName (Join-Path $d $name)
+          # 업데이트 서명: 설치된 NetX는 <설치 파일>.sig를 내장 공개 키로 확인한 뒤에만 설치한다(updater.rs).
+          # 개인 키는 저장소 비밀값에만 있다. 붙여 넣을 때 딸려 온 줄바꿈은 떼어 낸다.
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw "저장소 비밀값 TAURI_SIGNING_PRIVATE_KEY가 없습니다." }
+          $env:TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          npx tauri signer sign (Join-Path $d $name) | Out-Null
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $d "$name.sig"))) { throw "설치 파일에 서명하지 못했습니다." }
           $sha = (Get-FileHash (Join-Path $d $name) -Algorithm SHA256).Hash.ToLower()
           $now = (Get-Date).ToUniversalTime()
           @("commit=$env:GITHUB_SHA", "setup_sha256=$sha", "built=$($now.ToString('s'))Z", "built_unix=$([DateTimeOffset]::new($now).ToUnixTimeSeconds())") | Set-Content (Join-Path $d "manifest.txt") -Encoding ascii

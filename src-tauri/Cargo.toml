@@ -28,6 +28,8 @@ tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thre
 sysinfo = { version = "0.33", default-features = false, features = ["network"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
+minisign-verify = "0.2"
+base64 = "0.22"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"
