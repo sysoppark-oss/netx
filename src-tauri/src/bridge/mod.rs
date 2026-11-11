@@ -274,12 +274,40 @@ pub fn handle(line: &str, caller: &Caller, host: &dyn Host, session: &mut Sessio
     }
 }
 
-/// 접속자의 실행 파일이 등록부(HKLM, 관리자만 쓸 수 있다)에 올라 있는 랙 구성원인지.
-/// 경로는 대소문자와 `/`·`\` 차이를 없애고 통째로 비교한다(폴더가 아니라 파일 하나).
+/// 경로 비교용: `\\?\` 접두사를 떼고 `/`를 `\`로, 소문자로. 끝의 `\`는 뗀다.
+fn norm_path(p: &str) -> String {
+    p.trim().trim_start_matches(r"\\?\").replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+/// 경로가 드라이브 글자로 시작하는 전체 경로이고 `..`·`.` 같은 조각이 없는지.
+fn plain_absolute(p: &str) -> bool {
+    let mut parts = p.split('\\');
+    let drive = parts.next().unwrap_or("");
+    let drive_ok = drive.len() == 2 && drive.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) && drive.ends_with(':');
+    let mut count = 0;
+    drive_ok && parts.all(|part| {
+        count += 1;
+        !part.is_empty() && part != "." && part != ".."
+    }) && count >= 1
+}
+
+/// 등록된 경로가 관리자만 쓸 수 있는 폴더(Program Files 등) 아래의 파일인지 (설계 8.3의 4번).
+/// 사용자 폴더의 실행 파일은 같은 사용자 권한의 프로그램이 바꿔치기할 수 있으므로 등록돼 있어도 받지 않는다.
+pub fn under_admin_dirs(exe: &str, admin_dirs: &[String]) -> bool {
+    let exe = norm_path(exe);
+    plain_absolute(&exe)
+        && admin_dirs.iter().any(|dir| {
+            let dir = norm_path(dir);
+            plain_absolute(&dir) && exe.strip_prefix(&dir).is_some_and(|rest| rest.starts_with('\\') && rest.len() > 1)
+        })
+}
+
+/// 접속자의 실행 파일이 등록부(HKLM, 관리자만 쓸 수 있다)에 올라 있는 랙 구성원인지 (설계 8.3의 2번, 5번).
+/// 대소문자와 `\\?\` 접두사 차이를 없애고 전체 경로를 통째로 비교한다(폴더가 아니라 파일 하나).
+/// 넘겨받는 두 경로는 운영체제가 알려 준 최종 경로여야 한다(짧은 이름·연결을 푼 것).
 pub fn is_member(image: &str, registered: &[String]) -> bool {
-    let norm = |p: &str| p.trim().trim_start_matches(r"\\?\").replace('/', "\\").to_lowercase();
-    let image = norm(image);
-    !image.is_empty() && registered.iter().any(|r| norm(r) == image)
+    let image = norm_path(image);
+    plain_absolute(&image) && registered.iter().any(|r| norm_path(r) == image)
 }
 
 // ---- 화면이 가져갈 인계 ----
@@ -490,5 +518,31 @@ mod tests {
         assert!(!is_member(r"C:\Program Files\Story Firewall\story-firewall-ui.exe.evil.exe", &reg));
         assert!(!is_member(r"C:\Program Files\Story Firewall", &reg));
         assert!(!is_member("", &reg) && !is_member("x", &[]) && !is_member("", &[String::new()]));
+        assert!(!is_member(r"C:\Program Files\Story Firewall\..\Story Firewall\story-firewall-ui.exe", &reg), "돌아가는 경로는 받지 않는다");
+    }
+
+    #[test]
+    fn registered_path_must_sit_under_an_admin_only_folder() {
+        let dirs = vec![r"C:\Program Files".to_string(), r"C:\Program Files (x86)\".to_string()];
+        assert!(under_admin_dirs(r"C:\Program Files\Story Firewall\story-firewall-ui.exe", &dirs));
+        assert!(under_admin_dirs(r"\\?\c:\program files (x86)\NetX\netx.exe", &dirs));
+        for bad in [
+            r"C:\Users\me\AppData\Local\NetX\netx.exe",
+            r"C:\Program Files Evil\netx.exe",
+            r"C:\Program Files",
+            r"C:\Program Files\",
+            r"C:\Program Files\..\Users\me\evil.exe",
+            r"C:\Program Files\.\x.exe",
+            r"C:\Program Files\\x.exe",
+            r"\\server\share\Program Files\x.exe",
+            r"Program Files\x.exe",
+            r"D:\Program Files\x.exe",
+            "",
+        ] {
+            assert!(!under_admin_dirs(bad, &dirs), "{bad}");
+        }
+        assert!(!under_admin_dirs(r"C:\Program Files\x.exe", &[]));
+        assert!(!under_admin_dirs(r"C:\x.exe", &[r"C:".to_string()]), "드라이브 뿌리는 관리자 전용 폴더가 아니다");
+        assert!(!under_admin_dirs(r"C:\Program Files\x.exe", &[r"..\Program Files".to_string(), String::new()]));
     }
 }

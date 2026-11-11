@@ -79,16 +79,11 @@ impl Host for AppHost {
     }
 }
 
-fn random_name() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let part = || {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
-        h.write_u32(std::process::id());
-        h.finish()
-    };
-    format!(r"\\.\pipe\netx-{:016x}{:016x}", part(), part())
+/// 파이프 이름: 운영체제 난수 128비트. 난수를 얻지 못하면 입구를 열지 않는다.
+fn random_name() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(format!(r"\\.\pipe\netx-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
 }
 
 fn create(name: &str, first: bool) -> std::io::Result<NamedPipeServer> {
@@ -110,10 +105,28 @@ pub fn unpublish() {
     let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey(RUNNING_KEY);
 }
 
-/// 관리자가 등록한 랙 구성원의 실행 파일 경로들
+/// 운영체제가 알려 주는 최종 경로(짧은 이름과 연결을 푼 것). 파일이 없으면 None.
+fn final_path(path: &str) -> Option<String> {
+    Some(std::fs::canonicalize(path).ok()?.to_string_lossy().into_owned())
+}
+
+/// 관리자만 쓸 수 있는 프로그램 폴더들. 환경 변수가 아니라 HKLM에서 읽는다(환경 변수는 실행한 쪽이 바꿀 수 있다).
+fn admin_dirs() -> Vec<String> {
+    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion") else { return Vec::new() };
+    ["ProgramFilesDir", "ProgramFilesDir (x86)", "ProgramW6432Dir"].iter().filter_map(|name| final_path(&key.get_value::<String, _>(name).ok()?)).collect()
+}
+
+/// 관리자가 등록한 랙 구성원의 실행 파일 경로들. 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
 fn registered_members() -> Vec<String> {
     let Ok(modules) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(MODULES_KEY) else { return Vec::new() };
-    modules.enum_keys().flatten().take(32).filter_map(|id| modules.open_subkey(id).ok()?.get_value::<String, _>("Exe").ok()).collect()
+    let dirs = admin_dirs();
+    modules
+        .enum_keys()
+        .flatten()
+        .take(32)
+        .filter_map(|id| final_path(&modules.open_subkey(id).ok()?.get_value::<String, _>("Exe").ok()?))
+        .filter(|exe| super::under_admin_dirs(exe, &dirs))
+        .collect()
 }
 
 fn client_pid(server: &NamedPipeServer) -> Option<u32> {
@@ -124,26 +137,38 @@ fn client_pid(server: &NamedPipeServer) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-fn image_of(pid: u32) -> Option<String> {
+/// 접속자의 실행 파일 경로. 프로세스 핸들을 먼저 잡고, 그 핸들이 지금도 이 파이프의 접속자이며 살아 있는지
+/// 확인한 다음 그 핸들로 경로를 읽는다(번호가 다른 프로세스로 바뀌는 틈을 막는다).
+fn client_image(server: &NamedPipeServer) -> Option<(u32, String)> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    const STILL_ACTIVE: u32 = 259;
+    let pid = client_pid(server)?;
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buf = vec![0u16; 32_768];
-        let mut len = buf.len() as u32;
-        let got = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let read = || {
+            let mut code = 0u32;
+            GetExitCodeProcess(process, &mut code).ok()?;
+            if code != STILL_ACTIVE || client_pid(server) != Some(pid) {
+                return None;
+            }
+            let mut buf = vec![0u16; 32_768];
+            let mut len = buf.len() as u32;
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).ok()?;
+            Some(String::from_utf16_lossy(buf.get(..len as usize)?))
+        };
+        let image = read();
         let _ = CloseHandle(process);
-        got.ok()?;
-        Some(String::from_utf16_lossy(buf.get(..len as usize)?))
+        Some((pid, image?))
     }
 }
 
 fn caller_of(server: &NamedPipeServer) -> Caller {
-    let pid = client_pid(server).unwrap_or(0);
-    let image = if pid == 0 { String::new() } else { image_of(pid).unwrap_or_default() };
-    let granted = if super::is_member(&image, &registered_members()) { vec!["read", "operate"] } else { Vec::new() };
-    Caller { pid, image, granted }
+    let Some((pid, image)) = client_image(server) else { return Caller::default() };
+    // 비교는 운영체제의 최종 경로끼리 한다.
+    let member = final_path(&image).is_some_and(|image| super::is_member(&image, &registered_members()));
+    Caller { pid, image, granted: if member { vec!["read", "operate"] } else { Vec::new() } }
 }
 
 async fn serve(server: NamedPipeServer, app: AppHandle) {
@@ -171,7 +196,7 @@ async fn serve(server: NamedPipeServer, app: AppHandle) {
 /// 입구를 연다. NetX가 켜져 있는 동안 돈다.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let name = random_name();
+        let Some(name) = random_name() else { return };
         let Ok(mut server) = create(&name, true) else { return };
         publish(&name);
         {
