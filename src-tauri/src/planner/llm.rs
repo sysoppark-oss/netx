@@ -122,7 +122,7 @@ pub(crate) mod tests {
     }
 
     fn settings(provider: Provider, base: &str) -> Settings {
-        Settings { provider, base_url: base.into(), model: "test-model".into(), redact: false }
+        Settings { provider, base_url: base.into(), model: "test-model".into(), redact: false, manual_update: false }
     }
 
     #[tokio::test]

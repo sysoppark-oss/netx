@@ -27,6 +27,7 @@ url = "2"
 tokio = { version = "1", features = ["process", "time", "macros", "rt-multi-thread", "io-util", "sync", "net"] }
 sysinfo = { version = "0.33", default-features = false, features = ["network"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"

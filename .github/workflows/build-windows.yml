@@ -2,8 +2,10 @@ name: Windows 빌드
 
 # main, dev에 푸시하거나 PR을 열 때마다 Windows 설치 파일을 만든다.
 # 결과물은 Actions 실행 화면의 Artifacts에서 내려받는다.
-# dev 브랜치 빌드는 노트북에 먼저 설치해 확인할 수 있도록 `dev-builds` 브랜치에도 올린다
+# 푸시한 빌드는 `dev-builds`(dev), `main-builds`(main) 브랜치에도 올린다
 # (스토리방화벽 개발판과 같은 방식: 커밋 하나짜리 고아 브랜치를 덮어쓴다).
+# 설치된 NetX는 자기 채널의 manifest.txt를 보고 새 빌드가 올라오면 스스로 업데이트한다(src-tauri/src/updater.rs).
+# manifest.txt의 형식과 파일 이름을 바꾸면 updater.rs도 함께 바꿔야 한다.
 on:
   push:
     branches: [main, dev]
@@ -54,20 +56,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 시험판을 dev-builds 브랜치에 게시
-        if: github.event_name == 'push' && github.ref_name == 'dev'
+      - name: 설치 파일을 <브랜치>-builds 브랜치에 게시
+        if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
         shell: pwsh
         run: |
           $setup = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
           $d = Join-Path $env:RUNNER_TEMP "devbuilds"
           New-Item -ItemType Directory -Force $d | Out-Null
-          Copy-Item $setup.FullName (Join-Path $d "NetX-dev-setup.exe")
-          $sha = (Get-FileHash (Join-Path $d "NetX-dev-setup.exe") -Algorithm SHA256).Hash.ToLower()
-          @("commit=$env:GITHUB_SHA", "setup_sha256=$sha", "built=$((Get-Date).ToUniversalTime().ToString('s'))Z") | Set-Content (Join-Path $d "manifest.txt") -Encoding ascii
+          $branch = "$env:GITHUB_REF_NAME-builds"
+          $name = if ($env:GITHUB_REF_NAME -eq 'dev') { "NetX-dev-setup.exe" } else { "NetX-setup.exe" }
+          Copy-Item $setup.FullName (Join-Path $d $name)
+          $sha = (Get-FileHash (Join-Path $d $name) -Algorithm SHA256).Hash.ToLower()
+          $now = (Get-Date).ToUniversalTime()
+          @("commit=$env:GITHUB_SHA", "setup_sha256=$sha", "built=$($now.ToString('s'))Z", "built_unix=$([DateTimeOffset]::new($now).ToUnixTimeSeconds())") | Set-Content (Join-Path $d "manifest.txt") -Encoding ascii
           git -C $d init -q
-          git -C $d checkout -q --orphan dev-builds
+          git -C $d checkout -q --orphan $branch
           git -C $d add -A
-          git -C $d -c user.name="devbuild" -c user.email="devbuild@users.noreply.github.com" commit -q -m "dev build $env:GITHUB_SHA"
+          git -C $d -c user.name="devbuild" -c user.email="devbuild@users.noreply.github.com" commit -q -m "$env:GITHUB_REF_NAME build $env:GITHUB_SHA"
           $url = "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git -C $d push -q -f $url dev-builds
+          git -C $d push -q -f $url $branch
           Get-Content (Join-Path $d "manifest.txt")

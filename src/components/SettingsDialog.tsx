@@ -30,6 +30,7 @@ export function SettingsDialog({
     base_url: initial.base_url,
     model: initial.model,
     redact: initial.redact,
+    manual_update: initial.manual_update,
   });
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(initial.has_key);
@@ -47,6 +48,7 @@ export function SettingsDialog({
       base_url: changed || !form.base_url ? preset.base_url : form.base_url,
       model: changed || !form.model ? preset.model : form.model,
       redact: provider === "openai" ? true : form.redact,
+      manual_update: form.manual_update,
     });
   }
 
@@ -168,6 +170,12 @@ export function SettingsDialog({
             )}
           </div>
         )}
+
+        <label className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-sm">
+          <input type="checkbox" checked={!form.manual_update} onChange={(e) => setForm({ ...form, manual_update: !e.target.checked })} />
+          새 버전이 올라오면 시작할 때 자동으로 설치
+        </label>
+        <p className="mt-1 text-xs leading-relaxed text-dim">끄면 새 버전이 있다는 알림만 나오고, [지금 업데이트]를 눌러야 설치합니다.</p>
 
         {status && <p className={`mt-4 text-sm ${status.ok ? "text-safe" : "text-danger"}`}>{status.text}</p>}
 

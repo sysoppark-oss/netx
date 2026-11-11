@@ -141,6 +141,64 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     Ok((data, work))
 }
 
+// ---- 자동 업데이트 ----
+
+fn update_status(app: &AppHandle, state: &'static str, commit: &str, message: impl Into<String>) {
+    let _ = app.emit("update:status", crate::updater::Status { state, commit: commit.chars().take(7).collect(), message: message.into() });
+}
+
+/// 새 버전을 내려받아 확인하고 설치 프로그램을 실행한 뒤 NetX를 끝낸다. 새 버전이 없으면 아무것도 하지 않는다.
+async fn install_update(app: &AppHandle) -> Result<(), String> {
+    let Some(m) = crate::updater::check().await? else { return Ok(()) };
+    update_status(app, "downloading", &m.commit, "새 버전을 내려받고 있습니다.");
+    let path = crate::updater::download(&m, &data_dir(app)?.join("update")).await?;
+    update_status(app, "installing", &m.commit, "새 버전을 설치합니다. NetX가 잠시 닫혔다가 다시 열립니다.");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    crate::updater::launch(&path)?;
+    let (data_dir, _) = data_dirs(app)?;
+    audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "update", tool: "netx-setup", argv: &[m.commit.clone(), m.sha256.clone()], risk: Risk::Caution, root: false, confirmed: true });
+    app.exit(0);
+    Ok(())
+}
+
+/// 시작한 뒤 한 번, 그 뒤로 3시간마다 새 버전을 확인한다.
+/// 시작 직후에는 (설정에서 끄지 않았다면) 바로 설치하고, 쓰는 도중에는 알리기만 한다.
+pub fn watch_updates(app: AppHandle) {
+    if !crate::updater::enabled() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        let mut first = true;
+        loop {
+            let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true);
+            let result = if first && !manual {
+                install_update(&app).await
+            } else {
+                crate::updater::check().await.map(|m| {
+                    if let Some(m) = m {
+                        update_status(&app, "available", &m.commit, "새 버전이 있습니다.");
+                    }
+                })
+            };
+            if let Err(e) = result {
+                // 인터넷이 없을 때마다 알리지는 않는다. 설치를 시도하다 실패한 경우만 알린다.
+                if first && !manual && !e.contains("연결하지 못했습니다") {
+                    update_status(&app, "error", "", e);
+                }
+            }
+            first = false;
+            tokio::time::sleep(std::time::Duration::from_secs(3 * 3600)).await;
+        }
+    });
+}
+
+/// 화면의 [지금 업데이트] 버튼
+#[tauri::command]
+pub async fn apply_update(app: AppHandle) -> Result<(), String> {
+    install_update(&app).await
+}
+
 /// 구성도 그림으로 받을 수 있는 가장 큰 크기
 const MAX_SVG_BYTES: usize = 1024 * 1024;
 

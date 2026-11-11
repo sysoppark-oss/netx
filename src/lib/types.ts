@@ -278,6 +278,15 @@ export interface Settings {
   base_url: string;
   model: string;
   redact: boolean;
+  /** 새 버전을 자동으로 설치하지 않는다(알림만) */
+  manual_update: boolean;
+}
+
+/** 자동 업데이트 상태 (src-tauri/src/updater.rs) */
+export interface UpdateStatus {
+  state: "available" | "downloading" | "installing" | "error";
+  commit: string;
+  message: string;
 }
 
 export interface SettingsView extends Settings {

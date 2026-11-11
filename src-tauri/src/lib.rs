@@ -20,6 +20,7 @@ mod registry;
 mod security;
 mod settings;
 mod setup;
+mod updater;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +33,10 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .setup(|app| {
+            commands::watch_updates(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::environment_status,
@@ -56,7 +61,8 @@ pub fn run() {
             commands::run_mixed,
             commands::open_target,
             commands::kill_process,
-            commands::save_topology
+            commands::save_topology,
+            commands::apply_update
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

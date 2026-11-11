@@ -30,6 +30,7 @@
     "allow-run-mixed",
     "allow-open-target",
     "allow-kill-process",
-    "allow-save-topology"
+    "allow-save-topology",
+    "allow-apply-update"
   ]
 }

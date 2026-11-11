@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AddStep } from "./components/AddStep";
 import { BriefPanel } from "./components/BriefPanel";
 import { NetBar } from "./components/NetBar";
+import { UpdateBar } from "./components/UpdateBar";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -391,6 +392,7 @@ export default function App() {
         <EnvBadge env={env} />
       </header>
 
+      <UpdateBar />
       <NetBar />
 
       <div className="flex min-h-0 flex-1">

@@ -409,7 +409,7 @@ mod tests {
     use super::*;
 
     fn ollama(base: &str) -> Settings {
-        Settings { provider: Provider::Ollama, base_url: base.into(), model: "m".into(), redact: false }
+        Settings { provider: Provider::Ollama, base_url: base.into(), model: "m".into(), redact: false, manual_update: false }
     }
     fn reply(content: Value) -> String {
         json!({ "message": { "content": content.to_string() } }).to_string()

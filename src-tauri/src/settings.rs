@@ -28,6 +28,9 @@ pub struct Settings {
     /// 온라인으로 보낼 때 내부 IP를 가린다.
     #[serde(default)]
     pub redact: bool,
+    /// 새 버전을 자동으로 설치하지 않는다(알림만). 기본은 자동 설치.
+    #[serde(default)]
+    pub manual_update: bool,
 }
 
 const FILE: &str = "settings.json";
@@ -97,11 +100,11 @@ mod tests {
 
     #[test]
     fn validates_ai_settings() {
-        let ok = Settings { provider: Provider::Ollama, base_url: "http://100.64.0.5:11434".into(), model: "llama3".into(), redact: false };
+        let ok = Settings { provider: Provider::Ollama, base_url: "http://100.64.0.5:11434".into(), model: "llama3".into(), redact: false, manual_update: false };
         assert!(validate(&ok).is_ok());
         assert!(validate(&Settings::default()).is_ok());
         for (url, model) in [("", "m"), ("ftp://x", "m"), ("file:///etc/passwd", "m"), ("http://x", ""), ("not a url", "m")] {
-            let s = Settings { provider: Provider::Openai, base_url: url.into(), model: model.into(), redact: true };
+            let s = Settings { provider: Provider::Openai, base_url: url.into(), model: model.into(), redact: true, manual_update: false };
             assert!(validate(&s).is_err(), "{url} {model}");
         }
     }
@@ -109,7 +112,7 @@ mod tests {
     #[test]
     fn save_and_load_round_trip() {
         let dir = std::env::temp_dir().join(format!("netx-settings-test-{}", std::process::id()));
-        let s = Settings { provider: Provider::Ollama, base_url: "http://127.0.0.1:11434".into(), model: "phi3".into(), redact: true };
+        let s = Settings { provider: Provider::Ollama, base_url: "http://127.0.0.1:11434".into(), model: "phi3".into(), redact: true, manual_update: false };
         save(&dir, &s).unwrap();
         let back = load(&dir);
         assert_eq!(back.provider, Provider::Ollama);

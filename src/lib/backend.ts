@@ -19,6 +19,7 @@ import type {
   Suggestion,
   ToolSchema,
   ToolStatus,
+  UpdateStatus,
   UserLevel,
   ValidatedPlan,
 } from "./types";
@@ -124,7 +125,7 @@ export async function briefRun(runId: number, level: UserLevel): Promise<Briefin
 }
 
 export async function getSettings(): Promise<SettingsView> {
-  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, has_key: false };
+  if (!isTauri()) return { provider: "none", base_url: "", model: "", redact: false, manual_update: false, has_key: false };
   return invoke<SettingsView>("get_settings");
 }
 
@@ -185,4 +186,17 @@ export async function killProcess(pid: number, typedName: string | null, level: 
 export async function saveTopology(svg: string): Promise<string> {
   if (!isTauri()) throw new Error("그림 저장은 NetX 앱에서만 동작합니다.");
   return invoke<string>("save_topology", { svg });
+}
+
+/** 자동 업데이트 상태 알림을 받는다. */
+export function onUpdateStatus(handler: (s: UpdateStatus) => void): () => void {
+  if (!isTauri()) return () => {};
+  const sub = listen<UpdateStatus>("update:status", (e) => handler(e.payload));
+  return () => void sub.then((off) => off());
+}
+
+/** 새 버전을 지금 내려받아 설치한다. 설치가 시작되면 NetX가 닫혔다가 다시 열린다. */
+export async function applyUpdate(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("apply_update");
 }
