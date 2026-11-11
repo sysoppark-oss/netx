@@ -3,6 +3,7 @@ name = "netx"
 version = "0.1.0"
 description = "NetX - 네트워크 도구 통합 작업대"
 authors = ["sysoppark-oss"]
+license = "AGPL-3.0-only"
 repository = "https://github.com/sysoppark-oss/netx"
 edition = "2024"
 

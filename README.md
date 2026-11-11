@@ -24,3 +24,12 @@ v0.1 개발안: [docs/DEV_PLAN_v0.1.md](docs/DEV_PLAN_v0.1.md)
 - 실행: `npm install` → `npm run tauri dev`
 - 백엔드 테스트: `cd src-tauri && cargo test`
 - 설치 파일: `main`에 푸시하면 GitHub Actions가 Windows 설치 파일(.exe, .msi)을 만듭니다. Actions 실행 화면의 Artifacts에서 내려받습니다.
+
+## 라이선스
+
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). 스토리방화벽과 같은 라이선스입니다.
+
+- 누구나 쓰고, 고치고, 다시 배포할 수 있습니다. 고친 판을 배포하거나 네트워크 서비스로 제공하면 그 소스도 같은 라이선스로 공개해야 합니다.
+- NetX가 실행하는 외부 도구(ping, mtr, tcpdump, nmap 등)는 NetX에 들어 있지 않으며 각자의 라이선스를 따릅니다.
+
+Copyright (C) 2026 박정근. 이 프로그램은 AGPL-3.0 으로 배포됩니다. 문의는 GitHub 이슈로 남겨 주세요.
