@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getWord, openChurchMail } from "../lib/backend";
+import { bridgeStatus, getWord, openChurchMail, type BridgeStatus } from "../lib/backend";
 import type { AppInfo, Verse, WordView } from "../lib/types";
 
 /**
@@ -94,6 +94,12 @@ function WithMail({ text, email }: { text: string; email: string | null }) {
 export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: () => void }) {
   const view = useWord();
   const [church, setChurch] = useState(false);
+  const [bridge, setBridge] = useState<BridgeStatus | null>(null);
+  useEffect(() => {
+    bridgeStatus()
+      .then(setBridge)
+      .catch(() => {});
+  }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
       <div className="max-h-full w-full max-w-xl overflow-y-auto rounded-lg border border-line bg-panel p-6">
@@ -105,6 +111,14 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
             {info?.channel ? ` · ${info.channel} 채널` : ""}
           </p>
         </div>
+
+        {bridge && bridge.state !== "none" && (
+          <p className="mt-2 text-xs text-dim">
+            다른 프로그램과의 연동 입구:{" "}
+            {bridge.state === "open" ? "열림" : bridge.state === "unchecked" ? "열렸지만 응답 확인 실패" : "닫힘"} · 등록된 프로그램 {bridge.members}개
+            {bridge.members === 0 ? " (등록된 프로그램이 없어 아직 아무도 대상을 넘길 수 없습니다)" : ""}
+          </p>
+        )}
 
         {view && (
           <>

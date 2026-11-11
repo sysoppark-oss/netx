@@ -36,6 +36,7 @@
     "allow-open-church-mail",
     "allow-open-terminal",
     "allow-bridge-take-handoff",
+    "allow-bridge-status",
     "allow-capture-list",
     "allow-capture-open",
     "allow-capture-rows",

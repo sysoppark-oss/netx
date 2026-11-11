@@ -296,6 +296,25 @@ pub fn bridge_take_handoff() -> Option<Handoff> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
+/// "정보" 화면용: 입구 상태와 등록된 랙 구성원 수. Windows가 아니면 입구가 없다.
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeStatus {
+    /// "open", "unchecked", "closed", "none"
+    pub state: &'static str,
+    pub members: usize,
+}
+
+#[tauri::command]
+pub fn bridge_status() -> BridgeStatus {
+    #[cfg(target_os = "windows")]
+    {
+        let (state, members) = pipe::status();
+        BridgeStatus { state: ["closed", "open", "unchecked"].get(state).copied().unwrap_or("closed"), members }
+    }
+    #[cfg(not(target_os = "windows"))]
+    BridgeStatus { state: "none", members: 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -29,6 +29,27 @@ const MAX_CLIENTS: usize = 4;
 const IDLE: Duration = Duration::from_secs(300);
 
 static CLIENTS: AtomicUsize = AtomicUsize::new(0);
+/// 입구 상태: 0 열지 못함(또는 아직), 1 열렸고 스스로 접속해 인사에 답하는 것까지 확인함, 2 열렸지만 확인 실패
+static STATE: AtomicUsize = AtomicUsize::new(0);
+
+/// "정보" 화면에 보일 상태: (상태, 등록된 랙 구성원 수)
+pub fn status() -> (usize, usize) {
+    (STATE.load(Ordering::SeqCst), registered_members().len())
+}
+
+/// 자기 입구에 접속해 인사를 보내고 답을 받는다. 통로가 실제로 열려 있는지 확인하는 용도다.
+async fn self_check(name: &str) -> bool {
+    use tokio::net::windows::named_pipe::ClientOptions;
+    let Ok(client) = ClientOptions::new().open(name) else { return false };
+    let (reader, mut writer) = tokio::io::split(client);
+    let hello = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"rack.hello\",\"params\":{\"client\":\"netx-selfcheck\",\"api\":[1,0]}}\n";
+    if writer.write_all(hello.as_bytes()).await.is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    let read = tokio::time::timeout(Duration::from_secs(5), BufReader::new(reader).read_line(&mut line)).await;
+    matches!(read, Ok(Ok(n)) if n > 0) && line.contains("\"module\":\"netx\"")
+}
 
 struct AppHost(AppHandle);
 
@@ -153,6 +174,13 @@ pub fn start(app: AppHandle) {
         let name = random_name();
         let Ok(mut server) = create(&name, true) else { return };
         publish(&name);
+        {
+            let name = name.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                STATE.store(if self_check(&name).await { 1 } else { 2 }, Ordering::SeqCst);
+            });
+        }
         loop {
             if server.connect().await.is_err() {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -177,6 +205,7 @@ pub fn start(app: AppHandle) {
                 CLIENTS.fetch_sub(1, Ordering::SeqCst);
             });
         }
+        STATE.store(0, Ordering::SeqCst);
         unpublish();
     });
 }

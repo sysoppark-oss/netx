@@ -238,3 +238,14 @@ export async function onHandoff(handler: (h: Handoff) => void): Promise<() => vo
   void take();
   return stop;
 }
+
+export interface BridgeStatus {
+  state: "open" | "unchecked" | "closed" | "none";
+  members: number;
+}
+
+/** 다른 프로그램과의 연동 입구 상태 ("정보" 화면에 보인다) */
+export async function bridgeStatus(): Promise<BridgeStatus> {
+  if (!isTauri()) return { state: "none", members: 0 };
+  return invoke<BridgeStatus>("bridge_status");
+}
