@@ -1,0 +1,128 @@
+import { useEffect, useState } from "react";
+import { getWord, openChurchMail } from "../lib/backend";
+import type { AppInfo, Verse, WordView } from "../lib/types";
+
+/**
+ * 말씀 표시 (규칙: word/README.md).
+ * - 시작 화면, 기다리는 화면(진행 표시 아래), 빈 목록 화면, "정보" 화면에만 쓴다.
+ * - 확인 창·승인 창, 경고·오류 알림, 진단 결과와 원본 출력, 내보내는 파일에는 넣지 않는다.
+ * - 항상 표시한다(끄는 설정 없음). 본문은 자르지 않고 글자로만 보인다. 몇 번 보였는지 세지 않는다.
+ */
+
+/** 한 화면에서 구절을 바꾸는 간격. 10초보다 빨리 바꾸지 않는다. */
+const ROTATE_MS = 20_000;
+
+const dateKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+
+// 모든 화면이 같은 순간에 같은 구절을 보이도록 자료와 시작 시각을 함께 쓴다.
+let loaded: { key: string; view: Promise<WordView | null> } | null = null;
+const startedAt = Date.now();
+
+function load(now: Date): Promise<WordView | null> {
+  const key = dateKey(now);
+  if (loaded?.key !== key) loaded = { key, view: getWord(now).catch(() => null) };
+  return loaded.view;
+}
+
+/** 말씀 자료. 날짜가 바뀌면 다시 받는다. */
+function useWord(): WordView | null {
+  const [view, setView] = useState<WordView | null>(null);
+  const [day, setDay] = useState(() => dateKey(new Date()));
+  useEffect(() => {
+    let alive = true;
+    void load(new Date()).then((v) => alive && setView(v));
+    return () => {
+      alive = false;
+    };
+  }, [day]);
+  useEffect(() => {
+    const timer = setInterval(() => setDay(dateKey(new Date())), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return view;
+}
+
+/** 지금 보일 구절: 오늘의 시작 위치에서 차례로 돈다. */
+function useWaitingVerse(): { verse: Verse; version: string } | null {
+  const view = useWord();
+  const [step, setStep] = useState(() => Math.floor((Date.now() - startedAt) / ROTATE_MS));
+  useEffect(() => {
+    const timer = setInterval(() => setStep(Math.floor((Date.now() - startedAt) / ROTATE_MS)), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  if (!view || view.waiting.length === 0) return null;
+  return { verse: view.waiting[(view.start + step) % view.waiting.length], version: view.version };
+}
+
+/** 본문, 그 아래 장·절과 번역본 이름 */
+export function WordCard({ className = "" }: { className?: string }) {
+  const now = useWaitingVerse();
+  if (!now) return null;
+  return (
+    <figure className={`text-xs leading-relaxed text-dim ${className}`}>
+      <blockquote className="whitespace-pre-line text-ink/80">{now.verse.text}</blockquote>
+      <figcaption className="mt-1">
+        {now.verse.ref} · {now.version}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** 글 가운데 전자우편 주소만 누를 수 있게 한다. 누르면 메일 프로그램이 열리는 것까지만 한다. */
+function WithMail({ text, email }: { text: string; email: string | null }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!email || !text.includes(email)) return <>{text}</>;
+  const [before, ...rest] = text.split(email);
+  return (
+    <>
+      {before}
+      <button type="button" onClick={() => openChurchMail().catch((e) => setFailed(String(e)))} className="underline decoration-dotted hover:text-accent" title="메일 프로그램 열기">
+        {email}
+      </button>
+      {rest.join(email)}
+      {failed && <span className="ml-2 text-dim">({failed})</span>}
+    </>
+  );
+}
+
+/** "정보" 화면: 프로그램 정보, 헌정 문구, [교회 안내] */
+export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: () => void }) {
+  const view = useWord();
+  const [church, setChurch] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+      <div className="max-h-full w-full max-w-xl overflow-y-auto rounded-lg border border-line bg-panel p-6">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-semibold">정보</h2>
+          <p className="font-mono text-xs text-dim">
+            NetX v{info?.version ?? "…"}
+            {info?.commit ? ` · ${info.commit}` : ""}
+            {info?.channel ? ` · ${info.channel} 채널` : ""}
+          </p>
+        </div>
+
+        {view && (
+          <>
+            <p className="mt-4 text-sm leading-relaxed whitespace-pre-line">{view.dedication}</p>
+            <div className="mt-5 border-t border-line pt-4">
+              <button type="button" onClick={() => setChurch((v) => !v)} className="rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent">
+                교회 안내 {church ? "▾" : "▸"}
+              </button>
+              {church && (
+                <p className="mt-3 text-sm leading-relaxed whitespace-pre-line">
+                  <WithMail text={view.church} email={view.email} />
+                </p>
+              )}
+            </div>
+          </>
+        )}
+
+        <div className="mt-6 flex justify-end">
+          <button onClick={onClose} className="rounded-md border border-line px-4 py-2 text-sm text-dim">
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

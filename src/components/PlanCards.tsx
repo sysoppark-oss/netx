@@ -1,3 +1,4 @@
+import { WordCard } from "./Word";
 import { useEffect, useRef, useState } from "react";
 import { killProcess, openTarget } from "../lib/backend";
 import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserLevel, ValidatedPlan, ValidatedStep } from "../lib/types";
@@ -240,7 +241,13 @@ function StepCard({
         </ul>
       )}
 
-      {state?.status === "running" && <Progress startedAt={state.started_at} estimateSecs={step.estimate_secs} />}
+      {state?.status === "running" && (
+        <>
+          <Progress startedAt={state.started_at} estimateSecs={step.estimate_secs} />
+          {/* 기다리는 동안에만 보인다. 결과와 원본 출력에는 섞지 않는다. */}
+          <WordCard className="mt-3 border-l-2 border-line pl-3" />
+        </>
+      )}
 
       {result && state?.status !== "running" && <ResultView result={result} showFacts={showCommand} level={level} />}
 

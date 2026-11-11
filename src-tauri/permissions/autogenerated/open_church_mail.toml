@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-church-mail"
+description = "Enables the open_church_mail command without any pre-configured scope."
+commands.allow = ["open_church_mail"]
+
+[[permission]]
+identifier = "deny-open-church-mail"
+description = "Denies the open_church_mail command without any pre-configured scope."
+commands.deny = ["open_church_mail"]

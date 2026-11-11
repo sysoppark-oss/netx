@@ -273,6 +273,23 @@ pub fn save_topology(app: AppHandle, svg: String) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+// ---- 말씀 표시 ----
+
+/// 말씀 자료. `year`·`month`·`day`는 사용자 PC의 현지 날짜다(구절을 고르는 데만 쓴다).
+#[tauri::command]
+pub fn get_word(year: i32, month: u32, day: u32) -> Result<crate::word::WordView, String> {
+    crate::word::view(year, month, day)
+}
+
+/// 교회 안내에 적힌 전자우편 주소로 사용자의 메일 프로그램을 연다. 주소는 문안 파일에서만 읽고, 화면에서 받지 않는다.
+/// 메일을 보내거나 내용을 채우지 않는다.
+#[tauri::command]
+pub fn open_church_mail() -> Result<(), String> {
+    let addr = crate::word::church_email().ok_or("전자우편 주소가 없습니다")?;
+    let program = if cfg!(target_os = "windows") { "explorer.exe" } else { "xdg-open" };
+    std::process::Command::new(program).arg(format!("mailto:{addr}")).stdin(std::process::Stdio::null()).spawn().map(|_| ()).map_err(|e| format!("메일 프로그램을 열지 못했습니다: {e}"))
+}
+
 async fn require_wsl() -> Result<(), String> {
     if cfg!(target_os = "windows") && !matches!(env_check::check().await.mode, Mode::Full) {
         return Err("WSL2가 필요합니다. 관리자 PowerShell에서 `wsl --install` 후 재부팅하세요.".into());

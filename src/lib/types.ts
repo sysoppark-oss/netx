@@ -312,3 +312,27 @@ export interface SettingsView extends Settings {
   /** SNMP 커뮤니티 문자열이 저장되어 있는지 (값은 화면으로 오지 않는다) */
   has_snmp: boolean;
 }
+
+/** 말씀 표시 자료 (src-tauri/src/word.rs, 규칙은 word/README.md) */
+export interface Verse {
+  id: string;
+  /** 장·절 */
+  ref: string;
+  group: string;
+  long: boolean;
+  text: string;
+}
+
+export interface WordView {
+  /** 번역본 이름 */
+  version: string;
+  today: Verse | null;
+  /** 기다리는 화면·빈 화면·시작 화면에 차례로 돌리는 구절 */
+  waiting: Verse[];
+  start: number;
+  /** "정보" 화면의 헌정 문구 */
+  dedication: string;
+  /** [교회 안내] 문안 */
+  church: string;
+  email: string | null;
+}

@@ -31,6 +31,8 @@
     "allow-open-target",
     "allow-kill-process",
     "allow-save-topology",
-    "allow-apply-update"
+    "allow-apply-update",
+    "allow-get-word",
+    "allow-open-church-mail"
   ]
 }

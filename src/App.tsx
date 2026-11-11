@@ -3,6 +3,7 @@ import { AddStep } from "./components/AddStep";
 import { BriefPanel } from "./components/BriefPanel";
 import { NetBar } from "./components/NetBar";
 import { UpdateBar } from "./components/UpdateBar";
+import { AboutDialog, WordCard } from "./components/Word";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -63,6 +64,7 @@ export default function App() {
   const [tools, setTools] = useState<ToolSchema[]>([]);
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   // 가운데 화면에 띄운 것: AI 제안 또는 레시피
   const [ai, setAi] = useState<AiPlan | null>(null);
@@ -328,6 +330,9 @@ export default function App() {
             v{info?.version ?? "…"}
             {info?.commit ? ` · ${info.commit}` : ""}
           </span>
+          <button type="button" onClick={() => setAboutOpen(true)} className="text-xs text-dim underline decoration-dotted hover:text-ink">
+            정보
+          </button>
         </div>
 
         <form
@@ -645,6 +650,7 @@ export default function App() {
                 <p className="mt-6 text-xs text-dim">
                   현재 등급: <span className="text-ink">{levelInfo.label}</span> · {levelInfo.hint}
                 </p>
+                <WordCard className="mt-10 border-t border-line pt-6" />
               </div>
             </div>
           )}
@@ -659,7 +665,10 @@ export default function App() {
                 onPick={(o) => setAppendReq((r) => ({ text: `${o.flag}${o.type === "boolean" ? "" : " "}`, n: r.n + 1 }))}
               />
             ) : (
-              <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>
+              <>
+                <p className="text-sm text-dim">왼쪽에서 도구를 고르면 옵션이 표시됩니다.</p>
+                <WordCard className="mt-8 border-t border-line pt-5" />
+              </>
             )}
           </aside>
         )}
@@ -717,6 +726,7 @@ export default function App() {
         )}
       </footer>
 
+      {aboutOpen && <AboutDialog info={info} onClose={() => setAboutOpen(false)} />}
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}

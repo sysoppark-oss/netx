@@ -22,6 +22,7 @@ mod settings;
 mod setup;
 mod snmp;
 mod updater;
+mod word;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -63,7 +64,9 @@ pub fn run() {
             commands::open_target,
             commands::kill_process,
             commands::save_topology,
-            commands::apply_update
+            commands::apply_update,
+            commands::get_word,
+            commands::open_church_mail
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

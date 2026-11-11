@@ -20,6 +20,7 @@ import type {
   ToolSchema,
   ToolStatus,
   UpdateStatus,
+  WordView,
   UserLevel,
   ValidatedPlan,
 } from "./types";
@@ -199,4 +200,16 @@ export function onUpdateStatus(handler: (s: UpdateStatus) => void): () => void {
 export async function applyUpdate(): Promise<void> {
   if (!isTauri()) return;
   return invoke<void>("apply_update");
+}
+
+/** 말씀 자료를 받는다. 날짜는 이 PC의 현지 날짜이고, 구절을 고르는 데만 쓴다. 네트워크를 쓰지 않는다. */
+export async function getWord(date: Date): Promise<WordView | null> {
+  if (!isTauri()) return null;
+  return invoke<WordView>("get_word", { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() });
+}
+
+/** 교회 안내에 적힌 전자우편 주소로 메일 프로그램을 연다(주소는 백엔드가 문안에서 읽는다). */
+export async function openChurchMail(): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("open_church_mail");
 }
