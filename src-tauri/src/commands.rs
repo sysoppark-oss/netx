@@ -153,7 +153,7 @@ fn update_status(app: &AppHandle, state: &'static str, commit: &str, message: im
 }
 
 const UPDATE_DEFERRED: &str = "실행 중인 작업이 있어 설치를 미뤘습니다. 작업이 끝난 뒤 [지금 업데이트]를 누르거나 NetX를 다시 켜면 설치됩니다.";
-const UPDATE_NOTICE: &str = "새 버전이 있습니다. 정식판은 업데이트 서명 검증이 들어가기 전까지 자동으로 설치하지 않습니다. GitHub의 sysoppark-oss/netx에서 설치 파일을 받아 직접 설치하세요.";
+const UPDATE_NOTICE: &str = "새 버전이 있습니다. 이 빌드는 스스로 설치하지 않습니다. GitHub의 sysoppark-oss/netx에서 설치 파일을 받아 직접 설치하세요.";
 
 /// 새 버전을 내려받아 확인하고 설치 프로그램을 실행한 뒤 NetX를 끝낸다.
 /// 실행 중인 작업이 있으면(내려받는 사이에 시작된 것 포함) 설치하지 않고 미뤘다고 알린다.
@@ -185,8 +185,8 @@ async fn install_update(app: &AppHandle, m: &crate::updater::Manifest) -> Result
 }
 
 /// 시작한 뒤 한 번, 그 뒤로 3시간마다 새 버전을 확인한다.
-/// 개발판은 시작 직후에 (설정에서 끄지 않았고 실행 중인 작업이 없으면) 바로 설치하고, 그 밖에는 알리기만 한다.
-/// 정식판은 언제나 알리기만 한다(`updater::decide`).
+/// 시작 직후에 (설정에서 끄지 않았고 실행 중인 작업이 없으면) 바로 설치하고, 그 밖에는 알리기만 한다(`updater::decide`).
+/// 설치 파일은 SHA-256과 업데이트 서명을 확인한 뒤에만 실행한다(`updater::download`).
 pub fn watch_updates(app: AppHandle) {
     use crate::updater::Action;
     if !crate::updater::enabled() {

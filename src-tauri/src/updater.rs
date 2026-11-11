@@ -6,7 +6,6 @@
 //! - 설치 파일은 업데이트 서명(Tauri 서명 도구가 만드는 minisign 서명, 스토리방화벽과 같은 방식)을 확인한 뒤에만 실행한다.
 //!   공개 키는 이 파일에 들어 있고(`PUBLIC_KEY`), 개인 키는 저장소 비밀값에만 있다. 서명 파일(`<설치 파일>.sig`)이
 //!   없거나 맞지 않으면 설치하지 않는다. 같은 곳에 올라온 SHA-256도 함께 확인한다.
-//!   정식판(main 채널)은 서명 검증을 노트북에서 확인하기 전까지 설치하지 않고 알리기만 한다(`installs`).
 //! - 실행 중인 작업이 있으면 설치를 미룬다(`decide`). 설치하면 NetX가 닫히기 때문이다.
 //! - 보내는 것은 정해진 주소의 파일을 달라는 요청뿐이다. 이 PC의 이름, 설정, 진단 결과는 보내지 않는다.
 
@@ -73,16 +72,15 @@ pub fn setup_name(channel: &str) -> Option<&'static str> {
 }
 
 /// 이 채널에서 NetX가 스스로 설치까지 해도 되는지.
-/// 설치 파일의 서명을 확인하는 절차가 아직 없으므로 개발판(dev)만 허용한다.
-/// 정식판(main)은 Tauri 업데이트 서명 검증을 넣은 뒤에 연다.
+/// 서명 검증이 들어간 뒤로 개발판(dev)과 정식판(main) 모두 허용한다. 그 밖의 채널은 알리기만 한다.
 pub fn installs(channel: &str) -> bool {
-    channel == "dev"
+    matches!(channel, "dev" | "main")
 }
 
 /// 새 버전을 찾았을 때 할 일
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// 알리기만 한다. 설치 버튼도 없다(서명 검증 전의 정식판).
+    /// 알리기만 한다. 설치 버튼도 없다(정해진 채널이 아닐 때).
     Notice,
     /// 바로 내려받아 설치한다.
     Install,
@@ -212,19 +210,21 @@ mod tests {
     }
 
     #[test]
-    fn main_channel_only_notifies_and_running_work_defers() {
-        // 정식판은 어떤 경우에도 설치하지 않는다.
+    fn both_channels_install_and_running_work_defers() {
+        assert!(installs("main") && installs("dev") && !installs("") && !installs("DEV") && !installs("feature"));
+        // 정해진 채널이 아니면 어떤 경우에도 설치하지 않는다.
         for (start, manual, busy) in [(true, false, false), (true, true, false), (false, false, true), (true, false, true)] {
-            assert_eq!(decide("main", start, manual, busy), Action::Notice);
+            assert_eq!(decide("feature", start, manual, busy), Action::Notice);
         }
-        assert!(!installs("main") && installs("dev") && !installs("") && !installs("DEV"));
-        // 개발판: 시작 직후이고 자동 설치가 켜져 있고 한가할 때만 바로 설치한다.
-        assert_eq!(decide("dev", true, false, false), Action::Install);
-        assert_eq!(decide("dev", true, false, true), Action::Defer);
-        assert_eq!(decide("dev", true, true, false), Action::Offer);
-        assert_eq!(decide("dev", true, true, true), Action::Offer);
-        assert_eq!(decide("dev", false, false, false), Action::Offer);
-        assert_eq!(decide("dev", false, false, true), Action::Offer);
+        // 시작 직후이고 자동 설치가 켜져 있고 한가할 때만 바로 설치한다.
+        for channel in ["dev", "main"] {
+            assert_eq!(decide(channel, true, false, false), Action::Install);
+            assert_eq!(decide(channel, true, false, true), Action::Defer);
+            assert_eq!(decide(channel, true, true, false), Action::Offer);
+            assert_eq!(decide(channel, true, true, true), Action::Offer);
+            assert_eq!(decide(channel, false, false, false), Action::Offer);
+            assert_eq!(decide(channel, false, false, true), Action::Offer);
+        }
     }
 
     // 시험용으로 한 번 만들고 버린 키와, 그 키로 `tauri signer sign`이 만든 서명
