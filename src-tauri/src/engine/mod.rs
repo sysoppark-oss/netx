@@ -314,6 +314,13 @@ fn build_command(job: &Job, tag: &str, work_dir: &Path) -> Command {
 }
 
 fn build_windows_command(job: &Job) -> Result<Command, String> {
+    // 리눅스 시험용: Windows 조회 결과를 흉내 낸 글 파일을 대신 읽는다(요새 도면 화면을 보려고).
+    #[cfg(not(target_os = "windows"))]
+    if let Some(file) = std::env::var_os("NETX_TEST_WINPORTS").filter(|_| job.program == "winports") {
+        let mut cmd = Command::new("cat");
+        cmd.arg(file).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        return Ok(cmd);
+    }
     if !cfg!(target_os = "windows") {
         return Err("Windows에서만 동작하는 도구입니다".into());
     }

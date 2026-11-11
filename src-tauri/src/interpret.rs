@@ -40,6 +40,41 @@ pub enum Chart {
     Line { title: String, unit: String, points: Vec<f64> },
     /// 계기판 (iperf3 최종 속도)
     Gauge { title: String, unit: String, value: f64, max: f64 },
+    /// 라우팅 노선도 (mtr). `from`은 끝까지 이어지는 손실이 시작되는 홉 번호(없으면 0)
+    Route { title: String, unit: String, hops: Vec<RouteHop>, from: u32 },
+    /// 소나 레이더 (fping으로 응답한 장비)
+    Radar { title: String, unit: String, hosts: Vec<RadarHost> },
+    /// 요새 도면 (Windows에서 포트를 열고 있는 프로그램)
+    Fortress { title: String, unit: String, doors: Vec<Door> },
+    /// 패킷 하이웨이 (캡처 파일)
+    Highway { title: String, unit: String, road: crate::pcap::Highway },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RouteHop {
+    pub n: u32,
+    pub host: String,
+    pub loss: f64,
+    pub avg: f64,
+    pub worst: f64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RadarHost {
+    pub host: String,
+    pub ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Door {
+    pub proto: String,
+    pub port: u16,
+    pub process: String,
+    pub pid: u32,
+    /// 들어오는 연결을 기다리는 문인지(아니면 이미 맺어진 연결)
+    pub listening: bool,
+    /// 이 문으로 맺어진 연결 수
+    pub connections: u32,
 }
 
 /// 결과에서 바로 접속해 볼 수 있는 대상(열린 포트)
@@ -121,6 +156,16 @@ impl StepResult {
         self.charts.push(chart);
         self
     }
+}
+
+/// 캡처 결과에 패킷 하이웨이 그림을 붙인다(캡처 파일을 읽은 쪽에서 부른다).
+pub fn with_highway(mut result: StepResult, road: crate::pcap::Highway) -> StepResult {
+    let trouble = road.flows.iter().filter(|f| f.class == "trouble").count();
+    if trouble > 0 {
+        result.facts.push(Fact { label: "재전송·거부가 있는 상대".into(), value: format!("{trouble}곳") });
+    }
+    result.charts.insert(0, Chart::Highway { title: "패킷 하이웨이".into(), unit: "선에 마우스를 올리면 속도와 상대".into(), road });
+    result
 }
 
 /// 끝난 단계의 출력을 해석한다.
@@ -294,6 +339,13 @@ fn mtr(lines: &[String]) -> Option<StepResult> {
             .fact("목적지 손실", format!("{:.0}%", last.loss))
             .fact("목적지 평균", ms(last.avg))
             .fact("가장 느린 응답", ms(hops.iter().map(|h| h.worst).fold(0.0, f64::max)))
+            .chart(Chart::Route {
+                title: "라우팅 노선도".into(),
+                unit: "역을 누르면 해설".into(),
+                hops: hops.iter().take(40).map(|h| RouteHop { n: h.n, host: h.host.clone(), loss: h.loss, avg: h.avg, worst: h.worst }).collect(),
+                // 목적지까지 손실이 이어질 때만 그 시작 홉을 알린다.
+                from: if last.loss > 0.0 { hops.get(persistent_from).map(|h| h.n).unwrap_or(0) } else { 0 },
+            })
             .chart(Chart::Bars { title: "홉별 평균 지연".into(), unit: "ms".into(), bars }),
     )
 }
@@ -445,6 +497,7 @@ fn fping(lines: &[String]) -> Option<StepResult> {
     Some(
         StepResult::new(Light::Green, format!("장비 {}대가 응답했습니다. 핑을 막아 둔 장비는 여기에 나오지 않습니다.", hosts.len()))
             .fact("응답한 장비", format!("{}대", hosts.len()))
+            .chart(Chart::Radar { title: "소나 레이더".into(), unit: "점을 누르면 주소와 응답 시간".into(), hosts: hosts.iter().take(254).map(|(h, t)| RadarHost { host: h.clone(), ms: *t }).collect() })
             .chart(Chart::Bars { title: "장비별 응답 시간".into(), unit: "ms".into(), bars }),
     )
 }
@@ -531,6 +584,10 @@ fn winports(lines: &[String]) -> Option<StepResult> {
     counts.sort_by(|a, b| b.1.cmp(&a.1));
     let bars: Vec<Bar> = counts.iter().take(12).map(|(n, k)| Bar { label: n.clone(), value: *k as f64, light: Light::Info, note: String::new() }).collect();
     let mut r = StepResult::new(Light::Info, format!("Windows에서 {shown}{more}이(가) 쓰고 있습니다.")).fact("소켓 수", rows.len().to_string()).fact("프로그램 수", owners.len().to_string());
+    let doors = winports_doors(&rows);
+    if !doors.is_empty() {
+        r = r.chart(Chart::Fortress { title: "요새 도면".into(), unit: "문을 누르면 프로그램".into(), doors });
+    }
     if bars.len() > 1 {
         r = r.chart(Chart::Bars { title: "프로그램별 소켓 수".into(), unit: "개".into(), bars });
     }
@@ -557,6 +614,27 @@ fn winports(lines: &[String]) -> Option<StepResult> {
         })
         .collect();
     Some(r)
+}
+
+/// 요새 도면의 문: (프로토콜, 포트, 프로세스)마다 하나. 열만 `PROTO LOCAL PID PROCESS STATE…`
+fn winports_doors(rows: &[Vec<&str>]) -> Vec<Door> {
+    let mut doors: Vec<Door> = Vec::new();
+    for c in rows.iter().filter(|c| c.len() >= 5) {
+        let (Some(port), Ok(pid)) = (c[1].rsplit(':').next().and_then(|p| p.parse::<u16>().ok()), c[2].parse::<u32>()) else { continue };
+        // 프로그램 이름을 모를 때의 "(알 수 없음)"은 빈칸 때문에 세 칸으로 나뉘어 있다.
+        let (process, state) = if c[3] == "(알" && c.get(5) == Some(&"없음)") { ("(알 수 없음)", c.get(6).copied().unwrap_or("")) } else { (c[3], c[4]) };
+        let connected = state.starts_with("연결됨");
+        match doors.iter_mut().find(|d| d.port == port && d.pid == pid && d.proto == c[0]) {
+            Some(d) => {
+                d.listening |= !connected;
+                d.connections += u32::from(connected);
+            }
+            None => doors.push(Door { proto: c[0].to_string(), port, process: process.to_string(), pid, listening: !connected, connections: u32::from(connected) }),
+        }
+    }
+    doors.sort_by(|a, b| (a.port, &a.proto, a.pid).cmp(&(b.port, &b.proto, b.pid)));
+    doors.truncate(48);
+    doors
 }
 
 /// 내장 포트 스캔: "192.168.0.1  open  22(SSH) 80(HTTP)"
@@ -819,7 +897,7 @@ mod tests {
         let r = done("mtr", &format!("{MTR_HEAD}  1.|-- gw.mshome.net (172.26.224.1)  0.0%    10    0.5   0.8   0.4   2.4   0.6\n  2.|-- 192.168.123.1                 0.0%    10    5.3   3.9   2.8   6.5   1.2\n  3.|-- 8.8.8.8                       0.0%    10   35.0  36.1  34.0  40.2   1.9"), 0);
         assert_eq!(r.light, Light::Green, "{}", r.text);
         assert!(r.text.contains("3개 홉"));
-        let Chart::Bars { bars, .. } = &r.charts[0] else { panic!() };
+        let Some(Chart::Bars { bars, .. }) = r.charts.iter().find(|c| matches!(c, Chart::Bars { .. })) else { panic!() };
         assert_eq!(bars.len(), 3);
         assert_eq!(bars[0].label, "1. gw.mshome.net (172.26.224.1)");
         assert_eq!(bars[2].value, 36.1);
@@ -830,7 +908,7 @@ mod tests {
         let r = done("mtr", &format!("{MTR_HEAD}  1.|-- 192.168.0.1   0.0%  10  1.0  1.0  1.0  1.0  0.0\n  2.|-- 1.208.165.133 80.0%  10 18.9 15.8 12.6 18.9  4.5\n  3.|-- 8.8.8.8       0.0%  10 35.0 36.1 34.0 40.2  1.9"), 0);
         assert_eq!(r.light, Light::Green, "{}", r.text);
         assert!(r.text.contains("2번 홉의 손실"));
-        let Chart::Bars { bars, .. } = &r.charts[0] else { panic!() };
+        let Some(Chart::Bars { bars, .. }) = r.charts.iter().find(|c| matches!(c, Chart::Bars { .. })) else { panic!() };
         assert_eq!(bars[1].light, Light::Yellow);
     }
 
@@ -886,10 +964,33 @@ mod tests {
     }
 
     #[test]
+    fn pictures_for_route_radar_and_fortress() {
+        let r = done("mtr", &format!("{MTR_HEAD}  1.|-- 192.168.0.1   0.0%  10  1.0  1.0  1.0  1.0  0.0\n  2.|-- 10.1.1.1     30.0%  10 18.9 15.8 12.6 18.9  4.5\n  3.|-- 8.8.8.8      30.0%  10 35.0 36.1 34.0 40.2  1.9"), 0);
+        let Chart::Route { hops, from, .. } = &r.charts[0] else { panic!() };
+        assert_eq!((hops.len(), *from, hops[1].loss, hops[2].host.as_str()), (3, 2, 30.0, "8.8.8.8"));
+        // 중간 홉만 손실이면 시작 홉을 알리지 않는다.
+        let r = done("mtr", &format!("{MTR_HEAD}  1.|-- 192.168.0.1   0.0%  10  1.0  1.0  1.0  1.0  0.0\n  2.|-- 1.208.165.133 80.0%  10 18.9 15.8 12.6 18.9  4.5\n  3.|-- 8.8.8.8       0.0%  10 35.0 36.1 34.0 40.2  1.9"), 0);
+        assert!(matches!(&r.charts[0], Chart::Route { from: 0, .. }));
+
+        let r = done("fping", "192.168.0.1 (0.52 ms)\n192.168.0.7\n", 1);
+        let Chart::Radar { hosts, .. } = &r.charts[0] else { panic!() };
+        assert_eq!(hosts, &[RadarHost { host: "192.168.0.1".into(), ms: Some(0.52) }, RadarHost { host: "192.168.0.7".into(), ms: None }]);
+
+        let out = "PROTO LOCAL                        PID      PROCESS                STATE\nTCP   0.0.0.0:445                  4        System                 수신 대기\nTCP   192.168.0.10:50001           4321     chrome                 연결됨 93.184.216.34:443\nTCP   192.168.0.10:50001           4321     chrome                 연결됨 93.184.216.35:443\nUDP   0.0.0.0:5353                 4321     chrome                 -\nTCP   0.0.0.0:60000                9988     (알 수 없음)             연결됨 1.2.3.4:80";
+        let r = done("winports", out, 0);
+        let Chart::Fortress { doors, .. } = &r.charts[0] else { panic!("{:?}", r.charts) };
+        assert_eq!(doors.len(), 4);
+        assert_eq!((doors[3].process.as_str(), doors[3].listening, doors[3].connections), ("(알 수 없음)", false, 1));
+        assert_eq!((doors[0].port, doors[0].process.as_str(), doors[0].listening, doors[0].connections), (445, "System", true, 0));
+        assert_eq!((doors[2].port, doors[2].listening, doors[2].connections), (50001, false, 2));
+        assert!(doors[1].listening && doors[1].proto == "UDP");
+    }
+
+    #[test]
     fn fping_hosts() {
         let r = done("fping", "192.168.0.1 (0.52 ms)\n192.168.0.7 (3.10 ms)\n", 1);
         assert!(r.text.contains("2대"));
-        let Chart::Bars { bars, .. } = &r.charts[0] else { panic!() };
+        let Some(Chart::Bars { bars, .. }) = r.charts.iter().find(|c| matches!(c, Chart::Bars { .. })) else { panic!() };
         assert_eq!(bars[1].value, 3.10);
         assert_eq!(done("fping", "", 1).light, Light::Yellow);
     }

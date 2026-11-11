@@ -14,6 +14,7 @@ mod interpret;
 mod manual;
 mod model;
 mod netinfo;
+mod pcap;
 mod planner;
 mod prockill;
 mod recipe;

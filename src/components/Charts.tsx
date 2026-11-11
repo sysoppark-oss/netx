@@ -1,4 +1,5 @@
 import type { Chart, Light } from "../lib/types";
+import { FortressView, HighwayView, RadarView, RouteMap } from "./Viz";
 
 // 결과 그래프. 외부 라이브러리 없이 SVG와 CSS로 그린다.
 
@@ -25,6 +26,10 @@ export function ChartView({ chart }: { chart: Chart }) {
       {chart.kind === "bars" && <Bars chart={chart} />}
       {chart.kind === "line" && <Line chart={chart} />}
       {chart.kind === "gauge" && <Gauge chart={chart} />}
+      {chart.kind === "route" && <RouteMap hops={chart.hops} from={chart.from} />}
+      {chart.kind === "radar" && <RadarView hosts={chart.hosts} />}
+      {chart.kind === "fortress" && <FortressView doors={chart.doors} />}
+      {chart.kind === "highway" && <HighwayView road={chart.road} />}
     </figure>
   );
 }

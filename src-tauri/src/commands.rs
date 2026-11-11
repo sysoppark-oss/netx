@@ -112,6 +112,14 @@ fn with_outputs<R>(f: impl FnOnce(&mut std::collections::HashMap<(u64, u32), Vec
     f(guard.get_or_insert_with(std::collections::HashMap::new))
 }
 
+/// 실행 중인 캡처 단계의 캡처 파일 이름. 단계가 끝나면 그 파일을 읽어 그림을 만들고 지운다.
+static CAPTURES: std::sync::Mutex<Option<std::collections::HashMap<(u64, u32), String>>> = std::sync::Mutex::new(None);
+
+fn with_captures<R>(f: impl FnOnce(&mut std::collections::HashMap<(u64, u32), String>) -> R) -> R {
+    let mut guard = CAPTURES.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(std::collections::HashMap::new))
+}
+
 impl Sink for TauriSink {
     fn output(&self, ev: OutputEvent) {
         planner::record_output(ev.run_id, ev.order, &ev.line);
@@ -128,7 +136,13 @@ impl Sink for TauriSink {
         // 단계가 끝나면 출력을 해석해 결과 해설을 보낸다.
         if ev.status != engine::StepStatus::Running {
             let lines = with_outputs(|m| m.remove(&(ev.run_id, ev.order))).unwrap_or_default();
-            let result = interpret::interpret(&ev.program, &lines, ev.status, ev.exit_code);
+            let mut result = interpret::interpret(&ev.program, &lines, ev.status, ev.exit_code);
+            // 캡처였으면 저장된 파일을 읽어 패킷 하이웨이 그림을 붙인다.
+            if let Some(name) = with_captures(|m| m.remove(&(ev.run_id, ev.order))) {
+                if let Some(road) = data_dirs(&self.0).ok().and_then(|(_, work)| crate::pcap::read(&work.join(name))) {
+                    result = interpret::with_highway(result, road);
+                }
+            }
             let _ = self.0.emit("run:result", ResultEvent { run_id: ev.run_id, order: ev.order, result });
         }
         let _ = self.0.emit("run:step", ev);
@@ -376,6 +390,11 @@ async fn start_plan(
     let orders = jobs.iter().map(|j| j.order).collect();
     let run_id = engine::start(jobs, plan.parallel, work_dir, Arc::new(TauriSink(app)));
     planner::record_start(run_id, title, &steps);
+    for s in steps.iter().filter(|s| s.tool == "tcpdump") {
+        if let Some(name) = crate::pcap::capture_name(&s.argv) {
+            with_captures(|m| m.insert((run_id, s.order), name.to_string()));
+        }
+    }
 
     for s in &steps {
         audit::log(

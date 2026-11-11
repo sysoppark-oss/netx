@@ -203,7 +203,50 @@ export interface Bar {
 export type Chart =
   | { kind: "bars"; title: string; unit: string; bars: Bar[] }
   | { kind: "line"; title: string; unit: string; points: number[] }
-  | { kind: "gauge"; title: string; unit: string; value: number; max: number };
+  | { kind: "gauge"; title: string; unit: string; value: number; max: number }
+  | { kind: "route"; title: string; unit: string; hops: RouteHop[]; from: number }
+  | { kind: "radar"; title: string; unit: string; hosts: RadarHost[] }
+  | { kind: "fortress"; title: string; unit: string; doors: Door[] }
+  | { kind: "highway"; title: string; unit: string; road: Highway };
+
+/** 시각화 자료 (src-tauri/src/interpret.rs, pcap.rs) */
+export interface RouteHop {
+  n: number;
+  host: string;
+  loss: number;
+  avg: number;
+  worst: number;
+}
+export interface RadarHost {
+  host: string;
+  ms: number | null;
+}
+export interface Door {
+  proto: string;
+  port: number;
+  process: string;
+  pid: number;
+  listening: boolean;
+  connections: number;
+}
+export interface Flow {
+  peer: string;
+  port: number;
+  proto: string;
+  class: "secure" | "dns" | "plain" | "trouble";
+  sent: number;
+  received: number;
+  bytes: number;
+  trouble: number;
+  kbps: number;
+}
+export interface Highway {
+  me: string;
+  packets: number;
+  seconds: number;
+  flows: Flow[];
+  more: number;
+}
 
 export interface StepResult {
   light: Light;
