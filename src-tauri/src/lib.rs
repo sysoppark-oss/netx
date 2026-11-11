@@ -5,6 +5,7 @@
 //! docs/DEV_PLAN_v0.1.md 5장의 인터페이스를 따른다.
 
 mod audit;
+mod basic;
 mod commands;
 mod engine;
 mod env_check;

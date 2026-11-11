@@ -169,6 +169,8 @@ async fn run_job(run_id: u64, job: &Job, work_dir: &Path, sink: &Arc<dyn Sink>, 
             match job.program.as_str() {
                 "portscan" => builtin::portscan(&job.argv, &emit).await,
                 "netmap" => builtin::netmap(&job.argv, &emit).await,
+                // WSL이 없을 때 리눅스 도구 대신 도는 기본 진단
+                tool if crate::basic::TOOLS.contains(&tool) => crate::basic::run(tool, &job.argv, &emit).await,
                 other => Err(format!("내장 도구가 아닙니다: {other}")),
             }
         };

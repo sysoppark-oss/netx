@@ -30,7 +30,27 @@ pub struct EnvironmentStatus {
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// 마지막으로 확인한 결과: 0 아직 모름, 1 전체 진단, 2 기본 진단
+static LAST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// WSL을 쓸 수 있는지(마지막 확인 결과). 아직 확인하지 않았으면 쓸 수 있다고 본다.
+/// 계획을 화면에 보일 때 쓴다. 실행 직전에는 `check`로 다시 확인한다.
+pub fn full() -> bool {
+    LAST.load(std::sync::atomic::Ordering::Relaxed) != 2
+}
+
 pub async fn check() -> EnvironmentStatus {
+    let status = detect().await;
+    LAST.store(if matches!(status.mode, Mode::Full) { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+    status
+}
+
+async fn detect() -> EnvironmentStatus {
+    // 개발·시험용: 리눅스에서 기본 진단 화면을 보려면 NETX_FORCE_BASIC=1로 켠다.
+    #[cfg(not(target_os = "windows"))]
+    if std::env::var_os("NETX_FORCE_BASIC").is_some() {
+        return EnvironmentStatus { mode: Mode::Basic, wsl_installed: false, distros: vec![], message: "기본 진단 모드를 강제로 켰습니다(개발용).".into() };
+    }
     if !cfg!(target_os = "windows") {
         // 리눅스에서는 도구를 직접 실행하므로 전체 진단이 가능하다(개발·테스트용).
         return EnvironmentStatus {
@@ -48,7 +68,7 @@ pub async fn check() -> EnvironmentStatus {
             mode: Mode::Basic,
             wsl_installed: false,
             distros: vec![],
-            message: "WSL2가 설치되어 있지 않습니다. 기본 진단 모드로 실행합니다. 관리자 PowerShell에서 `wsl --install` 후 재부팅하면 전체 진단을 쓸 수 있습니다.".into(),
+            message: "WSL2가 없어 기본 진단으로 동작합니다. 핑, 경로 추적, DNS, 포트 확인, 웹 응답, 스캔, 구성도를 쓸 수 있습니다. 패킷 캡처와 대역폭 측정은 전체 진단(WSL2)이 필요합니다.".into(),
         };
     }
 
@@ -63,13 +83,13 @@ pub async fn check() -> EnvironmentStatus {
             mode: Mode::Basic,
             wsl_installed: true,
             distros: vec![],
-            message: "WSL은 있지만 설치된 리눅스 배포판이 없습니다. 초기 설정에서 Ubuntu를 설치할 수 있습니다.".into(),
+            message: "WSL은 있지만 설치된 리눅스 배포판이 없어 기본 진단으로 동작합니다. 관리자 PowerShell에서 `wsl --install -d Ubuntu`로 설치할 수 있습니다.".into(),
         },
         None => EnvironmentStatus {
             mode: Mode::Basic,
             wsl_installed: false,
             distros: vec![],
-            message: "WSL2를 찾지 못했습니다. 기본 진단 모드로 실행합니다.".into(),
+            message: "WSL2를 찾지 못해 기본 진단으로 동작합니다.".into(),
         },
     }
 }

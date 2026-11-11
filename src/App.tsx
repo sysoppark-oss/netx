@@ -5,6 +5,7 @@ import { NetBar } from "./components/NetBar";
 import { UpdateBar } from "./components/UpdateBar";
 import { AboutDialog, WordCard } from "./components/Word";
 import { openTerminal } from "./lib/term";
+import { SetupWizard, markSetupDone, saveLevel, savedLevel, setupDone } from "./components/SetupWizard";
 import { PlanCards, RiskBadge } from "./components/PlanCards";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -56,7 +57,13 @@ interface BriefState {
 }
 
 export default function App() {
-  const [level, setLevel] = useState<UserLevel>("middle");
+  const [level, setLevelState] = useState<UserLevel>(() => savedLevel() ?? "middle");
+  const setLevel = (l: UserLevel) => {
+    setLevelState(l);
+    saveLevel(l);
+  };
+  // 초기 설정 마법사: 첫 실행 때 한 번, 그 뒤로는 환경 배지를 눌렀을 때
+  const [wizardOpen, setWizardOpen] = useState(() => !setupDone());
   const [mode, setMode] = useState<UiMode>("easy");
   const [situation, setSituation] = useState("");
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -296,12 +303,8 @@ export default function App() {
     }
   }
 
-  const disabledReason =
-    env?.mode !== "full"
-      ? "실행하려면 WSL2가 필요합니다. 관리자 PowerShell에서 wsl --install 후 재부팅하세요."
-      : installing
-        ? "도구를 설치하는 중입니다."
-        : null;
+  // WSL이 없어도 기본 진단으로 실행한다. 기본 진단으로 못 하는 단계는 계획에서 따로 막혀 나온다.
+  const disabledReason = env === null ? "환경을 확인하는 중입니다." : installing ? "도구를 설치하는 중입니다." : null;
 
   const cards = shownPlan && (
     <>
@@ -406,7 +409,7 @@ export default function App() {
           {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
         </button>
 
-        <EnvBadge env={env} />
+        <EnvBadge env={env} onClick={() => setWizardOpen(true)} />
       </header>
 
       <UpdateBar />
@@ -736,6 +739,26 @@ export default function App() {
       </footer>
 
       {aboutOpen && <AboutDialog info={info} onClose={() => setAboutOpen(false)} />}
+      {wizardOpen && (
+        <SetupWizard
+          env={env}
+          level={level}
+          missing={missing}
+          installing={installing}
+          aiOn={aiOn}
+          onLevel={setLevel}
+          onRecheck={async () => {
+            setEnv(await getEnvironmentStatus().catch(() => null));
+            await refreshTools();
+          }}
+          onInstall={install}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onClose={() => {
+            markSetupDone();
+            setWizardOpen(false);
+          }}
+        />
+      )}
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}
@@ -781,18 +804,20 @@ function OptionList({ tool, onPick }: { tool: ToolSchema; onPick: (o: ToolSchema
   );
 }
 
-function EnvBadge({ env }: { env: EnvironmentStatus | null }) {
+function EnvBadge({ env, onClick }: { env: EnvironmentStatus | null; onClick: () => void }) {
   if (!env) return <span className="shrink-0 text-xs text-dim">환경 확인 중…</span>;
   const full = env.mode === "full";
   return (
-    <span
-      title={env.message}
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${env.message}\n누르면 초기 설정을 다시 엽니다.`}
       className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
         full ? "border-safe/40 text-safe" : "border-caution/40 text-caution"
       }`}
     >
       <span className={`h-2 w-2 rounded-full ${full ? "bg-safe" : "bg-caution"}`} />
       {full ? "전체 진단" : "기본 진단"}
-    </span>
+    </button>
   );
 }

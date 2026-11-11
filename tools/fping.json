@@ -3,7 +3,8 @@
   "title": "다중 핑 (fping)",
   "description": "여러 대상이나 서브넷 전체에 한꺼번에 핑을 보낸다.",
   "engines": [
-    "wsl"
+    "wsl",
+    "builtin"
   ],
   "streaming": true,
   "end_of_options": true,

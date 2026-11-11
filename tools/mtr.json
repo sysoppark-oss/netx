@@ -3,7 +3,8 @@
   "title": "경로 추적 (mtr)",
   "description": "대상까지 거치는 구간(홉)마다 지연과 손실률을 측정한다.",
   "engines": [
-    "wsl"
+    "wsl",
+    "builtin"
   ],
   "streaming": true,
   "end_of_options": true,

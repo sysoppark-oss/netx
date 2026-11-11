@@ -74,14 +74,20 @@ pub fn plan_from_recipe(id: String, inputs: BTreeMap<String, String>, level: Lev
         return Err("현재 등급에서는 쓸 수 없는 레시피입니다".into());
     }
     let plan = recipe::instantiate(recipe, &inputs)?;
-    Ok(validator::validate_plan(reg, &plan, level, Source::Recipe, recipe.parallel))
+    Ok(fitted(validator::validate_plan(reg, &plan, level, Source::Recipe, recipe.parallel)))
+}
+
+/// WSL이 없으면 기본 진단으로 돌릴 수 없는 단계를 막아 둔다(`basic::fit_plan`).
+fn fitted(mut plan: ValidatedPlan) -> ValidatedPlan {
+    crate::basic::fit_plan(&mut plan, env_check::full());
+    plan
 }
 
 /// 화면에서 조립한 계획을 검증한다. 화면이 보낸 계획은 항상 직접 입력으로 취급한다
 /// (레시피 권한은 `plan_from_recipe`를 거칠 때만 주어진다).
 #[tauri::command]
 pub fn validate_plan(plan: ExecutionPlan, level: Level) -> ValidatedPlan {
-    validator::validate_plan(Registry::global(), &plan, level, Source::Manual, false)
+    fitted(validator::validate_plan(Registry::global(), &plan, level, Source::Manual, false))
 }
 
 // ---- 실행 ----
@@ -322,20 +328,23 @@ pub async fn run_recipe(
 #[tauri::command]
 pub async fn run_ai_plan(app: AppHandle, plan_id: u64, level: Level, confirmed: bool, only_step: Option<u32>) -> Result<RunStarted, String> {
     let original = planner::ai_plan(plan_id).ok_or("제안이 만료되었습니다. 다시 제안을 받아 주세요.")?;
-    let plan = validator::validate_plan(Registry::global(), &original, level, Source::Ai, false);
+    let plan = fitted(validator::validate_plan(Registry::global(), &original, level, Source::Ai, false));
     let title = if plan.summary.is_empty() { "AI 제안".to_string() } else { plan.summary.clone() };
     start_plan(app, plan, &title, &format!("ai:{plan_id}"), level, confirmed, only_step).await
 }
 
 async fn start_plan(
     app: AppHandle,
-    plan: ValidatedPlan,
+    mut plan: ValidatedPlan,
     title: &str,
     source: &str,
     level: Level,
     confirmed: bool,
     only_step: Option<u32>,
 ) -> Result<RunStarted, String> {
+    // 실행 직전에 환경을 다시 확인한다. WSL이 없으면 기본 진단으로 돌릴 수 없는 단계가 여기서 막힌다.
+    let full = !plan.steps.iter().any(|s| s.engines.first() == Some(&crate::model::Engine::Wsl)) || matches!(env_check::check().await.mode, Mode::Full);
+    crate::basic::fit_plan(&mut plan, full);
     let steps: Vec<_> = plan.steps.iter().filter(|s| only_step.is_none_or(|o| o == s.order)).collect();
     if steps.is_empty() {
         return Err("실행할 단계가 없습니다".into());
@@ -348,10 +357,6 @@ async fn start_plan(
     if !confirmed && steps.iter().any(|s| s.confirm != crate::model::Confirm::None) {
         return Err("주의 또는 위험 단계가 있습니다. 확인 후 실행하세요.".into());
     }
-    if steps.iter().any(|s| s.engines.first() == Some(&crate::model::Engine::Wsl)) {
-        require_wsl().await?;
-    }
-
     let (data_dir, work_dir) = data_dirs(&app)?;
     let jobs: Vec<Job> = steps
         .iter()
@@ -361,7 +366,7 @@ async fn start_plan(
             argv: s.argv.clone(),
             root: s.needs_root,
             timeout_secs: STEP_TIMEOUT_SECS,
-            engine: match s.engines.first() {
+            engine: match crate::basic::engine_for(s, full) {
                 Some(crate::model::Engine::Windows) => JobEngine::Windows,
                 Some(crate::model::Engine::Builtin) => JobEngine::Builtin,
                 _ => JobEngine::Wsl,
@@ -420,7 +425,10 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub async fn suggest(app: AppHandle, text: String, level: Level) -> Result<Suggestion, String> {
     let settings = settings::load(&data_dir(&app)?);
-    Ok(planner::suggest(&text, level, &settings, settings::api_key().as_deref()).await)
+    Ok(match planner::suggest(&text, level, &settings, settings::api_key().as_deref()).await {
+        Suggestion::Plan { plan_id, plan, note } => Suggestion::Plan { plan_id, plan: fitted(plan), note },
+        other => other,
+    })
 }
 
 /// 끝난 실행의 결과를 AI가 요약하고 판정한다.
@@ -592,6 +600,7 @@ fn manual_step(text: &str, order: u32, level: Level) -> Result<ValidatedStep, St
     let step = manual::to_step(text)?;
     let mut v = validator::validate_step(Registry::global(), &step, order, level, Source::Manual);
     v.manual = true;
+    crate::basic::fit_step(&mut v, env_check::full());
     Ok(v)
 }
 
@@ -615,7 +624,7 @@ fn build_mixed(base: Base, extras: &[String], level: Level) -> Result<(Validated
         }
         Base::Ai { plan_id } => {
             let original = planner::ai_plan(plan_id).ok_or("제안이 만료되었습니다. 다시 제안을 받아 주세요.")?;
-            let plan = validator::validate_plan(reg, &original, level, Source::Ai, false);
+            let plan = fitted(validator::validate_plan(reg, &original, level, Source::Ai, false));
             let title = if plan.summary.is_empty() { "AI 제안".to_string() } else { plan.summary.clone() };
             (plan, title, format!("ai:{plan_id}"))
         }
