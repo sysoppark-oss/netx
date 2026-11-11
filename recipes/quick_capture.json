@@ -146,6 +146,24 @@
       "min": 1,
       "max": 100000,
       "hint": "이 개수만큼 잡으면 끝납니다."
+    },
+    {
+      "name": "depth",
+      "type": "enum",
+      "label": "조사 깊이",
+      "values": [
+        "quick",
+        "normal",
+        "deep"
+      ],
+      "value_labels": [
+        "빠르게 (머리 부분 96바이트만)",
+        "보통 (기본 크기)",
+        "정밀 (패킷 전체, 500개)"
+      ],
+      "default": "normal",
+      "example": "normal",
+      "hint": "빠르게는 주소와 포트만 볼 때, 정밀은 내용까지 Wireshark로 볼 때 씁니다. 개수를 직접 고쳤으면 정밀에서도 그 개수를 씁니다."
     }
   ],
   "keywords": [

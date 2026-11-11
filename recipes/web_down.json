@@ -10,6 +10,24 @@
       "label": "주소 (https://는 생략 가능)",
       "example": "example.com",
       "hint": "https:// 없이 주소만 적어도 됩니다. 포트가 다르면 주소:포트"
+    },
+    {
+      "name": "depth",
+      "type": "enum",
+      "label": "조사 깊이",
+      "values": [
+        "quick",
+        "normal",
+        "deep"
+      ],
+      "value_labels": [
+        "빠르게 (포트, 웹 응답)",
+        "보통 (+ DNS)",
+        "정밀 (+ 핑, DNS 전체 응답, 인증서 검증)"
+      ],
+      "default": "normal",
+      "example": "normal",
+      "hint": "정밀 조사는 서버에 핑을 보내고, 인증서를 실제로 검증하며, 다른 주소로 넘기는 응답(리다이렉트)을 끝까지 따라갑니다."
     }
   ],
   "keywords": [
@@ -28,8 +46,7 @@
     {
       "tool": "dig",
       "args": [
-        "+short",
-        "{url.host}"
+        "(조사 깊이에 따라 조립)"
       ],
       "reason": "도메인 이름이 주소로 풀리는지 확인한다.",
       "expect": "주소가 나오면 DNS 정상, 아무것도 안 나오면 DNS 문제."
@@ -49,18 +66,34 @@
     {
       "tool": "curl",
       "args": [
-        "-I",
-        "-v",
-        "-k",
-        "-s",
-        "-m",
-        "10",
-        "-w",
-        "\\nnetx_times dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\\n",
-        "{url}"
+        "(조사 깊이에 따라 조립)"
       ],
       "reason": "웹 서버의 응답 코드와 TLS 인증서를 확인한다(L7).",
       "expect": "200대면 정상, 502·503이면 서버 뒤쪽 애플리케이션 문제. expire date에서 인증서 만료일 확인."
+    },
+    {
+      "tool": "ping",
+      "args": [
+        "(정밀 조사에서만)"
+      ],
+      "reason": "서버까지 왕복 시간과 손실을 잰다. 웹은 안 열려도 서버가 켜져 있는지 가늠할 수 있다.",
+      "expect": "응답이 오면 서버와 경로는 살아 있다. 핑을 막아 둔 서버는 응답이 없어도 정상일 수 있다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(정밀 조사에서만)"
+      ],
+      "reason": "DNS 응답 전체를 본다. 별칭(CNAME)을 거치는지, 유효 시간(TTL)이 얼마인지, 어느 서버가 답했는지 확인한다.",
+      "expect": "status가 NOERROR면 정상. ANSWER 부분에서 CNAME과 주소, TTL을 확인한다."
+    },
+    {
+      "tool": "curl",
+      "args": [
+        "(정밀 조사에서만)"
+      ],
+      "reason": "인증서를 검증하면서 리다이렉트를 끝까지 따라가 마지막에 도착하는 주소와 응답 코드를 확인한다.",
+      "expect": "인증서가 만료됐거나 이름이 다르면 여기서 실패한다. 리다이렉트가 끝없이 돌면 그것도 여기서 드러난다."
     }
   ]
 }

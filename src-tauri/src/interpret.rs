@@ -411,6 +411,17 @@ fn curl(lines: &[String]) -> Option<StepResult> {
         None => return None,
     };
 
+    // 리다이렉트를 따라간 실행: 몇 번 넘겨졌고 마지막에 어디에 도착했는지
+    if let Some(line) = lines.iter().find(|l| l.starts_with("netx_final ")) {
+        let get = |key: &str| line.split_whitespace().find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='));
+        if let Some(n) = get("redirects").and_then(|n| n.parse::<u32>().ok()).filter(|n| *n > 0) {
+            r = r.fact("리다이렉트", format!("{n}번"));
+            if let Some(url) = get("url") {
+                r = r.fact("마지막 주소", url.chars().take(120).collect::<String>());
+            }
+        }
+    }
+
     if let Some(date) = expire {
         r = r.fact("인증서 만료", date.clone());
         if let Some(days) = days_until(&date) {
