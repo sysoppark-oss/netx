@@ -40,6 +40,8 @@
     ],
     "windows": {
       "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "./windows/hooks.nsh",
         "languages": ["Korean", "English"],
         "displayLanguageSelector": false
       },
