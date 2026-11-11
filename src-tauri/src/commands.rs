@@ -141,6 +141,54 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     Ok((data, work))
 }
 
+/// 구성도 그림으로 받을 수 있는 가장 큰 크기
+const MAX_SVG_BYTES: usize = 1024 * 1024;
+
+/// 화면이 보낸 구성도 그림(SVG)을 저장해도 되는지 본다.
+/// 그림 파일은 나중에 브라우저로 열릴 수 있으므로 스크립트, 이벤트 속성, 링크, 외부 내용 삽입을 막는다.
+pub fn check_topology_svg(svg: &str) -> Result<(), String> {
+    if svg.len() > MAX_SVG_BYTES {
+        return Err("그림이 너무 큽니다 (1MB까지).".into());
+    }
+    if !svg.starts_with("<svg") {
+        return Err("SVG 그림이 아닙니다.".into());
+    }
+    let low = svg.to_ascii_lowercase();
+    if low.contains("<script") || low.contains("<foreignobject") || low.contains("href") {
+        return Err("그림에 허용하지 않는 내용(스크립트·링크)이 있습니다.".into());
+    }
+    // on...= 꼴의 이벤트 속성(onload= 등): 글자가 아닌 것 뒤의 "on" + 영문자들 + (공백) + "="
+    let b = low.as_bytes();
+    for i in 0..b.len().saturating_sub(2) {
+        if &b[i..i + 2] != b"on" || (i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'-')) {
+            continue;
+        }
+        let mut j = i + 2;
+        while j < b.len() && b[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        let word_end = j;
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if word_end > i + 2 && b.get(j) == Some(&b'=') {
+            return Err("그림에 허용하지 않는 내용(이벤트 속성)이 있습니다.".into());
+        }
+    }
+    Ok(())
+}
+
+/// 구성도 그림을 작업 폴더에 `topology-<유닉스 시각>.svg`로 저장하고 전체 경로를 돌려준다.
+#[tauri::command]
+pub fn save_topology(app: AppHandle, svg: String) -> Result<String, String> {
+    check_topology_svg(&svg)?;
+    let (_, work) = data_dirs(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = work.join(format!("topology-{now}.svg"));
+    std::fs::write(&path, svg.as_bytes()).map_err(|e| format!("그림을 저장하지 못했습니다: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 async fn require_wsl() -> Result<(), String> {
     if cfg!(target_os = "windows") && !matches!(env_check::check().await.mode, Mode::Full) {
         return Err("WSL2가 필요합니다. 관리자 PowerShell에서 `wsl --install` 후 재부팅하세요.".into());
@@ -492,6 +540,28 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn topology_svg_is_checked_before_saving() {
+        let good = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 364"><rect x="0" y="0" width="760" height="364" fill="#0b1020"/><text x="8" y="20" font-family="Consolas,monospace" font-size="11" text-anchor="middle">192.168.0.30 DESKTOP-ABC 공유기 online</text></svg>"##;
+        assert!(check_topology_svg(good).is_ok());
+        for bad in [
+            "<html><svg></svg></html>",
+            " <svg></svg>",
+            "<svg><script>alert(1)</script></svg>",
+            "<svg><SCRIPT src='x'/></svg>",
+            "<svg onload=\"x()\"></svg>",
+            "<svg/onload=x()>",
+            "<svg><rect OnClick = 'x'/></svg>",
+            "<svg><a href='https://example.com'>x</a></svg>",
+            "<svg><image xlink:HREF='x'/></svg>",
+            "<svg><foreignObject><b>x</b></foreignObject></svg>",
+        ] {
+            assert!(check_topology_svg(bad).is_err(), "{bad}");
+        }
+        let big = format!("<svg>{}</svg>", "a".repeat(MAX_SVG_BYTES));
+        assert!(check_topology_svg(&big).is_err());
     }
 
     #[test]

@@ -221,6 +221,8 @@ export interface TopoNode {
   label: string;
   vendor: string;
   ports: number[];
+  /** 장비 이름(NetBIOS 이름 또는 역방향 DNS). 알아내지 못하면 null */
+  name: string | null;
 }
 
 export interface Topology {

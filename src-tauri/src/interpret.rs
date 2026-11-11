@@ -82,6 +82,8 @@ pub struct Node {
     pub label: String,
     pub vendor: String,
     pub ports: Vec<u16>,
+    /// 장비 이름(NetBIOS 이름 또는 역방향 DNS). 알아내지 못하면 None
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -640,7 +642,7 @@ fn guess_kind(role: &str, ports: &[u16], vendor: &str) -> (&'static str, &'stati
     }
 }
 
-/// 내부 네트워크 조사: "NET <대역> GW <gw> ME <me>"와 "NODE <ip> <mac> <역할> <포트>"
+/// 내부 네트워크 조사: "NET <대역> GW <gw> ME <me>"와 "NODE <ip> <mac> <역할> <포트> [이름]"
 fn netmap(lines: &[String]) -> Option<StepResult> {
     let net = lines.iter().find(|l| l.starts_with("NET "))?;
     let c: Vec<&str> = net.split_whitespace().collect();
@@ -650,14 +652,15 @@ fn netmap(lines: &[String]) -> Option<StepResult> {
         .iter()
         .filter_map(|l| {
             let f: Vec<&str> = l.split_whitespace().collect();
-            if f.len() != 5 || f[0] != "NODE" || f[1].parse::<std::net::Ipv4Addr>().is_err() {
+            if !(5..=6).contains(&f.len()) || f[0] != "NODE" || f[1].parse::<std::net::Ipv4Addr>().is_err() {
                 return None;
             }
             let mac = (f[2] != "-").then(|| f[2].to_string());
             let ports: Vec<u16> = f[4].split(',').filter_map(|p| p.parse().ok()).collect();
+            let name = f.get(5).filter(|n| **n != "-").and_then(|n| crate::engine::builtin::clean_name(n));
             let v = mac.as_deref().map(vendor).unwrap_or("");
             let (kind, label) = guess_kind(f[3], &ports, v);
-            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports })
+            Some(Node { ip: f[1].to_string(), mac, role: f[3].to_string(), kind: kind.into(), label: label.into(), vendor: v.into(), ports, name })
         })
         .take(1024)
         .collect();
@@ -863,13 +866,19 @@ mod tests {
 
     #[test]
     fn netmap_builds_a_topology() {
-        let r = done("netmap", "192.168.0.0/24 대역의 주소 254개를 조사합니다.\nNET 192.168.0.0/24 GW 192.168.0.1 ME 192.168.0.12\nNODE 192.168.0.1 88:36:6c:00:00:01 gateway 53,80\nNODE 192.168.0.12 - me -\nNODE 192.168.0.30 00:80:77:aa:bb:cc host 80,9100\nNODE 192.168.0.44 da:11:22:33:44:55 host -\nNODE 192.168.0.50 - host 445,3389\n조사 끝: 장비 5대를 찾았습니다.", 0);
+        let r = done("netmap", "192.168.0.0/24 대역의 주소 254개를 조사합니다.\nNET 192.168.0.0/24 GW 192.168.0.1 ME 192.168.0.12\nNODE 192.168.0.1 88:36:6c:00:00:01 gateway 53,80\nNODE 192.168.0.12 - me -\nNODE 192.168.0.30 00:80:77:aa:bb:cc host 80,9100 BRW1234\nNODE 192.168.0.44 da:11:22:33:44:55 host - -\nNODE 192.168.0.50 - host 445,3389\n조사 끝: 장비 5대를 찾았습니다.", 0);
         let t = r.topology.expect("구성도가 있어야 한다");
         assert_eq!((t.cidr.as_str(), t.gateway.as_deref(), t.me.as_deref()), ("192.168.0.0/24", Some("192.168.0.1"), Some("192.168.0.12")));
         let kinds: Vec<&str> = t.nodes.iter().map(|n| n.kind.as_str()).collect();
         assert_eq!(kinds, ["router", "pc", "printer", "phone", "pc"]);
         assert_eq!(t.nodes[0].vendor, "EFM ipTIME");
         assert_eq!(t.nodes[2].vendor, "Brother");
+        // 이름 칸은 있어도 없어도 된다(5칸 또는 6칸). "-"는 이름 없음.
+        let names: Vec<Option<&str>> = t.nodes.iter().map(|n| n.name.as_deref()).collect();
+        assert_eq!(names, [None, None, Some("BRW1234"), None, None]);
+        let odd = done("netmap", "NET 10.0.0.0/24 GW - ME -\nNODE 10.0.0.5 - host - <b>pc</b>\nNODE 10.0.0.6 - host - a b", 0).topology.unwrap();
+        assert_eq!(odd.nodes.len(), 1, "칸이 7개인 줄은 버린다");
+        assert_eq!(odd.nodes[0].name.as_deref(), Some("bpcb"));
         assert!(r.targets.iter().all(|x| x.host != "192.168.0.12"));
         assert!(done("netmap", "x", 0).topology.is_none());
     }

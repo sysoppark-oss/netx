@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -242,7 +242,168 @@ pub fn auto_cidr(ip: Ipv4Addr, prefix: u8) -> String {
     format!("{}/{prefix}", Ipv4Addr::from(u32::from(ip) & mask))
 }
 
-/// 내부 네트워크 조사. 출력: `NET <대역> GW <게이트웨이|-> ME <내 주소|->` 한 줄과 장비마다 `NODE <ip> <mac|-> <역할> <열린 포트|->`.
+// ---- 장비 이름 조회 (NetBIOS 이름, 역방향 DNS). 외부 프로그램 없이 UDP로 직접 묻는다. ----
+
+const NAME_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// 이름은 출력 줄에 섞여 들어가므로 영문·숫자·`.`·`-`·`_`만 남기고 63자로 자른다. 남는 것이 없으면 None.
+pub fn clean_name(raw: &str) -> Option<String> {
+    let name: String = raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')).take(63).collect();
+    let name = name.trim_matches('.').to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// NetBIOS node status 요청(50바이트 고정). 이름 칸은 "*"를 반 바이트씩 풀어 쓴 32바이트다.
+pub fn nbstat_query(id: u16) -> [u8; 50] {
+    let mut p = [0u8; 50];
+    p[..2].copy_from_slice(&id.to_be_bytes());
+    p[5] = 1; // 질문 1개
+    p[12] = 32;
+    p[13] = b'C';
+    p[14] = b'K';
+    p[15..45].fill(b'A');
+    p[47] = 0x21; // NBSTAT
+    p[49] = 0x01; // IN
+    p
+}
+
+/// DNS 형식의 이름 하나를 건너뛴 다음 위치.
+fn skip_name(p: &[u8], mut at: usize) -> Option<usize> {
+    loop {
+        let len = *p.get(at)?;
+        if len & 0xc0 == 0xc0 {
+            p.get(at + 1)?;
+            return Some(at + 2);
+        }
+        if len == 0 {
+            return Some(at + 1);
+        }
+        at += 1 + usize::from(len);
+    }
+}
+
+/// node status 응답에서 장비 이름을 읽는다. 컴퓨터 이름(종류 0x00, 그룹 아님)을 먼저 찾고 없으면 첫 이름.
+pub fn nbstat_name(p: &[u8], id: u16) -> Option<String> {
+    if p.len() < 12 || p[..2] != id.to_be_bytes() || p[2] & 0x80 == 0 || u16::from_be_bytes([p[6], p[7]]) == 0 {
+        return None;
+    }
+    let at = skip_name(p, 12)?;
+    if p.get(at..at + 2)? != [0x00, 0x21] {
+        return None;
+    }
+    let at = at + 10; // 종류 2 + 분류 2 + 수명 4 + 길이 2
+    let count = usize::from(*p.get(at)?);
+    let entries: Vec<&[u8]> = (0..count).map_while(|i| p.get(at + 1 + i * 18..at + 1 + (i + 1) * 18)).collect();
+    let text = |e: &[u8]| clean_name(String::from_utf8_lossy(&e[..15]).trim_end_matches([' ', '\0']));
+    entries.iter().filter(|e| e[15] == 0x00 && e[16] & 0x80 == 0).find_map(|e| text(e)).or_else(|| entries.first().and_then(|e| text(e)))
+}
+
+/// 역방향 DNS(PTR) 질의: `d.c.b.a.in-addr.arpa`
+pub fn ptr_query(id: u16, ip: Ipv4Addr) -> Vec<u8> {
+    let mut p = Vec::with_capacity(48);
+    p.extend_from_slice(&id.to_be_bytes());
+    p.extend_from_slice(&[0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]); // 재귀 요청, 질문 1개
+    let o = ip.octets();
+    for label in [o[3].to_string(), o[2].to_string(), o[1].to_string(), o[0].to_string(), "in-addr".into(), "arpa".into()] {
+        p.push(label.len() as u8);
+        p.extend_from_slice(label.as_bytes());
+    }
+    p.extend_from_slice(&[0, 0, 12, 0, 1]); // 이름 끝, PTR, IN
+    p
+}
+
+/// 압축된 DNS 이름을 풀어 읽는다. 되돌아가기는 16번까지만 따라간다.
+fn read_name(p: &[u8], mut at: usize) -> Option<String> {
+    let (mut out, mut jumps) = (String::new(), 0);
+    loop {
+        let len = usize::from(*p.get(at)?);
+        if len & 0xc0 == 0xc0 {
+            jumps += 1;
+            if jumps > 16 {
+                return None;
+            }
+            at = ((len & 0x3f) << 8) | usize::from(*p.get(at + 1)?);
+        } else if len == 0 {
+            return Some(out);
+        } else {
+            if !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(&String::from_utf8_lossy(p.get(at + 1..at + 1 + len)?));
+            if out.len() > 255 {
+                return None;
+            }
+            at += 1 + len;
+        }
+    }
+}
+
+/// PTR 응답에서 이름을 읽는다. 오류 응답이거나 PTR 답이 없으면 None.
+pub fn ptr_name(p: &[u8], id: u16) -> Option<String> {
+    if p.len() < 12 || p[..2] != id.to_be_bytes() || p[2] & 0x80 == 0 || p[3] & 0x0f != 0 {
+        return None;
+    }
+    let (questions, answers) = (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[6], p[7]]));
+    let mut at = 12;
+    for _ in 0..questions {
+        at = skip_name(p, at)? + 4;
+    }
+    for _ in 0..answers {
+        at = skip_name(p, at)?;
+        let head = p.get(at..at + 10)?;
+        let len = usize::from(u16::from_be_bytes([head[8], head[9]]));
+        if head[..2] == [0, 12] {
+            p.get(at + 10..at + 10 + len)?;
+            return clean_name(&read_name(p, at + 10)?);
+        }
+        at += 10 + len;
+    }
+    None
+}
+
+/// 한 곳에 UDP로 묻고 그곳에서 온 답 하나를 제한 시간 안에 받는다.
+async fn ask_udp(to: SocketAddr, packet: &[u8]) -> Option<Vec<u8>> {
+    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await.ok()?;
+    sock.connect(to).await.ok()?;
+    sock.send(packet).await.ok()?;
+    let mut buf = [0u8; 1500];
+    let n = tokio::time::timeout(NAME_TIMEOUT, sock.recv(&mut buf)).await.ok()?.ok()?;
+    Some(buf[..n].to_vec())
+}
+
+fn query_id(ip: Ipv4Addr, salt: u32) -> u16 {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let v = nanos ^ u32::from(ip).rotate_left(7) ^ salt;
+    (v ^ (v >> 16)) as u16
+}
+
+/// 장비들의 이름을 한꺼번에 묻는다. NetBIOS 이름이 있으면 그것을, 없으면 역방향 DNS 이름을 쓴다.
+async fn lookup_names(ips: &[Ipv4Addr], dns: Option<Ipv4Addr>) -> Vec<(Ipv4Addr, String)> {
+    let mut set: JoinSet<Option<(Ipv4Addr, String)>> = JoinSet::new();
+    for ip in ips.iter().copied() {
+        set.spawn(async move {
+            let netbios = async {
+                let id = query_id(ip, 0x4e42);
+                nbstat_name(&ask_udp(SocketAddr::new(IpAddr::V4(ip), 137), &nbstat_query(id)).await?, id)
+            };
+            let reverse = async {
+                let id = query_id(ip, 0x5054);
+                ptr_name(&ask_udp(SocketAddr::new(IpAddr::V4(dns?), 53), &ptr_query(id, ip)).await?, id)
+            };
+            let (a, b) = tokio::join!(netbios, reverse);
+            a.or(b).map(|name| (ip, name))
+        });
+    }
+    let mut names = Vec::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok(Some(found)) = r {
+            names.push(found);
+        }
+    }
+    names
+}
+
+/// 내부 네트워크 조사. 출력: `NET <대역> GW <게이트웨이|-> ME <내 주소|->` 한 줄과 장비마다 `NODE <ip> <mac|-> <역할> <열린 포트|-> <이름|->`.
 pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> Result<i32, String> {
     let mut values = argv.iter().filter(|a| *a != "--");
     let target = values.next().ok_or("대역이 없습니다")?;
@@ -319,13 +480,19 @@ pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> R
     }
     found.sort_by_key(|(h, _)| u32::from(*h));
 
+    // 장비 이름(NetBIOS, 역방향 DNS)을 한꺼번에 묻는다. 장비마다 1초까지만 기다린다.
+    let dns: Option<Ipv4Addr> = info.dns.first().and_then(|s| s.parse().ok());
+    let ips: Vec<Ipv4Addr> = found.iter().map(|(h, _)| *h).collect();
+    let names = lookup_names(&ips, dns).await;
+
     let show = |ip: Option<Ipv4Addr>| ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
     emit(format!("NET {cidr} GW {} ME {}", show(gateway), show(me)));
     for (ip, open) in &found {
         let mac = macs.iter().find(|(m, _)| m == ip).map(|(_, m)| m.as_str()).unwrap_or("-");
         let role = if Some(*ip) == me { "me" } else if Some(*ip) == gateway { "gateway" } else { "host" };
         let ports = if open.is_empty() { "-".to_string() } else { open.iter().map(u16::to_string).collect::<Vec<_>>().join(",") };
-        emit(format!("NODE {ip} {mac} {role} {ports}"));
+        let name = names.iter().find(|(n, _)| n == ip).map(|(_, n)| n.as_str()).unwrap_or("-");
+        emit(format!("NODE {ip} {mac} {role} {ports} {name}"));
     }
     emit(format!("조사 끝: 장비 {}대를 찾았습니다.", found.len()));
     Ok(if found.is_empty() { 1 } else { 0 })
@@ -351,6 +518,112 @@ mod netmap_tests {
         assert_eq!(auto_cidr(Ipv4Addr::new(172, 20, 5, 9), 22), "172.20.4.0/22");
     }
 
+    #[test]
+    fn names_are_cleaned() {
+        assert_eq!(clean_name("DESKTOP-ABC  ").as_deref(), Some("DESKTOP-ABC"));
+        assert_eq!(clean_name("pc 1;rm -rf\n<b>").as_deref(), Some("pc1rm-rfb"));
+        assert_eq!(clean_name("printer.lan.").as_deref(), Some("printer.lan"));
+        assert_eq!(clean_name(&"a".repeat(100)).map(|n| n.len()), Some(63));
+        assert_eq!(clean_name(" \u{d55c}\u{ae00} "), None);
+    }
+
+    /// 이름 표 항목: 이름 15바이트(공백 채움) + 종류 + 깃발 2바이트
+    fn nb_entry(name: &str, suffix: u8, group: bool) -> Vec<u8> {
+        let mut e = format!("{name:<15}").into_bytes();
+        e.extend_from_slice(&[suffix, if group { 0x84 } else { 0x04 }, 0x00]);
+        e
+    }
+
+    fn nb_reply(id: u16, entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut p = id.to_be_bytes().to_vec();
+        p.extend_from_slice(&[0x84, 0x00, 0, 0, 0, 1, 0, 0, 0, 0]);
+        p.extend_from_slice(&nbstat_query(0)[12..46]); // 이름 칸
+        p.extend_from_slice(&[0x00, 0x21, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+        p.push(entries.len() as u8);
+        entries.iter().for_each(|e| p.extend_from_slice(e));
+        p.extend_from_slice(&[0u8; 6]); // 장비 MAC
+        p
+    }
+
+    #[test]
+    fn netbios_query_and_reply() {
+        let q = nbstat_query(0x1234);
+        assert_eq!(q.len(), 50);
+        assert_eq!(&q[..12], &[0x12, 0x34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&q[12..46], b"\x20CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\x00");
+        assert_eq!(&q[46..], &[0x00, 0x21, 0x00, 0x01]);
+
+        // 그룹 이름이 먼저 와도 컴퓨터 이름을 고른다.
+        let reply = nb_reply(0x1234, &[nb_entry("WORKGROUP", 0x00, true), nb_entry("DESKTOP-ABC", 0x00, false), nb_entry("DESKTOP-ABC", 0x20, false)]);
+        assert_eq!(nbstat_name(&reply, 0x1234).as_deref(), Some("DESKTOP-ABC"));
+        // 컴퓨터 이름이 없으면 첫 이름
+        assert_eq!(nbstat_name(&nb_reply(7, &[nb_entry("BRW1234", 0x20, false)]), 7).as_deref(), Some("BRW1234"));
+        // 번호가 다르거나, 요청 그대로이거나, 잘린 답은 버린다.
+        assert_eq!(nbstat_name(&reply, 0x9999), None);
+        assert_eq!(nbstat_name(&q, 0x1234), None);
+        assert_eq!(nbstat_name(&reply[..60], 0x1234), None);
+        assert_eq!(nbstat_name(&[], 0), None);
+        // 이름 개수를 부풀린 답: 실제로 들어 있는 것까지만 읽는다.
+        let mut lying = nb_reply(1, &[nb_entry("NAS", 0x00, false)]);
+        lying[56] = 200;
+        assert_eq!(nbstat_name(&lying, 1).as_deref(), Some("NAS"));
+    }
+
+    #[test]
+    fn reverse_dns_query_and_reply() {
+        let q = ptr_query(0xbeef, Ipv4Addr::new(192, 168, 123, 21));
+        assert_eq!(&q[..12], &[0xbe, 0xef, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&q[12..], b"\x0221\x03123\x03168\x03192\x07in-addr\x04arpa\x00\x00\x0c\x00\x01");
+
+        // 답: 질문 그대로 + (질문 이름을 가리키는 포인터, PTR, IN, 수명, "printer" + "lan")
+        let mut r = q.clone();
+        r[2] = 0x81;
+        r[3] = 0x80;
+        r[7] = 1;
+        r.extend_from_slice(&[0xc0, 0x0c, 0, 12, 0, 1, 0, 0, 0, 60, 0, 13]);
+        r.extend_from_slice(b"\x07printer\x03lan\x00");
+        assert_eq!(ptr_name(&r, 0xbeef).as_deref(), Some("printer.lan"));
+        assert_eq!(ptr_name(&r, 1), None);
+        assert_eq!(ptr_name(&q, 0xbeef), None, "요청은 답이 아니다");
+        assert_eq!(ptr_name(&r[..r.len() - 3], 0xbeef), None, "잘린 답");
+
+        // 이름 없음(NXDOMAIN)
+        let mut nx = q.clone();
+        nx[2] = 0x81;
+        nx[3] = 0x83;
+        assert_eq!(ptr_name(&nx, 0xbeef), None);
+
+        // 자기 자신을 가리키는 포인터(끝없는 되돌아가기)는 멈춘다.
+        let mut looped = q.clone();
+        looped[2] = 0x81;
+        looped[7] = 1;
+        let at = looped.len() + 12;
+        looped.extend_from_slice(&[0xc0, 0x0c, 0, 12, 0, 1, 0, 0, 0, 60, 0, 2, 0xc0 | (at >> 8) as u8, at as u8]);
+        assert_eq!(ptr_name(&looped, 0xbeef), None);
+    }
+
+    #[tokio::test]
+    async fn name_lookup_talks_to_a_dns_server() {
+        // 가짜 DNS 서버: 받은 질의에 "nas.home"으로 답한다.
+        let server = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            let (n, from) = server.recv_from(&mut buf).await.unwrap();
+            let mut r = buf[..n].to_vec();
+            r[2] = 0x81;
+            r[3] = 0x80;
+            r[7] = 1;
+            r.extend_from_slice(&[0xc0, 0x0c, 0, 12, 0, 1, 0, 0, 0, 60, 0, 10]);
+            r.extend_from_slice(b"\x03nas\x04home\x00");
+            server.send_to(&r, from).await.unwrap();
+        });
+        let ip = Ipv4Addr::new(192, 0, 2, 7);
+        let id = 0x0101;
+        let reply = ask_udp(addr, &ptr_query(id, ip)).await.expect("답이 와야 한다");
+        assert_eq!(ptr_name(&reply, id).as_deref(), Some("nas.home"));
+    }
+
     #[tokio::test]
     async fn maps_a_single_local_address() {
         let lines = std::sync::Mutex::new(Vec::<String>::new());
@@ -360,6 +633,8 @@ mod netmap_tests {
         let out = lines.lock().unwrap().join("\n");
         assert!(out.contains("NET 127.0.0.1/32 GW "), "{out}");
         assert!(out.contains("NODE 127.0.0.1 "), "{out}");
+        let node = out.lines().find(|l| l.starts_with("NODE ")).unwrap();
+        assert_eq!(node.split_whitespace().count(), 6, "{node}");
         assert!(netmap(&["10.0.0.0/16".into()], &|_| {}).await.is_err());
     }
 }

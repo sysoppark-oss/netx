@@ -55,7 +55,8 @@ pub fn run() {
             commands::plan_mixed,
             commands::run_mixed,
             commands::open_target,
-            commands::kill_process
+            commands::kill_process,
+            commands::save_topology
         ])
         .run(tauri::generate_context!())
         .expect("NetX 실행 중 오류가 발생했습니다");

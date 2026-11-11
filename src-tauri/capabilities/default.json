@@ -29,6 +29,7 @@
     "allow-plan-mixed",
     "allow-run-mixed",
     "allow-open-target",
-    "allow-kill-process"
+    "allow-kill-process",
+    "allow-save-topology"
   ]
 }

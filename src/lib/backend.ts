@@ -180,3 +180,9 @@ export async function openTarget(host: string, port: number, kind: "web" | "ssh"
 export async function killProcess(pid: number, typedName: string | null, level: UserLevel): Promise<KillResult> {
   return invoke<KillResult>("kill_process", { pid, typedName, level });
 }
+
+/** 구성도 그림(SVG)을 작업 폴더에 저장하고 저장한 파일의 전체 경로를 돌려준다. */
+export async function saveTopology(svg: string): Promise<string> {
+  if (!isTauri()) throw new Error("그림 저장은 NetX 앱에서만 동작합니다.");
+  return invoke<string>("save_topology", { svg });
+}

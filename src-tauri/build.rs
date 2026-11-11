@@ -27,6 +27,7 @@ fn main() {
                 "run_mixed",
                 "open_target",
                 "kill_process",
+                "save_topology",
             ]),
         ),
     )
