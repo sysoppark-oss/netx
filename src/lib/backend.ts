@@ -225,6 +225,8 @@ export interface Handoff {
   target: string;
   from: string;
   note: string;
+  /** 그 주소에 붙은 이름. 보이기만 한다. 입력칸이나 명령에 넣지 않는다. */
+  name: string | null;
 }
 
 /** 넘겨받은 대상이 있으면 알려 준다. 이미 와 있던 것도 한 번 가져온다. */

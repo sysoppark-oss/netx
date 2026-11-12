@@ -641,6 +641,12 @@ export default function App() {
               <span className="min-w-0 flex-1">
                 <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
                 <span className="font-mono text-accent">{handoff.target}</span>
+                {handoff.name && (
+                  <span className="text-dim">
+                    {" "}
+                    — <span className="font-mono">{handoff.name}</span>(으)로 접속한 것으로 기록된 주소
+                  </span>
+                )}
                 {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
                 <span className="block text-xs text-dim">
                   {handoffFilled

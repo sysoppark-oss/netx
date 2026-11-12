@@ -57,6 +57,8 @@ pub struct Handoff {
     pub from: String,
     /// 보낸 쪽이 붙인 한 줄 (제어 문자를 지운 글자)
     pub note: String,
+    /// 그 주소에 붙은 이름(꼬리표). 화면에 글자로 보이기만 한다. 조회하거나 명령에 쓰지 않는다.
+    pub name: Option<String>,
 }
 
 /// 입구가 NetX 본체에 묻거나 시키는 것. 시험에서는 가짜를 쓴다.
@@ -115,22 +117,25 @@ fn is_domain(v: &str) -> bool {
 }
 
 /// 공통 대상(`entities`)에서 NetX가 진단할 수 있는 첫 대상을 고른다. 값은 형식을 검사하고 다시 만들어 쓴다.
-fn target_of(entities: &[Value]) -> Option<String> {
+/// 주소에 이름이 함께 오면(`name`) 형식이 맞는 것만 꼬리표로 돌려준다. 대상은 언제나 숫자 주소다.
+fn target_of(entities: &[Value]) -> Option<(String, Option<String>)> {
     entities.iter().take(8).find_map(|e| {
         let text = |key: &str| e.get(key).and_then(Value::as_str);
         match text("type")? {
             "endpoint" | "host" | "device" => {
                 let ip: IpAddr = text("ip")?.parse().ok()?;
                 let port = e.get("port").and_then(Value::as_u64).filter(|p| (1..=65535).contains(p));
-                Some(match (ip, port) {
+                let target = match (ip, port) {
                     (IpAddr::V4(ip), Some(port)) => format!("{ip}:{port}"),
                     (IpAddr::V6(ip), Some(port)) => format!("[{ip}]:{port}"),
                     (ip, None) => ip.to_string(),
-                })
+                };
+                let label = text("name").map(str::to_ascii_lowercase).filter(|name| is_domain(name));
+                Some((target, label))
             }
             "domain" => {
                 let name = text("name")?.to_ascii_lowercase();
-                is_domain(&name).then_some(name)
+                is_domain(&name).then_some((name, None))
             }
             _ => None,
         }
@@ -190,7 +195,7 @@ fn handoff(params: &Value, host: &dyn Host, session: &mut Session) -> Result<Val
         return Err((UNSUPPORTED_INTENT, "받지 않는 인텐트입니다"));
     }
     let entities = params.get("entities").and_then(Value::as_array).ok_or((INVALID_PARAMS, "entities가 없습니다"))?;
-    let target = target_of(entities).ok_or((INVALID_PARAMS, "진단할 수 있는 대상(주소 또는 도메인)이 없습니다"))?;
+    let (target, name) = target_of(entities).ok_or((INVALID_PARAMS, "진단할 수 있는 대상(주소 또는 도메인)이 없습니다"))?;
 
     // 같은 요청 번호는 한 번만 화면에 알린다.
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -209,7 +214,7 @@ fn handoff(params: &Value, host: &dyn Host, session: &mut Session) -> Result<Val
     }
     drop(seen);
 
-    host.handoff(Handoff { target, from: from.to_string(), note: tidy(text("note").unwrap_or(""), 200) });
+    host.handoff(Handoff { target, from: from.to_string(), note: tidy(text("note").unwrap_or(""), 200), name });
     host.focus();
     Ok(json!({"accepted": true, "opened": true}))
 }
@@ -446,7 +451,7 @@ mod tests {
         let host = Fake::default();
         let r = call(&handoff_line(&uuid(1), json!([{"type":"process","pid":4321,"image":"C:\\x.exe"},{"type":"endpoint","ip":"203.0.113.9","port":443,"proto":"tcp"}])), &member(), &host);
         assert_eq!(r["result"], json!({"accepted": true, "opened": true}));
-        assert_eq!(*host.got.borrow(), [Handoff { target: "203.0.113.9:443".into(), from: "storyfirewall".into(), note: "사건 #4812[31m".into() }]);
+        assert_eq!(*host.got.borrow(), [Handoff { target: "203.0.113.9:443".into(), from: "storyfirewall".into(), note: "사건 #4812[31m".into(), name: None }]);
         assert_eq!(*host.focused.borrow(), 1);
         // 같은 요청 번호가 다시 와도 화면에는 한 번만 간다.
         call(&handoff_line(&uuid(1), json!([{"type":"endpoint","ip":"203.0.113.9","port":443}])), &member(), &host);
@@ -474,6 +479,30 @@ mod tests {
         {
             assert_eq!(pick(10 + n as u32, bad.clone()), (Some(-32602), None), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_name_rides_along_as_a_label_and_is_never_the_target() {
+        let label = |n: u32, entities: Value| {
+            let host = Fake::default();
+            call(&handoff_line(&uuid(n), entities), &member(), &host);
+            host.got.borrow().first().map(|h| (h.target.clone(), h.name.clone()))
+        };
+        // 대상은 숫자 주소, 이름은 꼬리표.
+        assert_eq!(
+            label(71, json!([{"type":"endpoint","ip":"142.250.197.142","port":443,"name":"Edge.Microsoft.COM"}])),
+            Some(("142.250.197.142:443".into(), Some("edge.microsoft.com".into())))
+        );
+        // 이름이 없으면 지금까지와 같다.
+        assert_eq!(label(72, json!([{"type":"endpoint","ip":"10.0.0.5","port":80}])), Some(("10.0.0.5:80".into(), None)));
+        // 이름 모양이 아니면 이름만 버리고 주소는 받는다.
+        for (n, bad) in ["a.com; rm -rf /", "<b>x</b>.com", "-x.com", "nodot", "한글.com", "a..com", ""].into_iter().enumerate() {
+            assert_eq!(label(73 + n as u32, json!([{"type":"endpoint","ip":"10.0.0.5","name":bad}])), Some(("10.0.0.5".into(), None)), "{bad}");
+        }
+        assert_eq!(label(81, json!([{"type":"endpoint","ip":"10.0.0.5","name":["a.com"]}])), Some(("10.0.0.5".into(), None)));
+        assert_eq!(label(82, json!([{"type":"endpoint","ip":"10.0.0.5","name":"a".repeat(250) + ".com"}])), Some(("10.0.0.5".into(), None)));
+        // 이름만 있고 주소가 없는 endpoint는 받지 않는다.
+        assert_eq!(label(83, json!([{"type":"endpoint","name":"edge.microsoft.com"}])), None);
     }
 
     #[test]
