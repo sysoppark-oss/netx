@@ -1,7 +1,8 @@
 // 최근 진단 기록 목록. 한 건을 고르면 그때의 계획과 결과를 본 화면에 다시 연다.
 // 기록은 이 PC에만 있다. 결과 목록이므로 말씀 표시를 넣지 않는다.
 import { useEffect, useState } from "react";
-import { historyDelete, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
+import { captureFolder } from "../lib/capture";
+import { historyDelete, historyExport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
 
 const LIGHT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴", info: "⚪" };
 
@@ -15,6 +16,15 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmAll, setConfirmAll] = useState(false);
+  const [mask, setMask] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  function exportTo(id?: string) {
+    setError(null);
+    historyExport(id, mask)
+      .then(setSaved)
+      .catch((e) => setError(String(e)));
+  }
 
   const refresh = () =>
     historyList()
@@ -64,6 +74,28 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
             닫기
           </button>
         </header>
+        {items && items.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs">
+            <button onClick={() => exportTo()} className="rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
+              모두 내보내기
+            </button>
+            <label className="flex items-center gap-1.5" title="192.168.x.x 같은 내부 주소를 [내부IP-번호]로 바꿔서 내보냅니다. 밖으로 보낼 때 켜세요.">
+              <input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />
+              내부 주소 가리기
+            </label>
+            <span className="text-dim">브라우저로 열리는 보고서 파일 하나로 저장합니다. 메일이나 메신저로 보내 함께 볼 수 있습니다.</span>
+          </div>
+        )}
+        {saved && (
+          <p className="flex items-center gap-3 border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">
+            <span className="min-w-0 flex-1 break-all">
+              저장했습니다: <span className="font-mono">{saved}</span>
+            </span>
+            <button onClick={() => void captureFolder().catch(() => {})} className="shrink-0 rounded border border-line px-2.5 py-1 hover:bg-raised">
+              폴더 열기
+            </button>
+          </p>
+        )}
         {error && <p className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">{error}</p>}
         <div className="min-h-40 overflow-y-auto">
           {items === null ? (
@@ -80,6 +112,9 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
                     <span className="w-40 shrink-0 truncate">{item.meta.title}</span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs text-accent">{item.meta.target}</span>
                     <span className="shrink-0 text-xs text-dim">{item.meta.steps}단계</span>
+                  </button>
+                  <button onClick={() => exportTo(item.id)} title="이 기록만 보고서 파일로 내보냅니다" className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
+                    내보내기
                   </button>
                   <button onClick={() => remove(item.id)} title="이 기록을 지웁니다" className="shrink-0 rounded border border-line px-2 py-0.5 text-xs text-dim hover:text-ink">
                     지우기

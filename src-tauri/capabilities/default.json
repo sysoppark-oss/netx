@@ -41,6 +41,7 @@
     "allow-history-list",
     "allow-history-load",
     "allow-history-delete",
+    "allow-history-export",
     "allow-capture-list",
     "allow-capture-open",
     "allow-capture-rows",

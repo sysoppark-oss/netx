@@ -97,3 +97,8 @@ export async function historyLoad(id: string): Promise<HistoryEntry | null> {
 export async function historyDelete(id?: string): Promise<void> {
   await invoke<number>("history_delete", { id: id ?? null });
 }
+
+/** 기록을 보고서 파일(HTML)로 작업 폴더에 내보내고 파일 경로를 돌려준다. 번호를 주지 않으면 전부. */
+export async function historyExport(id: string | undefined, mask: boolean): Promise<string> {
+  return invoke<string>("history_export", { id: id ?? null, offsetMinutes: -new Date().getTimezoneOffset(), mask });
+}

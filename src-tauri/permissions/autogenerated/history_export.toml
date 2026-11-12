@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-history-export"
+description = "Enables the history_export command without any pre-configured scope."
+commands.allow = ["history_export"]
+
+[[permission]]
+identifier = "deny-history-export"
+description = "Denies the history_export command without any pre-configured scope."
+commands.deny = ["history_export"]

@@ -138,6 +138,170 @@ pub fn delete(data_dir: &Path, id: Option<&str>) -> Result<usize, String> {
     Ok(targets.iter().filter(|id| std::fs::remove_file(dir(data_dir).join(format!("{id}.json"))).is_ok()).count())
 }
 
+// ---- 내보내기 ----
+// 기록을 다른 사람과 함께 볼 수 있게 브라우저로 열리는 보고서(HTML) 한 파일로 만든다.
+// 스크립트를 넣지 않고, 기록에서 온 글자는 모두 바꿔 쓴다(장비가 보낸 글자가 섞여 있다).
+// 내보내는 파일에는 말씀 표시를 넣지 않는다.
+
+fn esc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 1970년부터의 밀리초를 현지 시각 글자로. `offset_minutes`는 UTC와의 차이(한국은 540).
+pub fn local_time(ms: u64, offset_minutes: i32) -> (String, String) {
+    let secs = (ms / 1000) as i64 + i64::from(offset_minutes.clamp(-900, 900)) * 60;
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // 날짜 계산 (그레고리력)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (h, m, s) = (rest / 3600, rest % 3600 / 60, rest % 60);
+    (format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}"), format!("{year:04}{month:02}{day:02}-{h:02}{m:02}{s:02}"))
+}
+
+fn light_text(light: &str) -> (&'static str, &'static str) {
+    match light {
+        "green" => ("정상", "g"),
+        "yellow" => ("주의", "y"),
+        "red" => ("문제", "r"),
+        _ => ("참고", "i"),
+    }
+}
+
+fn status_text(status: &str) -> &'static str {
+    match status {
+        "done" => "완료",
+        "timeout" => "시간 초과",
+        "cancelled" => "중지됨",
+        "capped" => "출력 상한에서 멈춤",
+        "error" => "실행 오류",
+        "running" => "실행 중",
+        _ => "실행 안 함",
+    }
+}
+
+/// 기록 한 건을 보고서의 한 구역으로 만든다.
+fn section(time: u64, json: &str, offset_minutes: i32) -> Option<String> {
+    use serde_json::Value;
+    let entry: Value = serde_json::from_str(json).ok()?;
+    let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    let meta = entry.get("meta")?;
+    let (label, class) = light_text(&text(meta, "light"));
+    let mut out = format!(
+        "<section><h2><span class=\"l {class}\">{label}</span> {} <span class=\"t\">{}</span></h2><p class=\"m\">{} · 진단 종류: {}</p>",
+        esc(&tidy(&text(meta, "title"), 80)),
+        esc(&tidy(&text(meta, "target"), 120)),
+        local_time(time, offset_minutes).0,
+        esc(&tidy(&text(meta, "recipe"), 40)),
+    );
+    let run = entry.get("run")?;
+    let lines = run.get("lines").and_then(Value::as_array);
+    for step in entry.get("plan")?.get("steps")?.as_array()?.iter().take(40) {
+        let order = step.get("order").and_then(Value::as_u64)?;
+        let key = order.to_string();
+        let state = run.get("steps").and_then(|s| s.get(&key));
+        let status = state.map(|s| text(s, "status")).unwrap_or_default();
+        let elapsed = state.and_then(|s| s.get("elapsed_ms")).and_then(Value::as_u64).unwrap_or(0);
+        out.push_str(&format!(
+            "<div class=\"s\"><h3>{}. {}</h3><pre class=\"c\">$ {}</pre><p class=\"m\">{}{}</p>",
+            order,
+            esc(&text(step, "title")),
+            esc(&text(step, "display")),
+            status_text(&status),
+            if elapsed > 0 { format!(" · {:.1}초", elapsed as f64 / 1000.0) } else { String::new() },
+        ));
+        if let Some(result) = run.get("results").and_then(|r| r.get(&key)) {
+            let (label, class) = light_text(&text(result, "light"));
+            out.push_str(&format!("<p><span class=\"l {class}\">{label}</span> {}</p>", esc(&text(result, "text"))));
+            let facts: Vec<String> = result
+                .get("facts")
+                .and_then(Value::as_array)
+                .map(|f| f.iter().take(40).map(|x| format!("<tr><th>{}</th><td>{}</td></tr>", esc(&text(x, "label")), esc(&text(x, "value")))).collect())
+                .unwrap_or_default();
+            if !facts.is_empty() {
+                out.push_str(&format!("<table>{}</table>", facts.concat()));
+            }
+        }
+        let raw: Vec<String> = lines
+            .map(|l| l.iter().filter(|x| x.get("order").and_then(Value::as_u64) == Some(order)).map(|x| esc(&text(x, "line"))).collect())
+            .unwrap_or_default();
+        if !raw.is_empty() {
+            out.push_str(&format!("<details><summary>원본 출력 ({}줄)</summary><pre>{}</pre></details>", raw.len(), raw.join("\n")));
+        }
+        out.push_str("</div>");
+    }
+    out.push_str("</section>");
+    Some(out)
+}
+
+const STYLE: &str = "body{font-family:'Malgun Gothic',sans-serif;max-width:60em;margin:2em auto;padding:0 1em;color:#1d2330;line-height:1.6}\
+h1{font-size:1.4em}h2{font-size:1.15em;border-top:2px solid #1d2330;padding-top:.8em;margin-top:2em}h3{font-size:1em;margin:.2em 0}\
+.t{font-family:Consolas,monospace;color:#0b6b6b}.m{color:#5b6475;font-size:.9em;margin:.2em 0}.s{border:1px solid #c9ced8;border-radius:6px;padding:.6em .9em;margin:.7em 0}\
+pre{background:#f3f5f8;padding:.6em;overflow:auto;font-family:Consolas,monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all}.c{background:#e8f4f3}\
+table{border-collapse:collapse;font-size:.9em;margin:.4em 0}th,td{border:1px solid #c9ced8;padding:.15em .6em;text-align:left}th{background:#f3f5f8;font-weight:normal}\
+.l{display:inline-block;padding:0 .5em;border-radius:1em;font-size:.85em;color:#fff}.g{background:#1a8f4c}.y{background:#b7791f}.r{background:#c53030}.i{background:#5b6475}\
+summary{cursor:pointer;color:#5b6475;font-size:.9em}";
+
+/// 보고서 전체. `entries`는 (저장 시각, 기록 JSON)이고 최근 것부터다.
+pub fn report(entries: &[(u64, String)], offset_minutes: i32, mask: bool, now_ms: u64) -> String {
+    let sections: Vec<String> = entries.iter().filter_map(|(time, json)| section(*time, json, offset_minutes)).collect();
+    let html = format!(
+        "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>NetX 진단 기록</title><style>{STYLE}</style></head><body>\
+<h1>NetX 진단 기록</h1><p class=\"m\">내보낸 시각 {} · {}건{}</p>{}</body></html>\n",
+        local_time(now_ms, offset_minutes).0,
+        sections.len(),
+        if mask { " · 내부 주소는 [내부IP-번호]로 가렸습니다" } else { " · 내부 네트워크의 주소가 들어 있습니다. 밖으로 보낼 때 주의하세요" },
+        sections.concat(),
+    );
+    if mask {
+        crate::planner::redact::Mask::build(&html).apply(&html)
+    } else {
+        html
+    }
+}
+
+/// 기록을 보고서 파일로 `folder`에 쓴다. `id`를 주면 그 한 건, 주지 않으면 전부. 파일의 전체 경로를 돌려준다.
+pub fn export(data_dir: &Path, folder: &Path, id: Option<&str>, offset_minutes: i32, mask: bool, now_ms: u64) -> Result<String, String> {
+    let ids: Vec<String> = match id {
+        Some(id) if valid_id(id) => vec![id.to_string()],
+        Some(_) => return Err("기록 번호가 올바르지 않습니다.".into()),
+        None => files(data_dir).into_iter().take(MAX_ENTRIES).map(|(id, _)| id).collect(),
+    };
+    let entries: Vec<(u64, String)> = ids.iter().filter_map(|id| Some((id.parse().ok()?, load(data_dir, id).ok()?))).collect();
+    if entries.is_empty() {
+        return Err("내보낼 기록이 없습니다.".into());
+    }
+    let html = report(&entries, offset_minutes, mask, now_ms);
+    std::fs::create_dir_all(folder).map_err(|e| format!("폴더를 만들지 못했습니다: {e}"))?;
+    let stamp = local_time(now_ms, offset_minutes).1;
+    // 같은 이름이 있으면 덮어쓰지 않는다.
+    let path = (1..100)
+        .map(|n| folder.join(if n == 1 { format!("netx-report-{stamp}.html") } else { format!("netx-report-{stamp}-{n}.html") }))
+        .find(|p| !p.exists())
+        .ok_or("보고서 파일 이름을 정하지 못했습니다.")?;
+    std::fs::write(&path, html.as_bytes()).map_err(|e| format!("보고서를 저장하지 못했습니다: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +367,74 @@ mod tests {
         assert_eq!(items.len(), MAX_ENTRIES);
         assert_eq!(items[0].meta.title, format!("기록 {}", MAX_ENTRIES + 4));
         assert_eq!(items.last().unwrap().meta.title, "기록 5");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn full_entry() -> String {
+        serde_json::json!({
+            "meta": {"title": "웹 장애 진단", "recipe": "web_down", "target": "192.168.0.10", "light": "red", "steps": 2},
+            "plan": {"steps": [
+                {"order": 1, "title": "포트 연결 시험 (nc)", "display": "nc -vz -w 3 -- 192.168.0.10 443"},
+                {"order": 2, "title": "HTTP 시험 (curl)", "display": "curl -I https://192.168.0.10"}
+            ]},
+            "run": {
+                "steps": {"1": {"status": "done", "exit_code": 1, "elapsed_ms": 3100}},
+                "results": {"1": {"light": "red", "text": "포트가 닫혀 있습니다 <script>alert(1)</script>", "facts": [{"label": "대상", "value": "192.168.0.10:443"}]}},
+                "lines": [
+                    {"order": 1, "stream": "stderr", "line": "nc: connect to 192.168.0.10 port 443 failed </pre><img src=x onerror=alert(1)>"},
+                    {"order": 1, "stream": "stderr", "line": "서버 8.8.8.8 과 10.0.0.1\u{1b}[0m"}
+                ]
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn report_escapes_everything_and_reads_well() {
+        let html = report(&[(1_794_443_732_486, full_entry())], 540, false, 1_794_443_800_000);
+        assert!(html.starts_with("<!DOCTYPE html>") && html.contains("<title>NetX 진단 기록</title>"));
+        assert!(html.contains("2026-11-12 09:35") && html.contains("내보낸 시각 2026-11-12 09:36"), "현지 시각");
+        assert!(html.contains("<span class=\"l r\">문제</span> 웹 장애 진단") && html.contains("1. 포트 연결 시험 (nc)"));
+        assert!(html.contains("$ nc -vz -w 3 -- 192.168.0.10 443") && html.contains("완료 · 3.1초"));
+        assert!(html.contains("<th>대상</th><td>192.168.0.10:443</td>") && html.contains("원본 출력 (2줄)"));
+        assert!(html.contains("2. HTTP 시험 (curl)") && html.contains("실행 안 함"));
+        // 기록 속 글자는 꼬리표나 스크립트가 되지 못한다.
+        assert!(!html.contains("<script") && !html.contains("<img") && !html.contains('\u{1b}'));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;") && html.contains("&lt;/pre&gt;&lt;img src=x onerror=alert(1)&gt;"));
+        assert_eq!(html.matches("<pre").count(), html.matches("</pre>").count());
+        // 내부 주소 가리기: 사설 주소만 가리고 공인 주소는 둔다.
+        let masked = report(&[(1_794_443_732_486, full_entry())], 540, true, 1_794_443_800_000);
+        assert!(!masked.contains("192.168.0.10") && !masked.contains("10.0.0.1") && masked.contains("[내부IP-") && masked.contains("8.8.8.8"));
+        // 깨진 기록은 건너뛴다.
+        let html = report(&[(1, "{}".into()), (2, "nope".into())], 540, false, 0);
+        assert!(html.contains("0건"));
+    }
+
+    #[test]
+    fn local_time_follows_the_calendar() {
+        assert_eq!(local_time(0, 0).0, "1970-01-01 00:00");
+        assert_eq!(local_time(951_782_400_000, 0).0, "2000-02-29 00:00");
+        assert_eq!(local_time(1_794_443_732_486, 540), ("2026-11-12 09:35".to_string(), "20261112-093532".to_string()));
+        assert_eq!(local_time(1_794_443_732_486, -300).0, "2026-11-11 19:35");
+        assert_eq!(local_time(1_794_443_732_486, 99_999).0, local_time(1_794_443_732_486, 900).0, "터무니없는 값은 잘라 쓴다");
+    }
+
+    #[test]
+    fn exports_one_or_all_without_overwriting() {
+        let d = temp("export");
+        let out = d.join("work");
+        let a = save(&d, &full_entry(), 1_794_400_000_000).unwrap();
+        save(&d, &entry("둘째"), 1_794_400_000_001).unwrap();
+        let one = export(&d, &out, Some(&a), 540, false, 1_794_443_800_000).unwrap();
+        assert!(one.ends_with("netx-report-20261112-093640.html"), "{one}");
+        assert!(std::fs::read_to_string(&one).unwrap().contains("1건"));
+        let all = export(&d, &out, None, 540, true, 1_794_443_800_000).unwrap();
+        assert!(all.ends_with("netx-report-20261112-093640-2.html"), "{all}");
+        let text = std::fs::read_to_string(&all).unwrap();
+        assert!(text.contains("2건") && text.find("둘째").unwrap() < text.find("웹 장애 진단").unwrap(), "최근 것부터");
+        assert!(export(&d, &out, Some("../x"), 540, false, 0).is_err());
+        delete(&d, None).unwrap();
+        assert!(export(&d, &out, None, 540, false, 0).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

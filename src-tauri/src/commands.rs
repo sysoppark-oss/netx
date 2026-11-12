@@ -191,6 +191,17 @@ pub fn history_delete(app: AppHandle, id: Option<String>) -> Result<usize, Strin
     crate::history::delete(&data_dir(&app)?, id.as_deref())
 }
 
+/// 기록을 브라우저로 열리는 보고서 파일로 작업 폴더에 내보낸다. `id`를 주면 그 한 건, 주지 않으면 전부.
+/// `offset_minutes`는 이 PC의 시간대(UTC와의 차이, 분)이고 시각 표기에만 쓴다.
+#[tauri::command(async)]
+pub fn history_export(app: AppHandle, id: Option<String>, offset_minutes: i32, mask: bool) -> Result<String, String> {
+    let (data_dir, work) = data_dirs(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let path = crate::history::export(&data_dir, &work, id.as_deref(), offset_minutes, mask, now)?;
+    audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "export", tool: "history-report", argv: &[id.unwrap_or_else(|| "all".into()), if mask { "masked".into() } else { "plain".into() }], risk: Risk::Safe, root: false, confirmed: false });
+    Ok(path)
+}
+
 // ---- 캡처 분석 ----
 // 작업 폴더의 캡처 파일만 이름으로 연다. 읽기 전용이고 아무것도 밖으로 보내지 않는다.
 

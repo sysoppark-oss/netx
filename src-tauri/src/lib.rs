@@ -93,6 +93,7 @@ pub fn run() {
             commands::history_list,
             commands::history_load,
             commands::history_delete,
+            commands::history_export,
             commands::capture_list,
             commands::capture_open,
             commands::capture_rows,
