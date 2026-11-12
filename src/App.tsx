@@ -32,6 +32,7 @@ import {
   suggest,
 } from "./lib/backend";
 import { hasRun, peekRun, restoreRun, useRun } from "./lib/runs";
+import { handoffInputs } from "./lib/handoff";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
@@ -101,12 +102,25 @@ export default function App() {
   const recorded = useRef<Set<number>>(new Set());
   // 다른 프로그램이 넘긴 진단 대상: 입력칸에 채우고 알림을 보인다. 실행하지 않는다.
   const [handoff, setHandoff] = useState<Handoff | null>(null);
+  // 넘겨받은 대상을 지금 열린 진단의 입력칸에도 채웠는지
+  const [handoffFilled, setHandoffFilled] = useState(false);
+  // 알림을 받는 쪽이 볼 지금 상태(열린 진단, 실행 중인지)
+  const live = useRef<{ recipe: Recipe | null; running: boolean }>({ recipe: null, running: false });
   useEffect(() => {
     let stop = () => {};
     let gone = false;
     void onHandoff((h) => {
       setHandoff(h);
       setSituation(h.target);
+      // 열려 있는 진단에 대상을 받는 칸이 있으면 거기에도 채운다. 실행 중이면 건드리지 않는다.
+      const { recipe: open, running } = live.current;
+      const filled = open && !running ? handoffInputs(open.id, h.target) : {};
+      setHandoffFilled(Object.keys(filled).length > 0);
+      if (Object.keys(filled).length > 0) {
+        setInputs((prev) => ({ ...prev, ...filled }));
+        setPlan(null);
+        setPlanRunId(null);
+      }
     }).then((s) => (gone ? s() : (stop = s)));
     return () => {
       gone = true;
@@ -138,6 +152,7 @@ export default function App() {
   const run = useRun(runId);
   const planRun = useRun(planRunId);
   const installing = useRun(installRunId)?.active ?? false;
+  live.current = { recipe, running: planRun?.active ?? false };
   const rawRef = useRef<HTMLPreElement>(null);
   const rawCount = run?.lines.length ?? 0;
 
@@ -545,7 +560,7 @@ export default function App() {
                   return (
                     <li key={r.id}>
                       <button
-                        onClick={() => pickRecipe(r)}
+                        onClick={() => pickRecipe(r, handoff ? handoffInputs(r.id, handoff.target) : {})}
                         disabled={!ok}
                         title={ok ? r.description : "현재 등급에서는 쓸 수 없습니다"}
                         className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent ${
@@ -623,7 +638,11 @@ export default function App() {
                 <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
                 <span className="font-mono text-accent">{handoff.target}</span>
                 {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
-                <span className="block text-xs text-dim">입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다.</span>
+                <span className="block text-xs text-dim">
+                  {handoffFilled
+                    ? "지금 열린 진단의 입력칸에 채워 두었습니다. [계획 보기]를 누르세요. 자동으로 실행하지 않습니다."
+                    : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
+                </span>
               </span>
               <button onClick={() => setHandoff(null)} className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
                 닫기
