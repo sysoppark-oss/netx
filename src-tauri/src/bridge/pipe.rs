@@ -65,11 +65,20 @@ impl Host for AppHost {
     fn focus(&self) {
         if let Some(window) = self.0.get_webview_window("main") {
             let _ = window.unminimize();
+            // Windows가 창을 앞으로 가져오지 못하게 막아도 작업 표시줄 단추는 깜박인다.
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
             let _ = window.set_focus();
         }
     }
 
     fn handoff(&self, h: Handoff) {
+        // NetX가 앞에 있지 않으면 Windows 알림 창으로도 알린다.
+        let focused = self.0.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+        if !focused {
+            use tauri_plugin_notification::NotificationExt;
+            let (title, body) = super::notice_text(&h);
+            let _ = self.0.notification().builder().title(title).body(body).show();
+        }
         if let Ok(dir) = self.0.path().app_local_data_dir() {
             // 감사 로그: 누가(보낸 모듈) 무엇을(대상) 넘겼는지. 실행은 아니다.
             audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "bridge", tool: "rack.handoff", argv: &[h.target.clone(), h.from.clone()], risk: Risk::Safe, root: false, confirmed: false });

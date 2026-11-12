@@ -61,6 +61,12 @@ pub struct Handoff {
     pub name: Option<String>,
 }
 
+/// Windows 알림 창에 쓸 제목과 본문. 보낸 곳과 숫자 주소만 싣는다(이름·덧붙인 글은 싣지 않는다).
+pub fn notice_text(h: &Handoff) -> (String, String) {
+    let who = if h.from == "storyfirewall" { "스토리방화벽" } else { h.from.as_str() };
+    ("NetX — 진단 대상을 넘겨받았습니다".to_string(), format!("{who}에서 보낸 대상: {}\nNetX 창에서 확인하세요. 자동으로 실행하지 않습니다.", h.target))
+}
+
 /// 입구가 NetX 본체에 묻거나 시키는 것. 시험에서는 가짜를 쓴다.
 pub trait Host {
     fn version(&self) -> String;
@@ -479,6 +485,17 @@ mod tests {
         {
             assert_eq!(pick(10 + n as u32, bad.clone()), (Some(-32602), None), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_notice_names_the_sender_and_the_address_only() {
+        let h = Handoff { target: "142.250.197.142:443".into(), from: "storyfirewall".into(), note: "사건 #1".into(), name: Some("edge.microsoft.com".into()) };
+        let (title, body) = notice_text(&h);
+        assert!(title.contains("넘겨받았습니다"));
+        assert!(body.contains("스토리방화벽") && body.contains("142.250.197.142:443") && body.contains("자동으로 실행하지 않습니다"));
+        assert!(!body.contains("edge.microsoft.com") && !body.contains("사건"), "이름과 덧붙인 글은 알림 창에 싣지 않는다");
+        let other = Handoff { from: "watch".into(), ..h };
+        assert!(notice_text(&other).1.starts_with("watch에서"));
     }
 
     #[test]

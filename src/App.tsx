@@ -33,6 +33,7 @@ import {
 } from "./lib/backend";
 import { hasRun, peekRun, restoreRun, useRun } from "./lib/runs";
 import { handoffInputs } from "./lib/handoff";
+import { addReceived, loadReceived, receivedAt, saveReceived, type Received } from "./lib/inbox";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
@@ -106,21 +107,40 @@ export default function App() {
   const [handoffFilled, setHandoffFilled] = useState(false);
   // 알림을 받는 쪽이 볼 지금 상태(열린 진단, 실행 중인지)
   const live = useRef<{ recipe: Recipe | null; running: boolean }>({ recipe: null, running: false });
+  // 받은 의뢰 목록(최근 20건). 띠를 닫아도 여기서 다시 찾는다.
+  const [inbox, setInbox] = useState<Received[]>(loadReceived);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  // 방금 온 의뢰: 몇 초 동안 띠를 깜박인다.
+  const [handoffFresh, setHandoffFresh] = useState(false);
+  useEffect(() => saveReceived(inbox), [inbox]);
+  useEffect(() => {
+    if (!handoffFresh) return;
+    const timer = setTimeout(() => setHandoffFresh(false), 6000);
+    return () => clearTimeout(timer);
+  }, [handoffFresh, handoff]);
+
+  /** 넘겨받은 대상을 띠에 보이고 입력칸에 채운다. 실행하지 않는다. */
+  function showHandoff(h: Handoff) {
+    setHandoff(h);
+    setSituation(h.target);
+    // 열려 있는 진단에 대상을 받는 칸이 있으면 거기에도 채운다. 실행 중이면 건드리지 않는다.
+    const { recipe: open, running } = live.current;
+    const filled = open && !running ? handoffInputs(open.id, h.target) : {};
+    setHandoffFilled(Object.keys(filled).length > 0);
+    if (Object.keys(filled).length > 0) {
+      setInputs((prev) => ({ ...prev, ...filled }));
+      setPlan(null);
+      setPlanRunId(null);
+    }
+  }
+
   useEffect(() => {
     let stop = () => {};
     let gone = false;
     void onHandoff((h) => {
-      setHandoff(h);
-      setSituation(h.target);
-      // 열려 있는 진단에 대상을 받는 칸이 있으면 거기에도 채운다. 실행 중이면 건드리지 않는다.
-      const { recipe: open, running } = live.current;
-      const filled = open && !running ? handoffInputs(open.id, h.target) : {};
-      setHandoffFilled(Object.keys(filled).length > 0);
-      if (Object.keys(filled).length > 0) {
-        setInputs((prev) => ({ ...prev, ...filled }));
-        setPlan(null);
-        setPlanRunId(null);
-      }
+      showHandoff(h);
+      setHandoffFresh(true);
+      setInbox((list) => addReceived(list, h, Date.now()));
     }).then((s) => (gone ? s() : (stop = s)));
     return () => {
       gone = true;
@@ -542,10 +562,95 @@ export default function App() {
           {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
         </button>
 
+        {inbox.length > 0 && (
+          <div className="relative shrink-0">
+            <button
+              onClick={() => setInboxOpen((v) => !v)}
+              title="다른 프로그램이 넘긴 진단 대상 (최근 20건)"
+              className={`rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
+                inbox.some((r) => !r.read) ? "border-accent bg-accent font-bold text-void" : "border-line text-dim"
+              }`}
+            >
+              받은 의뢰 {inbox.filter((r) => !r.read).length || inbox.length}
+            </button>
+            {inboxOpen && (
+              <div className="absolute right-0 z-50 mt-2 w-96 rounded-md border border-line bg-panel p-2 text-xs shadow-lg">
+                <p className="px-2 pb-1 text-dim">고르면 입력칸에 다시 채웁니다. 자동으로 실행하지 않습니다.</p>
+                <ul className="max-h-80 overflow-y-auto">
+                  {inbox.map((r) => (
+                    <li key={`${r.at}-${r.target}`}>
+                      <button
+                        onClick={() => {
+                          showHandoff(r);
+                          setInbox((list) => list.map((x) => (x.at === r.at && x.target === r.target ? { ...x, read: true } : x)));
+                          setInboxOpen(false);
+                        }}
+                        className="flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left hover:bg-raised"
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${r.read ? "bg-transparent" : "bg-accent"}`} />
+                        <span className="shrink-0 text-dim">{receivedAt(r.at)}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-mono text-ink">{r.target}</span>
+                          {r.name && <span className="text-dim"> — {r.name}</span>}
+                        </span>
+                        <span className="shrink-0 text-dim">{r.from === "storyfirewall" ? "스토리방화벽" : r.from}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() => {
+                    setInbox([]);
+                    setInboxOpen(false);
+                  }}
+                  className="mt-1 w-full rounded border border-line px-2 py-1 text-dim hover:bg-raised"
+                >
+                  목록 비우기
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <EnvBadge env={env} onClick={() => setWizardOpen(true)} />
       </header>
 
       <UpdateBar />
+      {handoff && (
+        <div
+          role="status"
+          className={`relative z-50 flex items-center gap-3 border-b-2 border-accent bg-accent/25 px-5 py-2.5 text-sm ${handoffFresh ? "animate-pulse" : ""}`}
+        >
+          <span className="shrink-0 rounded bg-accent px-2 py-0.5 text-xs font-bold text-void">조회 의뢰</span>
+          <span className="min-w-0 flex-1">
+            <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
+            <span className="font-mono text-accent">{handoff.target}</span>
+            {handoff.name && (
+              <span className="text-dim">
+                {" "}
+                — <span className="font-mono">{handoff.name}</span>(으)로 접속한 것으로 기록된 주소
+              </span>
+            )}
+            {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
+            <span className="block text-xs text-dim">
+              {handoffFilled
+                ? "지금 열린 진단의 입력칸에 채워 두었습니다. [계획 보기]를 누르세요. 자동으로 실행하지 않습니다."
+                : recipe && Object.keys(handoffInputs(recipe.id, handoff.target)).length === 0
+                  ? "서브넷 스캔, 구성도, 포트 추적, 대역폭은 넘겨받은 대상을 넣을 칸이 없어 그대로 둡니다. 왼쪽에서 라우팅 지연 분석, 웹 장애 진단, 패킷 캡처를 고르면 채워집니다. 자동으로 실행하지 않습니다."
+                  : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
+            </span>
+          </span>
+          <button
+            onClick={() => {
+              setHandoff(null);
+              setInbox((list) => list.map((r) => (r.target === handoff.target ? { ...r, read: true } : r)));
+            }}
+            className="shrink-0 rounded border border-accent px-3 py-1 text-xs font-semibold hover:bg-accent hover:text-void"
+          >
+            닫기
+          </button>
+        </div>
+      )}
       <NetBar />
 
       <div className="flex min-h-0 flex-1">
@@ -636,31 +741,6 @@ export default function App() {
 
         {/* 중앙: 제안 카드 영역 */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
-          {handoff && (
-            <p className="mx-auto mb-5 flex max-w-3xl items-center gap-3 rounded-md border border-accent/50 px-3 py-2 text-sm">
-              <span className="min-w-0 flex-1">
-                <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
-                <span className="font-mono text-accent">{handoff.target}</span>
-                {handoff.name && (
-                  <span className="text-dim">
-                    {" "}
-                    — <span className="font-mono">{handoff.name}</span>(으)로 접속한 것으로 기록된 주소
-                  </span>
-                )}
-                {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
-                <span className="block text-xs text-dim">
-                  {handoffFilled
-                    ? "지금 열린 진단의 입력칸에 채워 두었습니다. [계획 보기]를 누르세요. 자동으로 실행하지 않습니다."
-                    : recipe && Object.keys(handoffInputs(recipe.id, handoff.target)).length === 0
-                      ? "서브넷 스캔, 구성도, 포트 추적, 대역폭은 넘겨받은 대상을 넣을 칸이 없어 그대로 둡니다. 왼쪽에서 라우팅 지연 분석, 웹 장애 진단, 패킷 캡처를 고르면 채워집니다. 자동으로 실행하지 않습니다."
-                      : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
-                </span>
-              </span>
-              <button onClick={() => setHandoff(null)} className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
-                닫기
-              </button>
-            </p>
-          )}
           {error && (
             <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
           )}

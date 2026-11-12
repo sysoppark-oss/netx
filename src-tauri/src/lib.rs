@@ -43,6 +43,8 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        // 다른 프로그램이 진단 대상을 넘겼을 때 Windows 알림 창을 띄우는 데 쓴다.
+        .plugin(tauri_plugin_notification::init())
         // 본창을 닫으면 터미널 창도 닫는다(터미널 창만 남으면 본창을 다시 열 길이 없다).
         .on_window_event(|window, event| {
             use tauri::Manager;
