@@ -115,8 +115,8 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
         {bridge && bridge.state !== "none" && (
           <p className="mt-2 text-xs text-dim">
             다른 프로그램과의 연동 입구:{" "}
-            {bridge.state === "open" ? "열림" : bridge.state === "unchecked" ? "열렸지만 응답 확인 실패" : "닫힘"} · 등록된 프로그램 {bridge.members}개
-            {bridge.members === 0 ? " (등록된 프로그램이 없어 아직 아무도 대상을 넘길 수 없습니다)" : ""}
+            {bridge.state === "open" ? "열림" : bridge.state === "unchecked" ? "열렸지만 응답 확인 실패" : "닫힘"} · 등록된 실행 파일 {bridge.members}개
+            {bridge.members === 0 ? " (등록된 실행 파일이 없어 아직 아무도 대상을 넘길 수 없습니다)" : ""}
           </p>
         )}
 

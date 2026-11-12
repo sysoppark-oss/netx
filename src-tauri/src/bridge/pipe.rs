@@ -116,17 +116,19 @@ pub(crate) fn admin_dirs() -> Vec<String> {
     ["ProgramFilesDir", "ProgramFilesDir (x86)", "ProgramW6432Dir"].iter().filter_map(|name| final_path(&key.get_value::<String, _>(name).ok()?)).collect()
 }
 
-/// 관리자가 등록한 랙 구성원의 실행 파일 경로들. 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
+/// 관리자가 등록한 랙 구성원의 실행 파일 경로들(모듈마다 `Exe`와, 있으면 `ClientExe`).
+/// 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
 fn registered_members() -> Vec<String> {
     let Ok(modules) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(MODULES_KEY) else { return Vec::new() };
-    let dirs = admin_dirs();
-    modules
+    let found: Vec<String> = modules
         .enum_keys()
         .flatten()
         .take(32)
-        .filter_map(|id| final_path(&modules.open_subkey(id).ok()?.get_value::<String, _>("Exe").ok()?))
-        .filter(|exe| super::under_admin_dirs(exe, &dirs))
-        .collect()
+        .filter_map(|id| modules.open_subkey(id).ok())
+        .flat_map(|key| super::MEMBER_VALUES.iter().filter_map(|name| key.get_value::<String, _>(*name).ok()).collect::<Vec<String>>())
+        .filter_map(|raw| final_path(&raw))
+        .collect();
+    super::admitted(found, &admin_dirs())
 }
 
 fn client_pid(server: &NamedPipeServer) -> Option<u32> {

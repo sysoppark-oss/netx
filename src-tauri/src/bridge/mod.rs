@@ -302,6 +302,16 @@ pub fn under_admin_dirs(exe: &str, admin_dirs: &[String]) -> bool {
         })
 }
 
+/// 등록부에서 구성원 경로로 읽는 값 이름 (설계 8.3의 1번). `Exe`는 파이프를 여는 실행 파일,
+/// `ClientExe`는 남에게 접속하는 실행 파일이 따로 있을 때 그 경로다(스토리방화벽: 서비스와 화면).
+pub const MEMBER_VALUES: [&str; 2] = ["Exe", "ClientExe"];
+
+/// 등록부에서 읽은 경로들 가운데 구성원으로 인정할 것. 값 이름이 무엇이든 조건은 같다:
+/// 관리자 전용 폴더 아래에 있어야 한다(설계 8.3의 4번).
+pub fn admitted(paths: Vec<String>, admin_dirs: &[String]) -> Vec<String> {
+    paths.into_iter().filter(|path| under_admin_dirs(path, admin_dirs)).collect()
+}
+
 /// 접속자의 실행 파일이 등록부(HKLM, 관리자만 쓸 수 있다)에 올라 있는 랙 구성원인지 (설계 8.3의 2번, 5번).
 /// 대소문자와 `\\?\` 접두사 차이를 없애고 전체 경로를 통째로 비교한다(폴더가 아니라 파일 하나).
 /// 넘겨받는 두 경로는 운영체제가 알려 준 최종 경로여야 한다(짧은 이름·연결을 푼 것).
@@ -519,6 +529,30 @@ mod tests {
         assert!(!is_member(r"C:\Program Files\Story Firewall", &reg));
         assert!(!is_member("", &reg) && !is_member("x", &[]) && !is_member("", &[String::new()]));
         assert!(!is_member(r"C:\Program Files\Story Firewall\..\Story Firewall\story-firewall-ui.exe", &reg), "돌아가는 경로는 받지 않는다");
+    }
+
+    #[test]
+    fn client_exe_counts_as_a_member_on_the_same_terms() {
+        assert_eq!(MEMBER_VALUES, ["Exe", "ClientExe"]);
+        let dirs = vec![r"C:\Program Files".to_string()];
+        // 스토리방화벽: Exe는 서비스, ClientExe는 화면. NetX에 접속해 오는 것은 화면이다.
+        let service = r"C:\Program Files\Story Firewall\story-firewall-svc.exe".to_string();
+        let screen = r"C:\Program Files\Story Firewall\story-firewall-ui.exe".to_string();
+        let members = admitted(vec![service.clone(), screen.clone()], &dirs);
+        assert_eq!(members, [service.clone(), screen.clone()]);
+        assert!(is_member(r"\\?\c:\program files\story firewall\STORY-FIREWALL-UI.EXE", &members), "화면(ClientExe)도 구성원이다");
+        assert!(is_member(&service, &members));
+        assert!(!is_member(r"C:\Program Files\Story Firewall\other.exe", &members), "같은 폴더의 다른 파일은 아니다");
+
+        // ClientExe가 사용자 폴더를 가리키면 등록돼 있어도 인정하지 않는다. Exe는 그대로 인정한다.
+        let loose = r"C:\Users\me\AppData\Local\Story Firewall\story-firewall-ui.exe".to_string();
+        let members = admitted(vec![service.clone(), loose.clone()], &dirs);
+        assert_eq!(members, [service.clone()]);
+        assert!(!is_member(&loose, &members));
+        for bad in [r"C:\Program Files\..\Users\me\ui.exe", r"\\server\share\ui.exe", "ui.exe", ""] {
+            assert!(admitted(vec![bad.to_string()], &dirs).is_empty(), "{bad}");
+        }
+        assert!(admitted(vec![screen], &[]).is_empty(), "관리자 전용 폴더를 모르면 아무도 인정하지 않는다");
     }
 
     #[test]
