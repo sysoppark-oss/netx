@@ -202,6 +202,16 @@ pub fn history_export(app: AppHandle, id: Option<String>, offset_minutes: i32, m
     Ok(path)
 }
 
+/// 다른 PC의 NetX가 내보낸 보고서 파일의 내용을 받아 기록에 더한다. 파일은 화면에서 사용자가 고른다.
+#[tauri::command(async)]
+pub fn history_import(app: AppHandle, html: String) -> Result<usize, String> {
+    let data_dir = data_dir(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let added = crate::history::import(&data_dir, &html, now)?;
+    audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "import", tool: "history-report", argv: &[added.to_string()], risk: Risk::Safe, root: false, confirmed: false });
+    Ok(added)
+}
+
 // ---- 캡처 분석 ----
 // 작업 폴더의 캡처 파일만 이름으로 연다. 읽기 전용이고 아무것도 밖으로 보내지 않는다.
 

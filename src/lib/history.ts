@@ -8,6 +8,8 @@ export interface HistoryMeta {
   target: string;
   light: Light;
   steps: number;
+  /** 다른 PC에서 내보낸 것을 가져온 기록 */
+  imported?: boolean;
 }
 
 export interface HistoryItem {
@@ -24,6 +26,8 @@ export interface HistoryEntry {
   extras: string[];
   plan: ValidatedPlan;
   run: RunState;
+  /** 단계 번호별 구성도 그림(SVG). 내보낸 보고서에 넣는 데 쓴다. */
+  topo_svg?: Record<string, string>;
 }
 
 /** 원본 출력은 건당 이만큼(글자 수)까지만 남긴다. */
@@ -101,4 +105,9 @@ export async function historyDelete(id?: string): Promise<void> {
 /** 기록을 보고서 파일(HTML)로 작업 폴더에 내보내고 파일 경로를 돌려준다. 번호를 주지 않으면 전부. */
 export async function historyExport(id: string | undefined, mask: boolean): Promise<string> {
   return invoke<string>("history_export", { id: id ?? null, offsetMinutes: -new Date().getTimezoneOffset(), mask });
+}
+
+/** 다른 PC의 NetX가 내보낸 보고서 파일의 내용을 기록에 더하고, 더한 건수를 돌려준다. */
+export async function historyImport(html: string): Promise<number> {
+  return invoke<number>("history_import", { html });
 }

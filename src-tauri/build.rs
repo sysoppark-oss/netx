@@ -48,6 +48,7 @@ fn main() {
                 "history_load",
                 "history_delete",
                 "history_export",
+                "history_import",
                 "capture_list",
                 "capture_open",
                 "capture_rows",

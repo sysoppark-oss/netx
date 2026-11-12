@@ -1,8 +1,8 @@
 // 최근 진단 기록 목록. 한 건을 고르면 그때의 계획과 결과를 본 화면에 다시 연다.
 // 기록은 이 PC에만 있다. 결과 목록이므로 말씀 표시를 넣지 않는다.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { captureFolder } from "../lib/capture";
-import { historyDelete, historyExport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
+import { historyDelete, historyExport, historyImport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
 
 const LIGHT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴", info: "⚪" };
 
@@ -18,6 +18,27 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
   const [confirmAll, setConfirmAll] = useState(false);
   const [mask, setMask] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+
+  const [info, setInfo] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** 사용자가 고른 보고서 파일(다른 PC의 NetX가 내보낸 것)을 읽어 기록에 더한다. */
+  async function importFile(file: File | undefined) {
+    setError(null);
+    setInfo(null);
+    if (!file) return;
+    if (file.size > 64 * 1024 * 1024) {
+      setError("파일이 너무 큽니다 (64MB까지).");
+      return;
+    }
+    try {
+      const added = await historyImport(await file.text());
+      setInfo(`${added}건을 가져왔습니다. 목록에 "가져옴"으로 표시됩니다.`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   function exportTo(id?: string) {
     setError(null);
@@ -74,18 +95,38 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
             닫기
           </button>
         </header>
-        {items && items.length > 0 && (
-          <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs">
-            <button onClick={() => exportTo()} className="rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
-              모두 내보내기
-            </button>
-            <label className="flex items-center gap-1.5" title="192.168.x.x 같은 내부 주소를 [내부IP-번호]로 바꿔서 내보냅니다. 밖으로 보낼 때 켜세요.">
-              <input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />
-              내부 주소 가리기
-            </label>
-            <span className="text-dim">브라우저로 열리는 보고서 파일 하나로 저장합니다. 메일이나 메신저로 보내 함께 볼 수 있습니다.</span>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs">
+          {items && items.length > 0 && (
+            <>
+              <button onClick={() => exportTo()} className="rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
+                모두 내보내기
+              </button>
+              <label className="flex items-center gap-1.5" title="192.168.x.x 같은 내부 주소를 [내부IP-번호]로 바꿔서 내보냅니다. 밖으로 보낼 때 켜세요.">
+                <input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />
+                내부 주소 가리기
+              </label>
+            </>
+          )}
+          <button
+            onClick={() => fileRef.current?.click()}
+            title="다른 PC의 NetX가 내보낸 보고서 파일(netx-report-….html)을 골라 이 목록에 더합니다."
+            className="rounded border border-line px-2.5 py-1 hover:bg-raised"
+          >
+            가져오기
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".html,.htm,text/html"
+            className="hidden"
+            onChange={(e) => {
+              void importFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          <span className="min-w-0 flex-1 text-dim">내보내면 브라우저로 열리는 보고서 파일 하나가 됩니다(그림 포함). 받은 사람은 그냥 열어 보거나 NetX에서 [가져오기]로 불러올 수 있습니다.</span>
+        </div>
+        {info && <p className="border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">{info}</p>}
         {saved && (
           <p className="flex items-center gap-3 border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">
             <span className="min-w-0 flex-1 break-all">
@@ -109,7 +150,10 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
                   <button onClick={() => open(item)} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2.5 text-left text-sm">
                     <span title={item.meta.light}>{LIGHT[item.meta.light] ?? "⚪"}</span>
                     <span className="w-36 shrink-0 font-mono text-xs text-dim">{whenText(item.time)}</span>
-                    <span className="w-40 shrink-0 truncate">{item.meta.title}</span>
+                    <span className="w-40 shrink-0 truncate">
+                      {item.meta.title}
+                      {item.meta.imported && <span className="ml-1.5 rounded border border-line px-1 text-[11px] text-dim">가져옴</span>}
+                    </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs text-accent">{item.meta.target}</span>
                     <span className="shrink-0 text-xs text-dim">{item.meta.steps}단계</span>
                   </button>

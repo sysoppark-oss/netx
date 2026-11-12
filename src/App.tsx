@@ -1,5 +1,6 @@
 import { CaptureView } from "./components/CaptureView";
 import { HistoryView } from "./components/HistoryView";
+import { toStandaloneSvg } from "./components/Topology";
 import { historySave, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
 import { useEffect, useRef, useState } from "react";
@@ -198,6 +199,11 @@ export default function App() {
     if (!done) return;
     recorded.current.add(planRunId);
     const target = plan.target ?? Object.values(inputs).find((v) => v) ?? "";
+    // 구성도는 내보낸 보고서에 넣을 수 있게 그림으로도 남긴다.
+    const topo_svg: Record<string, string> = {};
+    for (const [order, result] of Object.entries(done.results)) {
+      if (result.topology) topo_svg[order] = toStandaloneSvg(result.topology);
+    }
     void historySave({
       meta: { title: recipe.title, recipe: recipe.id, target, light: worstLight(done), steps: plan.steps.length },
       recipe_id: recipe.id,
@@ -205,6 +211,7 @@ export default function App() {
       extras,
       plan,
       run: done,
+      topo_svg,
     }).catch(() => {});
   }, [planRunDone, planRunId]);
   useEffect(() => {
@@ -282,7 +289,11 @@ export default function App() {
     setPlanRunId(restoreRun(entry.run));
     setError(null);
     const d = new Date(time);
-    setNotice(`기록에서 연 결과입니다 (${d.toLocaleString("ko-KR")}). 지금 상태를 보려면 다시 실행하세요.`);
+    setNotice(
+      entry.meta.imported
+        ? `다른 PC에서 가져온 기록입니다 (가져온 시각 ${d.toLocaleString("ko-KR")}). 이 PC에서 실행한 결과가 아닙니다. 다시 실행하면 이 PC에서 새로 진단합니다.`
+        : `기록에서 연 결과입니다 (${d.toLocaleString("ko-KR")}). 지금 상태를 보려면 다시 실행하세요.`,
+    );
   }
 
   async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs, added: string[] = extras) {

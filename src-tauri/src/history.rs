@@ -26,6 +26,9 @@ pub struct Meta {
     pub light: String,
     #[serde(default)]
     pub steps: u32,
+    /// 다른 PC에서 내보낸 것을 가져온 기록인지
+    #[serde(default)]
+    pub imported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -49,7 +52,7 @@ fn tidy(text: &str, max: usize) -> String {
 
 fn clean(meta: Meta) -> Meta {
     let light = if matches!(meta.light.as_str(), "green" | "yellow" | "red" | "info") { meta.light } else { "info".into() };
-    Meta { title: tidy(&meta.title, 80), recipe: tidy(&meta.recipe, 40), target: tidy(&meta.target, 120), light, steps: meta.steps.min(99) }
+    Meta { title: tidy(&meta.title, 80), recipe: tidy(&meta.recipe, 40), target: tidy(&meta.target, 120), light, steps: meta.steps.min(99), imported: meta.imported }
 }
 
 fn dir(data_dir: &Path) -> PathBuf {
@@ -143,7 +146,7 @@ pub fn delete(data_dir: &Path, id: Option<&str>) -> Result<usize, String> {
 // 스크립트를 넣지 않고, 기록에서 온 글자는 모두 바꿔 쓴다(장비가 보낸 글자가 섞여 있다).
 // 내보내는 파일에는 말씀 표시를 넣지 않는다.
 
-fn esc(text: &str) -> String {
+pub fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -240,6 +243,13 @@ fn section(time: u64, json: &str, offset_minutes: i32) -> Option<String> {
             if !facts.is_empty() {
                 out.push_str(&format!("<table>{}</table>", facts.concat()));
             }
+            out.push_str(&crate::report_fig::charts_html(result));
+        }
+        // 구성도 그림: 화면이 기록할 때 함께 넣어 둔 그림(SVG)을, 저장할 때와 같은 검사를 거친 것만 넣는다.
+        if let Some(svg) = entry.get("topo_svg").and_then(|t| t.get(&key)).and_then(Value::as_str) {
+            if crate::commands::check_topology_svg(svg).is_ok() {
+                out.push_str(&format!("<figure><figcaption>네트워크 구성도</figcaption><div class=\"topo\">{svg}</div></figure>"));
+            }
         }
         let raw: Vec<String> = lines
             .map(|l| l.iter().filter(|x| x.get("order").and_then(Value::as_u64) == Some(order)).map(|x| esc(&text(x, "line"))).collect())
@@ -259,24 +269,63 @@ h1{font-size:1.4em}h2{font-size:1.15em;border-top:2px solid #1d2330;padding-top:
 pre{background:#f3f5f8;padding:.6em;overflow:auto;font-family:Consolas,monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all}.c{background:#e8f4f3}\
 table{border-collapse:collapse;font-size:.9em;margin:.4em 0}th,td{border:1px solid #c9ced8;padding:.15em .6em;text-align:left}th{background:#f3f5f8;font-weight:normal}\
 .l{display:inline-block;padding:0 .5em;border-radius:1em;font-size:.85em;color:#fff}.g{background:#1a8f4c}.y{background:#b7791f}.r{background:#c53030}.i{background:#5b6475}\
-summary{cursor:pointer;color:#5b6475;font-size:.9em}";
+summary{cursor:pointer;color:#5b6475;font-size:.9em}.topo svg{width:100%;height:auto}";
+
+const DATA_OPEN: &str = "<!--netx-data:";
+const DATA_CLOSE: &str = "-->";
+/// 가져올 수 있는 보고서 파일의 상한
+pub const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
 
 /// 보고서 전체. `entries`는 (저장 시각, 기록 JSON)이고 최근 것부터다.
+/// 맨 끝에 같은 기록을 다른 NetX에서 가져올 수 있게 자료를 주석으로 넣는다(화면에는 보이지 않는다).
 pub fn report(entries: &[(u64, String)], offset_minutes: i32, mask: bool, now_ms: u64) -> String {
+    use base64::Engine;
+    let hide = |text: String| if mask { crate::planner::redact::Mask::build(&text).apply(&text) } else { text };
     let sections: Vec<String> = entries.iter().filter_map(|(time, json)| section(*time, json, offset_minutes)).collect();
-    let html = format!(
-        "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>NetX 진단 기록</title><style>{STYLE}</style></head><body>\
-<h1>NetX 진단 기록</h1><p class=\"m\">내보낸 시각 {} · {}건{}</p>{}</body></html>\n",
+    let html = hide(format!(
+        "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>NetX 진단 기록</title><style>{STYLE}{}</style></head><body>\
+<h1>NetX 진단 기록</h1><p class=\"m\">내보낸 시각 {} · {}건{} · NetX의 [최근 진단] → [가져오기]로 이 파일을 열면 기록으로 다시 볼 수 있습니다</p>{}",
+        crate::report_fig::STYLE,
         local_time(now_ms, offset_minutes).0,
         sections.len(),
         if mask { " · 내부 주소는 [내부IP-번호]로 가렸습니다" } else { " · 내부 네트워크의 주소가 들어 있습니다. 밖으로 보낼 때 주의하세요" },
         sections.concat(),
-    );
-    if mask {
-        crate::planner::redact::Mask::build(&html).apply(&html)
-    } else {
-        html
+    ));
+    let items: Vec<serde_json::Value> = entries
+        .iter()
+        .filter_map(|(time, json)| Some(serde_json::json!({"time": time, "entry": serde_json::from_str::<serde_json::Value>(&hide(json.clone())).ok()?})))
+        .collect();
+    let data = base64::engine::general_purpose::STANDARD.encode(serde_json::Value::Array(items).to_string());
+    format!("{html}{DATA_OPEN}{data}{DATA_CLOSE}</body></html>\n")
+}
+
+/// 내보낸 보고서 파일에서 기록을 꺼내 이 PC의 기록에 더한다. 더한 건수를 돌려준다.
+/// 가져온 기록에는 표시를 남긴다. 이미 있는 기록을 덮어쓰지 않는다.
+pub fn import(data_dir: &Path, html: &str, now_ms: u64) -> Result<usize, String> {
+    use base64::Engine;
+    const BAD: &str = "NetX가 내보낸 보고서 파일이 아니거나 기록 자료가 들어 있지 않습니다.";
+    if html.len() > MAX_IMPORT_BYTES {
+        return Err("파일이 너무 큽니다 (64MB까지).".into());
     }
+    let start = html.rfind(DATA_OPEN).ok_or(BAD)? + DATA_OPEN.len();
+    let rest = html.get(start..).ok_or(BAD)?;
+    let data = rest.get(..rest.find(DATA_CLOSE).ok_or(BAD)?).ok_or(BAD)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| BAD.to_string())?;
+    let items: Vec<serde_json::Value> = serde_json::from_slice(&bytes).map_err(|_| BAD.to_string())?;
+    let mut added = 0;
+    // 오래된 것부터 넣어야 목록에서 원래 순서가 유지된다.
+    for (i, item) in items.iter().take(MAX_ENTRIES).rev().enumerate() {
+        let Some(mut entry) = item.get("entry").filter(|e| e.is_object()).cloned() else { continue };
+        let Some(meta) = entry.get_mut("meta").and_then(serde_json::Value::as_object_mut) else { continue };
+        meta.insert("imported".into(), serde_json::Value::Bool(true));
+        if save(data_dir, &entry.to_string(), now_ms + i as u64).is_ok() {
+            added += 1;
+        }
+    }
+    if added == 0 {
+        return Err("가져올 수 있는 기록이 없습니다.".into());
+    }
+    Ok(added)
 }
 
 /// 기록을 보고서 파일로 `folder`에 쓴다. `id`를 주면 그 한 건, 주지 않으면 전부. 파일의 전체 경로를 돌려준다.
@@ -325,7 +374,7 @@ mod tests {
         assert_ne!(a, b, "같은 시각에도 덮어쓰지 않는다");
         let items = list(&d);
         assert_eq!(items.iter().map(|i| i.meta.title.as_str()).collect::<Vec<_>>(), ["둘째", "첫째"], "최근 것부터");
-        assert_eq!(items[0].meta, Meta { title: "둘째".into(), recipe: "route_latency".into(), target: "8.8.8.8".into(), light: "green".into(), steps: 2 });
+        assert_eq!(items[0].meta, Meta { title: "둘째".into(), recipe: "route_latency".into(), target: "8.8.8.8".into(), light: "green".into(), steps: 2, imported: false });
         assert!(load(&d, &a).unwrap().contains("첫째"));
         assert_eq!(delete(&d, Some(&a)).unwrap(), 1);
         assert!(load(&d, &a).is_err());
@@ -436,5 +485,48 @@ mod tests {
         delete(&d, None).unwrap();
         assert!(export(&d, &out, None, 540, false, 0).is_err());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn report_carries_pictures_and_can_be_imported_elsewhere() {
+        let with_chart = serde_json::json!({
+            "meta": {"title": "라우팅 지연 분석", "recipe": "route_latency", "target": "192.168.0.1", "light": "green", "steps": 1},
+            "recipe_id": "route_latency", "inputs": {"target": "192.168.0.1"},
+            "plan": {"steps": [{"order": 1, "title": "연결 확인 (ping)", "display": "ping -c 5 -- 192.168.0.1"}]},
+            "run": {"steps": {"1": {"status": "done", "elapsed_ms": 4000}}, "lines": [],
+                "results": {"1": {"light": "green", "text": "모두 응답", "facts": [], "charts": [{"kind": "line", "title": "응답 시간", "unit": "ms", "points": [1, 2, 3]}]}}},
+            "topo_svg": {"1": "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>gw</text></svg>", "2": "<svg onload=\"x()\"></svg>"}
+        })
+        .to_string();
+        let html = report(&[(1_794_443_732_486, with_chart.clone()), (1_794_443_000_000, full_entry())], 540, false, 1_794_443_800_000);
+        assert!(html.contains("<figcaption>응답 시간") && html.contains("<polyline") && html.contains("네트워크 구성도") && html.contains("<text>gw</text>"));
+        assert!(!html.contains("onload"), "검사를 통과하지 못한 그림은 넣지 않는다");
+        assert!(html.ends_with("--></body></html>\n"));
+
+        // 다른 PC에서 가져오기
+        let other = temp("import");
+        assert_eq!(import(&other, &html, 1_794_500_000_000).unwrap(), 2);
+        let items = list(&other);
+        assert_eq!(items.iter().map(|i| i.meta.title.as_str()).collect::<Vec<_>>(), ["라우팅 지연 분석", "웹 장애 진단"], "원래 순서대로");
+        assert!(items.iter().all(|i| i.meta.imported));
+        assert!(load(&other, &items[0].id).unwrap().contains("\"points\":[1,2,3]"));
+        // 한 번 더 가져와도 덮어쓰지 않고 더해진다.
+        assert_eq!(import(&other, &html, 1_794_500_000_000).unwrap(), 2);
+        assert_eq!(list(&other).len(), 4);
+
+        // 가린 보고서는 가져온 기록에도 내부 주소가 없다.
+        let masked = report(&[(1_794_443_732_486, with_chart)], 540, true, 1_794_443_800_000);
+        let third = temp("import-masked");
+        import(&third, &masked, 1_794_500_000_000).unwrap();
+        let text = load(&third, &list(&third)[0].id).unwrap();
+        assert!(!text.contains("192.168.0.1") && text.contains("[내부IP-1]"));
+
+        // 엉뚱한 파일
+        for bad in ["", "<html>그냥 문서</html>", "<!--netx-data:!!!-->", "<!--netx-data:bm9wZQ==-->", "<!--netx-data:W10=-->", "<!--netx-data:W3sidGltZSI6MX1d-->"] {
+            assert!(import(&third, bad, 0).is_err(), "{bad}");
+        }
+        for d in [other, third] {
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
 }
