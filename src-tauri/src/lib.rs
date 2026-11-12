@@ -11,6 +11,7 @@ mod capview;
 mod commands;
 mod engine;
 mod env_check;
+mod history;
 mod estimate;
 mod interpret;
 mod manual;
@@ -88,6 +89,10 @@ pub fn run() {
             commands::apply_update,
             commands::get_word,
             commands::open_church_mail,
+            commands::history_save,
+            commands::history_list,
+            commands::history_load,
+            commands::history_delete,
             commands::capture_list,
             commands::capture_open,
             commands::capture_rows,

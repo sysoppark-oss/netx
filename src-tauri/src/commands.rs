@@ -166,6 +166,31 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     Ok((data, work))
 }
 
+// ---- 최근 진단 기록 ----
+// 끝난 진단의 계획과 결과를 이 PC의 자료 폴더에만 남긴다.
+
+#[tauri::command(async)]
+pub fn history_save(app: AppHandle, entry: String) -> Result<String, String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    crate::history::save(&data_dir(&app)?, &entry, now)
+}
+
+#[tauri::command(async)]
+pub fn history_list(app: AppHandle) -> Result<Vec<crate::history::Item>, String> {
+    Ok(crate::history::list(&data_dir(&app)?))
+}
+
+#[tauri::command(async)]
+pub fn history_load(app: AppHandle, id: String) -> Result<String, String> {
+    crate::history::load(&data_dir(&app)?, &id)
+}
+
+/// `id`를 주면 그 한 건, 주지 않으면 모두 지운다.
+#[tauri::command(async)]
+pub fn history_delete(app: AppHandle, id: Option<String>) -> Result<usize, String> {
+    crate::history::delete(&data_dir(&app)?, id.as_deref())
+}
+
 // ---- 캡처 분석 ----
 // 작업 폴더의 캡처 파일만 이름으로 연다. 읽기 전용이고 아무것도 밖으로 보내지 않는다.
 

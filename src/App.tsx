@@ -1,4 +1,6 @@
 import { CaptureView } from "./components/CaptureView";
+import { HistoryView } from "./components/HistoryView";
+import { historySave, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
 import { useEffect, useRef, useState } from "react";
 import { AddStep } from "./components/AddStep";
@@ -28,7 +30,7 @@ import {
   runMixed,
   suggest,
 } from "./lib/backend";
-import { useRun } from "./lib/runs";
+import { hasRun, peekRun, restoreRun, useRun } from "./lib/runs";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
@@ -91,6 +93,11 @@ export default function App() {
   const situationRef = useRef<HTMLInputElement>(null);
   // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
   const [capture, setCapture] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // 메뉴별로 마지막에 보던 화면(입력, 계획, 실행 번호)
+  const kept = useRef<Record<string, { inputs: Record<string, string>; plan: ValidatedPlan | null; planRunId: number | null; extras: string[]; custom: Record<string, boolean> }>>({});
+  // 기록으로 이미 남긴 실행 번호
+  const recorded = useRef<Set<number>>(new Set());
   // 다른 프로그램이 넘긴 진단 대상: 입력칸에 채우고 알림을 보인다. 실행하지 않는다.
   const [handoff, setHandoff] = useState<Handoff | null>(null);
   useEffect(() => {
@@ -183,6 +190,23 @@ export default function App() {
 
   // 실행이 끝나면 AI에게 요약과 판정을 받는다.
   const planRunDone = planRun !== null && !planRun.active && Object.keys(planRun.steps).length > 0;
+
+  // 끝난 진단을 최근 진단 기록에 남긴다(레시피로 실행한 것만, 기록에서 다시 연 것은 빼고).
+  useEffect(() => {
+    if (!planRunDone || planRunId === null || planRunId < 0 || !recipe || !plan || recorded.current.has(planRunId)) return;
+    const done = peekRun(planRunId);
+    if (!done) return;
+    recorded.current.add(planRunId);
+    const target = plan.target ?? Object.values(inputs).find((v) => v) ?? "";
+    void historySave({
+      meta: { title: recipe.title, recipe: recipe.id, target, light: worstLight(done), steps: plan.steps.length },
+      recipe_id: recipe.id,
+      inputs,
+      extras,
+      plan,
+      run: done,
+    }).catch(() => {});
+  }, [planRunDone, planRunId]);
   useEffect(() => {
     if (!planRunDone || planRunId === null || !aiOn || brief?.runId === planRunId) return;
     const id = planRunId;
@@ -208,19 +232,57 @@ export default function App() {
         : null;
   const shownBrief = brief && brief.runId === planRunId ? brief : null;
 
+  /** 지금 보던 진단의 입력, 계획, 결과를 기억해 둔다. 다른 메뉴에 갔다 오면 그대로 다시 보인다. */
+  function leaveRecipe() {
+    if (recipe) kept.current[recipe.id] = { inputs, plan, planRunId, extras, custom };
+  }
+
   function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
+    leaveRecipe();
     setAi(null);
     setManualMode(false);
+    setRecipe(r);
+    setError(null);
+    setNotice(null);
+    // 다른 메뉴에 갔다가 돌아온 것이면 보던 화면을 되살린다. 같은 메뉴를 다시 누르면 새로 시작한다.
+    const back = Object.keys(prefilled).length === 0 && recipe?.id !== r.id ? kept.current[r.id] : undefined;
+    if (back) {
+      setInputs(back.inputs);
+      setExtras(back.extras);
+      setCustom(back.custom);
+      setPlan(back.plan);
+      setPlanRunId(back.planRunId !== null && hasRun(back.planRunId) ? back.planRunId : null);
+      return;
+    }
     setExtras([]);
     setCustom({});
-    setRecipe(r);
     // 기본값이 있는 입력은 미리 채워 둔다.
     const defaults = Object.fromEntries(r.inputs.filter((i) => i.default).map((i) => [i.name, i.default as string]));
     setInputs({ ...defaults, ...prefilled });
     setPlan(null);
     setPlanRunId(null);
+  }
+
+  /** 기록에서 고른 진단을 그때의 계획과 결과로 다시 연다. */
+  function openHistory(entry: HistoryEntry, time: number) {
+    const r = recipes.find((x) => x.id === entry.recipe_id);
+    setHistoryOpen(false);
+    if (!r) {
+      setError("이 기록의 진단 종류를 지금 판에서 찾지 못했습니다.");
+      return;
+    }
+    leaveRecipe();
+    setAi(null);
+    setManualMode(false);
+    setRecipe(r);
+    setInputs(entry.inputs);
+    setExtras(entry.extras);
+    setCustom({});
+    setPlan(entry.plan);
+    setPlanRunId(restoreRun(entry.run));
     setError(null);
-    setNotice(null);
+    const d = new Date(time);
+    setNotice(`기록에서 연 결과입니다 (${d.toLocaleString("ko-KR")}). 지금 상태를 보려면 다시 실행하세요.`);
   }
 
   async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs, added: string[] = extras) {
@@ -251,6 +313,7 @@ export default function App() {
 
   function openManual() {
     setAi(null);
+    leaveRecipe();
     setRecipe(null);
     setPlan(null);
     setExtras([]);
@@ -277,7 +340,8 @@ export default function App() {
       const res = await suggest(situation, level);
       setMode("easy");
       if (res.kind === "plan") {
-        setRecipe(null);
+        leaveRecipe();
+    setRecipe(null);
         setManualMode(false);
         setExtras([]);
         setPlan(null);
@@ -485,6 +549,14 @@ export default function App() {
                 })}
               </ul>
               <h2 className="mt-4 mb-2 px-1 text-xs font-semibold text-dim">직접 하기</h2>
+              <button
+                onClick={() => setHistoryOpen(true)}
+                title="끝난 진단의 결과를 다시 봅니다. 최근 30건까지 이 PC에만 남습니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">🕘</span>
+                <span className="flex-1">최근 진단</span>
+              </button>
               <button
                 onClick={() => setCapture("")}
                 title="저장해 둔 패킷 캡처를 열어 요약, 문제 찾기, 패킷 목록을 봅니다."
@@ -826,6 +898,7 @@ export default function App() {
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}
+      {historyOpen && <HistoryView onOpen={openHistory} onClose={() => setHistoryOpen(false)} />}
       {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );
