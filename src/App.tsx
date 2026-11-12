@@ -560,7 +560,11 @@ export default function App() {
                   return (
                     <li key={r.id}>
                       <button
-                        onClick={() => pickRecipe(r, handoff ? handoffInputs(r.id, handoff.target) : {})}
+                        onClick={() => {
+                          const filled = handoff ? handoffInputs(r.id, handoff.target) : {};
+                          setHandoffFilled(Object.keys(filled).length > 0);
+                          pickRecipe(r, filled);
+                        }}
                         disabled={!ok}
                         title={ok ? r.description : "현재 등급에서는 쓸 수 없습니다"}
                         className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent ${
@@ -641,7 +645,9 @@ export default function App() {
                 <span className="block text-xs text-dim">
                   {handoffFilled
                     ? "지금 열린 진단의 입력칸에 채워 두었습니다. [계획 보기]를 누르세요. 자동으로 실행하지 않습니다."
-                    : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
+                    : recipe && Object.keys(handoffInputs(recipe.id, handoff.target)).length === 0
+                      ? "서브넷 스캔, 구성도, 포트 추적, 대역폭은 넘겨받은 대상을 넣을 칸이 없어 그대로 둡니다. 왼쪽에서 라우팅 지연 분석, 웹 장애 진단, 패킷 캡처를 고르면 채워집니다. 자동으로 실행하지 않습니다."
+                      : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
                 </span>
               </span>
               <button onClick={() => setHandoff(null)} className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
