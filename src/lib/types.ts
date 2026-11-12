@@ -132,6 +132,8 @@ export interface NetInfo {
   rx_bytes: number | null;
   tx_bytes: number | null;
   at_ms: number;
+  /** 느린 조회가 아직 돌고 있어 빈 항목이 곧 채워진다. */
+  pending: boolean;
 }
 
 export interface ValidatedPlan {

@@ -496,7 +496,7 @@ async fn ping_sweep(hosts: Vec<Ipv4Addr>, timeout: Duration) -> Vec<(Ipv4Addr, f
 pub async fn netmap(argv: &[String], emit: &(dyn Fn(String) + Send + Sync)) -> Result<i32, String> {
     let MapOptions { target, ports, ping, banner, mdns, snmp, timeout } = MapOptions::parse(argv)?;
     let target = &target;
-    let info = crate::netinfo::current().await;
+    let info = crate::netinfo::settled().await;
     let me: Option<Ipv4Addr> = info.ip.as_deref().and_then(|s| s.parse().ok());
     let gateway: Option<Ipv4Addr> = info.gateway.as_deref().and_then(|s| s.parse().ok());
     let cidr = if target == "auto" {

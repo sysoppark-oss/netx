@@ -48,11 +48,16 @@ export function NetBar() {
       last.current = now;
       setInfo(now);
     };
-    poll();
-    const timer = setInterval(poll, POLL_MS);
+    // 빈 항목이 곧 채워질 때는 1초마다 다시 묻는다.
+    let timer: ReturnType<typeof setTimeout>;
+    const loop = async () => {
+      await poll();
+      if (alive) timer = setTimeout(loop, last.current?.pending ? 1000 : POLL_MS);
+    };
+    loop();
     return () => {
       alive = false;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, []);
 
@@ -66,7 +71,7 @@ export function NetBar() {
   const Item = ({ label, value, title }: { label: string; value: string | null; title?: string }) => (
     <span className="flex shrink-0 items-baseline gap-1.5" title={title}>
       <span className="text-dim">{label}</span>
-      <span className={`font-mono ${value ? "text-ink" : "text-dim"}`}>{value ?? "확인 불가"}</span>
+      <span className={`font-mono ${value ? "text-ink" : "text-dim"}`}>{value ?? (info.pending ? "확인 중…" : "확인 불가")}</span>
     </span>
   );
 
