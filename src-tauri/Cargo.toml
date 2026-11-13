@@ -38,6 +38,7 @@ serialport = { version = "4", default-features = false }
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

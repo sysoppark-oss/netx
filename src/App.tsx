@@ -1,5 +1,6 @@
 import { CaptureView } from "./components/CaptureView";
 import { HistoryView } from "./components/HistoryView";
+import { ReportView } from "./components/ReportView";
 import { toStandaloneSvg } from "./components/Topology";
 import { historySave, reportEntry, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
@@ -98,6 +99,7 @@ export default function App() {
   // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
   const [capture, setCapture] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   // 메뉴별로 마지막에 보던 화면(입력, 계획, 실행 번호)
   const kept = useRef<Record<string, { inputs: Record<string, string>; plan: ValidatedPlan | null; planRunId: number | null; extras: string[]; custom: Record<string, boolean> }>>({});
   // 기록으로 이미 남긴 실행 번호
@@ -714,6 +716,14 @@ export default function App() {
                 <span className="flex-1">최근 진단</span>
               </button>
               <button
+                onClick={() => setReportOpen(true)}
+                title="구역과 기간을 골라 보고서 파일 하나를 만듭니다. 고른 자리에 파일로만 저장하고 어디로도 보내지 않습니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">📄</span>
+                <span className="flex-1">보고서 만들기</span>
+              </button>
+              <button
                 onClick={() => setCapture("")}
                 title="저장해 둔 패킷 캡처를 열어 요약, 문제 찾기, 패킷 목록을 봅니다."
                 className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
@@ -1041,7 +1051,17 @@ export default function App() {
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}
-      {historyOpen && <HistoryView onOpen={openHistory} onClose={() => setHistoryOpen(false)} />}
+      {historyOpen && (
+        <HistoryView
+          onOpen={openHistory}
+          onReport={() => {
+            setHistoryOpen(false);
+            setReportOpen(true);
+          }}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      {reportOpen && <ReportView onClose={() => setReportOpen(false)} />}
       {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );

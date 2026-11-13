@@ -141,8 +141,8 @@ pub fn delete(data_dir: &Path, id: Option<&str>) -> Result<usize, String> {
     Ok(targets.iter().filter(|id| std::fs::remove_file(dir(data_dir).join(format!("{id}.json"))).is_ok()).count())
 }
 
-// ---- 내보내기 ----
-// 기록을 다른 사람과 함께 볼 수 있게 브라우저로 열리는 보고서(HTML) 한 파일로 만든다.
+// ---- 보고서에 싣기 ----
+// 기록 한 건을 보고서의 한 토막으로 만든다. 보고서 전체는 `report.rs`가 만든다(이 기록은 그 "최근 진단" 구역이다).
 // 스크립트를 넣지 않고, 기록에서 온 글자는 모두 바꿔 쓴다(장비가 보낸 글자가 섞여 있다).
 // 내보내는 파일에는 말씀 표시를 넣지 않는다.
 
@@ -202,10 +202,9 @@ fn status_text(status: &str) -> &'static str {
     }
 }
 
-/// 기록 한 건을 보고서의 한 구역으로 만든다.
-fn section(time: u64, json: &str, offset_minutes: i32) -> Option<String> {
+/// 기록 한 건을 보고서의 한 토막으로 만든다. 가릴 것은 부르는 쪽이 `entry`에서 미리 가린다.
+pub fn section(time: u64, entry: &serde_json::Value, offset_minutes: i32) -> Option<String> {
     use serde_json::Value;
-    let entry: Value = serde_json::from_str(json).ok()?;
     let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
     let meta = entry.get("meta")?;
     let (label, class) = light_text(&text(meta, "light"));
@@ -245,9 +244,10 @@ fn section(time: u64, json: &str, offset_minutes: i32) -> Option<String> {
             }
             out.push_str(&crate::report_fig::charts_html(result));
         }
-        // 구성도 그림: 화면이 기록할 때 함께 넣어 둔 그림(SVG)을, 저장할 때와 같은 검사를 거친 것만 넣는다.
+        // 구성도 그림: 화면이 기록할 때 함께 넣어 둔 그림(SVG). 다른 PC에서 가져온 기록일 수도 있으므로,
+        // 그림에 쓰는 꼬리표와 속성만으로 된 것만 넣는다.
         if let Some(svg) = entry.get("topo_svg").and_then(|t| t.get(&key)).and_then(Value::as_str) {
-            if crate::commands::check_topology_svg(svg).is_ok() {
+            if crate::report::safe_svg(svg) {
                 out.push_str(&format!("<figure><figcaption>네트워크 구성도</figcaption><div class=\"topo\">{svg}</div></figure>"));
             }
         }
@@ -263,7 +263,7 @@ fn section(time: u64, json: &str, offset_minutes: i32) -> Option<String> {
     Some(out)
 }
 
-const STYLE: &str = "body{font-family:'Malgun Gothic',sans-serif;max-width:60em;margin:2em auto;padding:0 1em;color:#1d2330;line-height:1.6}\
+pub const STYLE: &str = "body{font-family:'Malgun Gothic',sans-serif;max-width:60em;margin:2em auto;padding:0 1em;color:#1d2330;line-height:1.6}\
 h1{font-size:1.4em}h2{font-size:1.15em;border-top:2px solid #1d2330;padding-top:.8em;margin-top:2em}h3{font-size:1em;margin:.2em 0}\
 .t{font-family:Consolas,monospace;color:#0b6b6b}.m{color:#5b6475;font-size:.9em;margin:.2em 0}.s{border:1px solid #c9ced8;border-radius:6px;padding:.6em .9em;margin:.7em 0}\
 pre{background:#f3f5f8;padding:.6em;overflow:auto;font-family:Consolas,monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all}.c{background:#e8f4f3}\
@@ -271,17 +271,18 @@ table{border-collapse:collapse;font-size:.9em;margin:.4em 0}th,td{border:1px sol
 .l{display:inline-block;padding:0 .5em;border-radius:1em;font-size:.85em;color:#fff}.g{background:#1a8f4c}.y{background:#b7791f}.r{background:#c53030}.i{background:#5b6475}\
 summary{cursor:pointer;color:#5b6475;font-size:.9em}.topo svg{width:100%;height:auto}";
 
-const DATA_OPEN: &str = "<!--netx-data:";
-const DATA_CLOSE: &str = "-->";
+pub const DATA_OPEN: &str = "<!--netx-data:";
+pub const DATA_CLOSE: &str = "-->";
 /// 가져올 수 있는 보고서 파일의 상한
 pub const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
 
-/// 보고서 전체. `entries`는 (저장 시각, 기록 JSON)이고 최근 것부터다.
-/// 맨 끝에 같은 기록을 다른 NetX에서 가져올 수 있게 자료를 주석으로 넣는다(화면에는 보이지 않는다).
+/// 예전 판(보고서 만들기 화면이 생기기 전)이 내보내던 보고서 파일. 지금은 만들지 않고,
+/// 예전 파일도 가져오기에 통과하는지 시험하는 데만 쓴다.
+#[cfg(test)]
 pub fn report(entries: &[(u64, String)], offset_minutes: i32, mask: bool, now_ms: u64) -> String {
     use base64::Engine;
     let hide = |text: String| if mask { crate::planner::redact::Mask::build(&text).apply(&text) } else { text };
-    let sections: Vec<String> = entries.iter().filter_map(|(time, json)| section(*time, json, offset_minutes)).collect();
+    let sections: Vec<String> = entries.iter().filter_map(|(time, json)| section(*time, &serde_json::from_str(json).ok()?, offset_minutes)).collect();
     let html = hide(format!(
         "<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>NetX 진단 기록</title><style>{STYLE}{}</style></head><body>\
 <h1>NetX 진단 기록</h1><p class=\"m\">내보낸 시각 {} · {}건{} · NetX의 [최근 진단] → [가져오기]로 이 파일을 열면 기록으로 다시 볼 수 있습니다</p>{}",
@@ -328,7 +329,18 @@ pub fn import(data_dir: &Path, html: &str, now_ms: u64) -> Result<usize, String>
     Ok(added)
 }
 
-/// 기록을 보고서 파일로 `folder`에 쓴다. `id`를 주면 그 한 건, 주지 않으면 전부. 파일의 전체 경로를 돌려준다.
+/// 기간 안의 기록을 (저장 시각, 기록 JSON)으로, 최근 것부터. `id`를 주면 그 한 건만.
+pub fn collect(data_dir: &Path, id: Option<&str>) -> Result<Vec<(u64, String)>, String> {
+    let ids: Vec<String> = match id {
+        Some(id) if valid_id(id) => vec![id.to_string()],
+        Some(_) => return Err("기록 번호가 올바르지 않습니다.".into()),
+        None => files(data_dir).into_iter().take(MAX_ENTRIES).map(|(id, _)| id).collect(),
+    };
+    Ok(ids.iter().filter_map(|id| Some((id.parse().ok()?, load(data_dir, id).ok()?))).collect())
+}
+
+/// 예전 판의 내보내기(시험용).
+#[cfg(test)]
 pub fn export(data_dir: &Path, folder: &Path, id: Option<&str>, offset_minutes: i32, mask: bool, now_ms: u64) -> Result<String, String> {
     let ids: Vec<String> = match id {
         Some(id) if valid_id(id) => vec![id.to_string()],

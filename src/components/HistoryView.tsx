@@ -1,8 +1,9 @@
 // 최근 진단 기록 목록. 한 건을 고르면 그때의 계획과 결과를 본 화면에 다시 연다.
 // 기록은 이 PC에만 있다. 결과 목록이므로 말씀 표시를 넣지 않는다.
 import { useEffect, useRef, useState } from "react";
-import { captureFolder } from "../lib/capture";
-import { historyDelete, historyExport, historyImport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
+import { historyDelete, historyImport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
+import { reportMake, type ReportSaved } from "../lib/report";
+import { ReportSavedBar } from "./ReportView";
 
 const LIGHT: Record<string, string> = { green: "🟢", yellow: "🟡", red: "🔴", info: "⚪" };
 
@@ -12,12 +13,15 @@ function whenText(ms: number): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
-export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry, time: number) => void; onClose: () => void }) {
+export function HistoryView({ onOpen, onReport, onClose }: { onOpen: (entry: HistoryEntry, time: number) => void; onReport: () => void; onClose: () => void }) {
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmAll, setConfirmAll] = useState(false);
-  const [mask, setMask] = useState(false);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [mask, setMask] = useState(true);
+  const [saved, setSaved] = useState<ReportSaved | null>(null);
+  /** 가리기를 끄고 한 건 보고서를 누르면 저장 전에 한 번 묻는다. */
+  const [askPlain, setAskPlain] = useState<string | null>(null);
+  const [making, setMaking] = useState(false);
 
   const [info, setInfo] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -40,11 +44,23 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
     }
   }
 
-  function exportTo(id?: string) {
+  /** 이 한 건만 담은 보고서를 만든다(보고서 만들기와 같은 형식). */
+  function reportOne(id: string, confirmed = false) {
+    if (!mask && !confirmed) {
+      setInfo(null);
+      setSaved(null);
+      setAskPlain(id);
+      return;
+    }
+    setAskPlain(null);
     setError(null);
-    historyExport(id, mask)
-      .then(setSaved)
-      .catch((e) => setError(String(e)));
+    setInfo(null);
+    setSaved(null);
+    setMaking(true);
+    reportMake({ sections: ["history"], from_ms: 0, to_ms: 0, mask, history_id: id })
+      .then((result) => (result ? setSaved(result) : setInfo("저장하지 않았습니다.")))
+      .catch((e) => setError(String(e)))
+      .finally(() => setMaking(false));
   }
 
   const refresh = () =>
@@ -96,20 +112,18 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
           </button>
         </header>
         <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs">
+          <button onClick={onReport} title="구역과 기간을 골라 보고서 파일을 만듭니다. 진단 기록은 그 한 구역입니다." className="rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
+            보고서 만들기
+          </button>
           {items && items.length > 0 && (
-            <>
-              <button onClick={() => exportTo()} className="rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
-                모두 내보내기
-              </button>
-              <label className="flex items-center gap-1.5" title="192.168.x.x 같은 내부 주소를 [내부IP-번호]로 바꿔서 내보냅니다. 밖으로 보낼 때 켜세요.">
-                <input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />
-                내부 주소 가리기
-              </label>
-            </>
+            <label className="flex items-center gap-1.5" title="[이 건 보고서]에서 내부 주소, MAC 뒷부분, PC 이름, 사용자 이름을 가립니다. 남에게 보여 줄 때 켜 두세요.">
+              <input type="checkbox" checked={mask} onChange={(e) => setMask(e.target.checked)} />
+              가리기
+            </label>
           )}
           <button
             onClick={() => fileRef.current?.click()}
-            title="다른 PC의 NetX가 내보낸 보고서 파일(netx-report-….html)을 골라 이 목록에 더합니다."
+            title="NetX가 만든 보고서 파일(netx-report-….html)을 골라 그 안의 진단 기록을 이 목록에 더합니다."
             className="rounded border border-line px-2.5 py-1 hover:bg-raised"
           >
             가져오기
@@ -124,16 +138,18 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
               e.target.value = "";
             }}
           />
-          <span className="min-w-0 flex-1 text-dim">내보내면 브라우저로 열리는 보고서 파일 하나가 됩니다(그림 포함). 받은 사람은 그냥 열어 보거나 NetX에서 [가져오기]로 불러올 수 있습니다.</span>
+          <span className="min-w-0 flex-1 text-dim">보고서는 브라우저로 열리는 파일 하나입니다(그림 포함). 받은 사람은 그냥 열어 보거나 NetX에서 [가져오기]로 불러올 수 있습니다.</span>
         </div>
         {info && <p className="border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">{info}</p>}
-        {saved && (
-          <p className="flex items-center gap-3 border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">
-            <span className="min-w-0 flex-1 break-all">
-              저장했습니다: <span className="font-mono">{saved}</span>
-            </span>
-            <button onClick={() => void captureFolder().catch(() => {})} className="shrink-0 rounded border border-line px-2.5 py-1 hover:bg-raised">
-              폴더 열기
+        {saved && <ReportSavedBar saved={saved} onError={setError} />}
+        {askPlain && (
+          <p className="flex items-center gap-3 border-b border-caution/40 bg-caution/10 px-4 py-2 text-xs">
+            <span className="flex-1 text-caution">내부 주소, PC 이름이 그대로 들어갑니다.</span>
+            <button onClick={() => reportOne(askPlain, true)} className="rounded border border-caution/60 px-2.5 py-1 text-caution hover:bg-raised">
+              그대로 만들기
+            </button>
+            <button onClick={() => setAskPlain(null)} className="rounded border border-line px-2.5 py-1 hover:bg-raised">
+              그만두기
             </button>
           </p>
         )}
@@ -157,8 +173,8 @@ export function HistoryView({ onOpen, onClose }: { onOpen: (entry: HistoryEntry,
                     <span className="min-w-0 flex-1 truncate font-mono text-xs text-accent">{item.meta.target}</span>
                     <span className="shrink-0 text-xs text-dim">{item.meta.steps}단계</span>
                   </button>
-                  <button onClick={() => exportTo(item.id)} title="이 기록만 보고서 파일로 내보냅니다" className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
-                    내보내기
+                  <button onClick={() => reportOne(item.id)} disabled={making} title="이 기록 한 건만 담은 보고서 파일을 만듭니다" className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised disabled:opacity-50">
+                    이 건 보고서
                   </button>
                   <button onClick={() => remove(item.id)} title="이 기록을 지웁니다" className="shrink-0 rounded border border-line px-2 py-0.5 text-xs text-dim hover:text-ink">
                     지우기

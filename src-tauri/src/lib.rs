@@ -12,6 +12,7 @@ mod commands;
 mod engine;
 mod env_check;
 mod history;
+mod report;
 mod report_fig;
 mod estimate;
 mod interpret;
@@ -45,6 +46,8 @@ pub fn run() {
         }))
         // 다른 프로그램이 진단 대상을 넘겼을 때 Windows 알림 창을 띄우는 데 쓴다.
         .plugin(tauri_plugin_notification::init())
+        // 보고서를 저장할 자리를 사용자가 고르는 저장 창. 백엔드에서만 띄운다(화면에는 이 플러그인의 권한을 주지 않는다).
+        .plugin(tauri_plugin_dialog::init())
         // 본창을 닫으면 터미널 창도 닫는다(터미널 창만 남으면 본창을 다시 열 길이 없다).
         .on_window_event(|window, event| {
             use tauri::Manager;
@@ -96,7 +99,9 @@ pub fn run() {
             commands::history_list,
             commands::history_load,
             commands::history_delete,
-            commands::history_export,
+            commands::report_make,
+            commands::report_cancel,
+            commands::report_open,
             commands::history_import,
             commands::capture_list,
             commands::capture_open,
