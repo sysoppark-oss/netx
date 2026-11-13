@@ -13,6 +13,7 @@ export const KEEP_RECEIVED = 20;
 const TARGET = /^[0-9A-Za-z.:[\]-]{1,270}$/;
 const FROM = /^[a-z0-9_-]{1,32}$/;
 const NAME = /^[a-z0-9.-]{1,253}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 저장해 둔 목록에서 모양이 맞는 것만 되살린다. */
 export function parseReceived(text: string | null): Received[] {
@@ -26,10 +27,7 @@ export function parseReceived(text: string | null): Received[] {
   const out: Received[] = [];
   for (const item of raw.slice(0, KEEP_RECEIVED)) {
     if (typeof item !== "object" || item === null) continue;
-    const { at, target, from, note, name, read } = item as Record<
-      string,
-      unknown
-    >;
+    const { at, target, from, note, name, read, request_id } = item as Record<string, unknown>;
     if (typeof at !== "number" || !Number.isFinite(at)) continue;
     if (typeof target !== "string" || !TARGET.test(target)) continue;
     if (typeof from !== "string" || !FROM.test(from)) continue;
@@ -38,6 +36,7 @@ export function parseReceived(text: string | null): Received[] {
       target,
       from,
       note: typeof note === "string" ? note.slice(0, 200) : "",
+      request_id: typeof request_id === "string" && UUID.test(request_id) ? request_id : "",
       name: typeof name === "string" && NAME.test(name) ? name : null,
       read: read === true,
     });

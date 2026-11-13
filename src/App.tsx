@@ -1,7 +1,7 @@
 import { CaptureView } from "./components/CaptureView";
 import { HistoryView } from "./components/HistoryView";
 import { toStandaloneSvg } from "./components/Topology";
-import { historySave, worstLight, type HistoryEntry } from "./lib/history";
+import { historySave, reportEntry, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
 import { useEffect, useRef, useState } from "react";
 import { AddStep } from "./components/AddStep";
@@ -22,6 +22,7 @@ import {
   getSettings,
   voiceTyping,
   onHandoff,
+  bridgeReport,
   type Handoff,
   getToolStatus,
   getTools,
@@ -32,7 +33,7 @@ import {
   suggest,
 } from "./lib/backend";
 import { hasRun, peekRun, restoreRun, useRun } from "./lib/runs";
-import { handoffInputs } from "./lib/handoff";
+import { handoffInputs, ranOnHandoff } from "./lib/handoff";
 import { addReceived, loadReceived, receivedAt, saveReceived, type Received } from "./lib/inbox";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
@@ -119,8 +120,12 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [handoffFresh, handoff]);
 
+  // 마지막으로 보인 의뢰. 띠를 닫은 뒤에도 그 대상의 진단 결과는 보낸 쪽에 돌려준다.
+  const lastHandoff = useRef<Handoff | null>(null);
+
   /** 넘겨받은 대상을 띠에 보이고 입력칸에 채운다. 실행하지 않는다. */
   function showHandoff(h: Handoff) {
+    lastHandoff.current = h;
     setHandoff(h);
     setSituation(h.target);
     // 열려 있는 진단에 대상을 받는 칸이 있으면 거기에도 채운다. 실행 중이면 건드리지 않는다.
@@ -239,7 +244,7 @@ export default function App() {
     for (const [order, result] of Object.entries(done.results)) {
       if (result.topology) topo_svg[order] = toStandaloneSvg(result.topology);
     }
-    void historySave({
+    const entry = {
       meta: { title: recipe.title, recipe: recipe.id, target, light: worstLight(done), steps: plan.steps.length },
       recipe_id: recipe.id,
       inputs,
@@ -247,7 +252,23 @@ export default function App() {
       plan,
       run: done,
       topo_svg,
-    }).catch(() => {});
+    };
+    void historySave(entry).catch(() => {});
+    // 다른 프로그램이 넘긴 대상을 진단한 것이면 결과를 보낸 쪽에 돌려준다(대상을 고쳐 실행한 것은 보내지 않는다).
+    const asked = lastHandoff.current;
+    if (asked?.request_id && ranOnHandoff(recipe.id, inputs, asked.target)) {
+      const who = asked.from === "storyfirewall" ? "스토리방화벽" : asked.from;
+      void bridgeReport(asked.request_id, reportEntry(entry))
+        .then((sent) => {
+          if (!sent) return;
+          setNotice(
+            sent.live
+              ? `진단 결과를 ${who}에 보냈습니다 (${asked.target}, 단계별 결과 포함).`
+              : `${who}의 접속이 끊겨 진단 결과를 보관했습니다. ${who}이(가) 다시 물으면 전달합니다 (${asked.target}).`,
+          );
+        })
+        .catch(() => {});
+    }
   }, [planRunDone, planRunId]);
   useEffect(() => {
     if (!planRunDone || planRunId === null || !aiOn || brief?.runId === planRunId) return;

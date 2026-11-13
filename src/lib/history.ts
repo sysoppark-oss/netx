@@ -55,6 +55,11 @@ function trimmed(run: RunState): RunState {
   return { ...run, active: false, lines };
 }
 
+/** 다른 프로그램에 결과로 돌려줄 기록: 원본 출력을 저장할 때와 같은 만큼만 싣는다. */
+export function reportEntry(entry: HistoryEntry): unknown {
+  return { meta: entry.meta, recipe_id: entry.recipe_id, inputs: entry.inputs, plan: entry.plan, run: trimmed(entry.run) };
+}
+
 /** 저장할 글을 만든다. 너무 크면 원본 출력을 빼고, 그래도 크면 null(저장하지 않는다). */
 export function entryJson(entry: HistoryEntry): string | null {
   let json = JSON.stringify({ ...entry, run: trimmed(entry.run) });

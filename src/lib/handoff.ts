@@ -7,6 +7,13 @@ export function splitTarget(target: string): { host: string; port: string | null
   return { host: target, port: null };
 }
 
+/** 이 입력값으로 한 진단이 넘겨받은 그 대상을 진단한 것인가. 대상을 고쳐서 실행했으면 아니다. */
+export function ranOnHandoff(recipeId: string, inputs: Record<string, string>, target: string): boolean {
+  const want = handoffInputs(recipeId, target);
+  const keys = Object.keys(want);
+  return keys.length > 0 && keys.every((k) => (inputs[k] ?? "").trim() === want[k]);
+}
+
 /**
  * 넘겨받은 대상을 그 진단의 어느 입력칸에 넣을지. 대상을 받는 칸이 없는 진단이면 빈 객체다.
  * 채우기만 한다. 실행은 사용자가 누른다.

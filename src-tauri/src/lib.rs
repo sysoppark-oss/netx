@@ -105,6 +105,7 @@ pub fn run() {
             commands::capture_folder,
             voice::voice_typing,
             bridge::bridge_take_handoff,
+            bridge::bridge_report,
             bridge::bridge_status,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,

@@ -56,6 +56,7 @@ fn main() {
                 "capture_folder",
                 "voice_typing",
                 "bridge_take_handoff",
+                "bridge_report",
                 "bridge_status",
                 "open_terminal",
                 "term_take_preset",

@@ -36,6 +36,7 @@
     "allow-open-church-mail",
     "allow-open-terminal",
     "allow-bridge-take-handoff",
+    "allow-bridge-report",
     "allow-bridge-status",
     "allow-history-save",
     "allow-history-list",

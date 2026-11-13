@@ -225,8 +225,25 @@ export interface Handoff {
   target: string;
   from: string;
   note: string;
+  /** 의뢰 번호. 이 대상으로 한 진단의 결과를 보낸 쪽에 돌려줄 때 쓴다. */
+  request_id: string;
   /** 그 주소에 붙은 이름. 보이기만 한다. 입력칸이나 명령에 넣지 않는다. */
   name: string | null;
+}
+
+/** 결과를 돌려준 내역 */
+export interface ResultSent {
+  to: string;
+  target: string;
+  bytes: number;
+  /** 기다리던 접속으로 바로 보냈다. 거짓이면 보관해 두었다가 물으면 준다. */
+  live: boolean;
+}
+
+/** 끝난 진단의 기록을 그 의뢰를 보낸 프로그램에 결과로 돌려준다. 모르는 의뢰면 null. */
+export async function bridgeReport(requestId: string, record: unknown): Promise<ResultSent | null> {
+  if (!isTauri()) return null;
+  return invoke<ResultSent | null>("bridge_report", { requestId, record });
 }
 
 /** 넘겨받은 대상이 있으면 알려 준다. 이미 와 있던 것도 한 번 가져온다. */

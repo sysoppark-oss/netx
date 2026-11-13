@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use winreg::RegKey;
 
-use super::{Caller, Handoff, Host, Session, MAX_REQUEST_BYTES};
+use super::{Caller, Handoff, Host};
 use crate::audit::{self, AuditEntry};
 use crate::model::{Level, Risk};
 
@@ -27,6 +27,8 @@ const MODULES_KEY: &str = r"SOFTWARE\Antioch\Modules";
 const MAX_CLIENTS: usize = 4;
 /// 이만큼 아무 요청이 없으면 접속을 끊는다.
 const IDLE: Duration = Duration::from_secs(300);
+/// 의뢰한 진단의 결과를 기다리는 접속은 이만큼까지 둔다.
+const IDLE_WAITING: Duration = Duration::from_secs(1800);
 
 static CLIENTS: AtomicUsize = AtomicUsize::new(0);
 /// 입구 상태: 0 열지 못함(또는 아직), 1 열렸고 스스로 접속해 인사에 답하는 것까지 확인함, 2 열렸지만 확인 실패
@@ -185,23 +187,8 @@ fn caller_of(server: &NamedPipeServer) -> Caller {
 async fn serve(server: NamedPipeServer, app: AppHandle) {
     let caller = caller_of(&server);
     let host = AppHost(app);
-    let mut session = Session::default();
-    let (reader, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::with_capacity(MAX_REQUEST_BYTES + 4096, reader);
-    loop {
-        let mut line = Vec::new();
-        let read = tokio::time::timeout(IDLE, (&mut reader).take(MAX_REQUEST_BYTES as u64 + 2).read_until(b'\n', &mut line)).await;
-        match read {
-            Ok(Ok(n)) if n > 0 && line.ends_with(b"\n") => {}
-            // 끊김, 오류, 너무 긴 줄, 오래 조용함: 접속을 닫는다.
-            _ => break,
-        }
-        let Ok(text) = String::from_utf8(line) else { break };
-        let reply = super::handle(&text, &caller, &host, &mut session);
-        if writer.write_all(reply.as_bytes()).await.is_err() || writer.flush().await.is_err() {
-            break;
-        }
-    }
+    let (reader, writer) = tokio::io::split(server);
+    super::serve(reader, writer, caller, &host, IDLE, IDLE_WAITING).await;
 }
 
 /// 입구를 연다. NetX가 켜져 있는 동안 돈다.
