@@ -20,8 +20,10 @@ pub const MAX_ROWS: usize = 2000;
 /// 읽는 감사 로그의 상한. 넘으면 뒤쪽(최근)만 읽는다.
 pub const MAX_AUDIT_BYTES: u64 = 16 * 1024 * 1024;
 
-/// 1단계에서 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다.
-pub const SECTIONS: [(&str, &str); 3] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("audit", "감사 로그")];
+/// 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다. 터미널과 원자료 JSON은 3단계.
+pub const SECTIONS: [(&str, &str); 6] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("audit", "감사 로그")];
+/// 한 보고서에 분석해 싣는 캡처 파일 수
+pub const MAX_CAPTURES: usize = 10;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {
@@ -62,6 +64,12 @@ pub struct Sources {
     pub history: Vec<(u64, String)>,
     /// 감사 로그 파일의 내용
     pub audit: String,
+    /// 기간 안의 캡처 파일(최근 것부터, `MAX_CAPTURES`개까지)과 분석 결과. 열지 못했으면 그 까닭
+    pub captures: Vec<(crate::capview::CaptureFile, Result<crate::capview::Analysis, String>)>,
+    /// 기간 안의 캡처 파일 전체 수
+    pub captures_total: usize,
+    /// 직접 명령 기록 파일(`manual.jsonl`)의 내용
+    pub manual: String,
 }
 
 pub struct Built {
@@ -475,6 +483,220 @@ fn audit_row(line: &str, offset: i32, m: &Masker) -> Option<(u64, String)> {
     ))
 }
 
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / (1u64 << 30) as f64),
+        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),
+        b if b >= 1 << 10 => format!("{:.1} KB", b as f64 / 1024.0),
+        b => format!("{b} B"),
+    }
+}
+
+fn kind_text(kind: &str) -> &'static str {
+    match kind {
+        "router" => "공유기·라우터",
+        "pc" => "PC",
+        "server" => "서버",
+        "printer" => "프린터",
+        "camera" => "카메라",
+        "phone" => "휴대 기기",
+        "network" => "네트워크 장비",
+        _ => "알 수 없음",
+    }
+}
+
+/// 구성도: 기간 안에서 가장 최근에 조사한 것의 그림과 장비 목록, 스위치 포트 연결.
+/// 자료는 진단 기록(구성도 조사)에 들어 있다. 기록 속 글자는 장비가 보낸 것이므로 가리고 바꿔 쓴다.
+fn zone_topology(entries: &[(u64, String)], offset: i32, m: &Masker) -> Zone {
+    let text = |v: &Value, key: &str, max: usize| -> String { v.get(key).and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control()).take(max).collect() };
+    let mut count = 0;
+    let mut body = String::new();
+    for (time, json) in entries {
+        let Ok(mut entry) = serde_json::from_str::<Value>(json) else { continue };
+        let Some((order, _)) = entry.get("run").and_then(|r| r.get("results")).and_then(Value::as_object).and_then(|results| results.iter().find(|(_, r)| r.get("topology").is_some_and(Value::is_object))) else { continue };
+        count += 1;
+        if count > 1 {
+            continue; // 가장 최근 것만 싣고 나머지는 센다
+        }
+        let order = order.clone();
+        m.value(&mut entry);
+        let Some(topo) = entry.get("run").and_then(|r| r.get("results")).and_then(|r| r.get(&order)).and_then(|r| r.get("topology")) else { continue };
+        body.push_str(&format!(
+            "<p class=\"m\">조사한 시각: {} · 대역: <span class=\"k\">{}</span> · 게이트웨이: <span class=\"k\">{}</span></p>",
+            local_time(*time, offset).0,
+            esc(&text(topo, "cidr", 60)),
+            esc(&text(topo, "gateway", 60)),
+        ));
+        match entry.get("topo_svg").and_then(|t| t.get(&order)).and_then(Value::as_str) {
+            Some(svg) if safe_svg(svg) => body.push_str(&format!("<figure class=\"topo\">{}</figure>", m.markup(svg))),
+            _ => body.push_str("<p class=\"m\">구성도 그림은 이 기록에 없습니다.</p>"),
+        }
+        let nodes = topo.get("nodes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let mut rows = String::new();
+        for node in nodes.iter().take(MAX_ROWS) {
+            let ports: Vec<String> = node.get("ports").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]).iter().filter_map(Value::as_u64).take(60).map(|p| p.to_string()).collect();
+            let role = match text(node, "role", 20).as_str() {
+                "me" => " (이 PC)",
+                "gateway" => " (게이트웨이)",
+                _ => "",
+            };
+            let name = Some(text(node, "name", 80)).filter(|n| !n.is_empty()).unwrap_or_else(|| text(node, "label", 80));
+            rows.push_str(&format!(
+                "<tr><td>{}{role}</td><td>{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td>{}</td><td class=\"k\">{}</td><td>{}</td></tr>",
+                esc(&name),
+                kind_text(&text(node, "kind", 20)),
+                esc(&text(node, "ip", 60)),
+                esc(&text(node, "mac", 30)),
+                esc(&text(node, "vendor", 80)),
+                esc(&ports.join(", ")),
+                esc(&text(node, "descr", 160)),
+            ));
+        }
+        body.push_str(&format!(
+            "<h3>장비 {}대{}</h3><table class=\"w\"><tr><th>이름</th><th>종류(추정)</th><th>주소</th><th>MAC</th><th>제조사</th><th>열린 포트</th><th>장비 설명</th></tr>{rows}</table>",
+            nodes.len(),
+            if nodes.len() > MAX_ROWS { format!(" (앞 {MAX_ROWS}대만 실음)") } else { String::new() },
+        ));
+        let links = topo.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        if links.is_empty() {
+            body.push_str("<p class=\"m\">스위치 포트 연결 관계는 알아내지 못했습니다(SNMP에 답하는 스위치·AP가 있을 때만 나옵니다).</p>");
+        } else {
+            let mut rows = String::new();
+            for link in links.iter().take(MAX_ROWS) {
+                let via = match text(link, "via", 10).as_str() {
+                    "lldp" => "장비가 알림(LLDP)",
+                    _ => "MAC 표로 짐작",
+                };
+                let shared = link.get("shared").and_then(Value::as_u64).unwrap_or(0);
+                rows.push_str(&format!(
+                    "<tr><td class=\"n\">{}</td><td>{}</td><td class=\"n\">{}</td><td>{via}</td><td>{}</td></tr>",
+                    esc(&text(link, "switch", 60)),
+                    esc(&text(link, "port", 60)),
+                    esc(&text(link, "device", 60)),
+                    if shared >= 2 { format!("같은 포트에 {shared}대 (사이에 다른 스위치·AP)") } else { String::new() },
+                ));
+            }
+            body.push_str(&format!("<h3>포트 연결 관계 {}건</h3><table class=\"w\"><tr><th>스위치·AP</th><th>포트</th><th>물린 장비</th><th>근거</th><th>비고</th></tr>{rows}</table>", links.len()));
+        }
+    }
+    if count == 0 {
+        body.push_str("<p class=\"m\">이 기간에 조사한 구성도가 없습니다. 왼쪽 메뉴의 구성도 진단을 실행하면 여기에 실립니다.</p>");
+    } else if count > 1 {
+        body.push_str(&format!("<p class=\"m\">이 기간에 구성도를 {count}번 조사했습니다. 가장 최근 것만 실었습니다. 나머지는 \"최근 진단\" 구역에 있습니다.</p>"));
+    }
+    Zone { id: "topology", title: "구성도", count, shown: count.min(1), body, timeless: false }
+}
+
+/// 캡처 분석: 파일마다 요약, 프로토콜, 찾은 문제, 상위 대화. 패킷 내용은 싣지 않는다.
+fn zone_capture(captures: &[(crate::capview::CaptureFile, Result<crate::capview::Analysis, String>)], total: usize, offset: i32, m: &Masker) -> Zone {
+    let mut body = String::new();
+    if captures.is_empty() {
+        body.push_str("<p class=\"m\">이 기간에 저장한 캡처 파일이 없습니다.</p>");
+    } else {
+        body.push_str(&format!(
+            "<p class=\"m\">작업 폴더의 캡처 파일을 분석한 요약입니다. 패킷의 내용(페이로드)은 싣지 않습니다.{}</p>",
+            if total > captures.len() { format!(" 전체 {total}개 중 최근 {}개입니다.", captures.len()) } else { String::new() }
+        ));
+    }
+    for (file, analysis) in captures {
+        body.push_str(&format!(
+            "<section><h2><span class=\"t\">{}</span></h2><p class=\"m\">저장한 시각: {} · 크기: {}</p>",
+            esc(&file.name),
+            local_time(file.modified.saturating_mul(1000), offset).0,
+            size_text(file.size),
+        ));
+        match analysis {
+            Err(why) => body.push_str(&format!("<p class=\"m\">이 파일은 분석하지 못했습니다: {}</p>", esc(&m.text(why)))),
+            Ok(a) => {
+                body.push_str(&format!(
+                    "<table>{}{}{}{}</table>",
+                    row("패킷", &format!("{}개", a.packets)),
+                    row("전체 크기", &size_text(a.bytes)),
+                    row("캡처한 시간", &format!("{:.1}초", a.seconds.max(0.0))),
+                    row("링크 형식", &esc(&a.link)),
+                ));
+                if a.findings.is_empty() {
+                    body.push_str("<p class=\"m\">찾은 문제가 없습니다.</p>");
+                } else {
+                    let mut rows = String::new();
+                    for f in a.findings.iter().take(50) {
+                        let (label, class) = if f.light == "red" { ("문제", "r") } else { ("주의", "y") };
+                        rows.push_str(&format!("<tr><td><span class=\"l {class}\">{label}</span></td><td>{}</td><td>{}</td><td>{}건</td></tr>", esc(&m.text(&f.title)), esc(&m.text(&f.text)), f.count));
+                    }
+                    body.push_str(&format!("<h3>찾은 문제</h3><table class=\"w\"><tr><th>정도</th><th>무엇</th><th>풀이</th><th>수</th></tr>{rows}</table>"));
+                }
+                let mut rows = String::new();
+                for p in a.protocols.iter().take(15) {
+                    rows.push_str(&format!("<tr><td>{}</td><td>{}개</td><td>{}</td></tr>", esc(&p.label), p.packets, size_text(p.bytes)));
+                }
+                if !rows.is_empty() {
+                    body.push_str(&format!("<h3>프로토콜</h3><table><tr><th>종류</th><th>패킷</th><th>크기</th></tr>{rows}</table>"));
+                }
+                let mut rows = String::new();
+                for t in a.talks.iter().take(10) {
+                    rows.push_str(&format!("<tr><td class=\"n\">{}</td><td class=\"n\">{}</td><td>{}개</td><td>{}</td></tr>", esc(&m.text(&t.a)), esc(&m.text(&t.b)), t.packets, size_text(t.bytes)));
+                }
+                if !rows.is_empty() {
+                    body.push_str(&format!("<h3>상위 대화</h3><table><tr><th>한쪽</th><th>다른 쪽</th><th>패킷</th><th>크기</th></tr>{rows}</table>"));
+                }
+                for note in a.notes.iter().take(10) {
+                    body.push_str(&format!("<p class=\"m\">{}</p>", esc(&m.text(note))));
+                }
+            }
+        }
+        body.push_str("</section>");
+    }
+    Zone { id: "capture", title: "캡처 분석", count: total, shown: captures.len(), body, timeless: false }
+}
+
+/// 직접 명령: 실행한 명령, 종료 상태, 출력 앞부분. 기록은 `manuallog`가 남긴다.
+fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
+    let mut count = 0;
+    let mut rows = Vec::new();
+    for line in log.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Some(time) = v.get("time").and_then(Value::as_u64) else { continue };
+        if time < from_ms || time > to_ms {
+            continue;
+        }
+        count += 1;
+        if rows.len() >= MAX_ROWS {
+            continue;
+        }
+        let text = |key: &str, max: usize| -> String { v.get(key).and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(max).collect() };
+        let state = match text("state", 20).as_str() {
+            "ok" => "끝남",
+            "error" => "오류",
+            "timeout" => "시간 초과",
+            "cancelled" => "중단",
+            "capped" => "출력 상한에서 멈춤",
+            _ => "알 수 없음",
+        };
+        let exit = v.get("exit").and_then(Value::as_i64).map(|c| c.to_string()).unwrap_or_default();
+        let secs = v.get("secs").and_then(Value::as_f64).map(|s| format!("{s:.1}초")).unwrap_or_default();
+        let output = text("output", 4000);
+        let cut = v.get("cut").and_then(Value::as_bool).unwrap_or(false);
+        rows.push(format!(
+            "<tr><td class=\"n\">{}</td><td class=\"k\">{}</td><td>{state}</td><td>{exit}</td><td>{secs}</td><td>{}</td></tr>",
+            local_time(time, offset).0,
+            esc(&m.text(&text("command", 1000).replace('\n', " "))),
+            if output.trim().is_empty() { "<span class=\"m\">출력 없음</span>".to_string() } else { format!("<pre>{}{}</pre>", esc(&m.text(&output)), if cut { "\n… (뒤는 싣지 않음)" } else { "" }) },
+        ));
+    }
+    let shown = rows.len();
+    let body = if rows.is_empty() {
+        "<p class=\"m\">이 기간에 직접 명령으로 실행한 기록이 없습니다. 직접 명령의 결과는 이 기능이 들어온 판부터 남습니다.</p>".to_string()
+    } else {
+        format!(
+            "<p class=\"m\">직접 명령으로 실행한 것을 최근 것부터 적었습니다. 출력은 앞 40줄까지입니다.{}</p>\
+<table class=\"w\"><tr><th>시각</th><th>명령</th><th>상태</th><th>종료 코드</th><th>걸린 시간</th><th>출력 앞부분</th></tr>{}</table>",
+            if count > shown { format!(" 전체 {count}건 중 최근 {shown}건입니다.") } else { String::new() },
+            rows.concat()
+        )
+    };
+    Zone { id: "manual", title: "직접 명령", count, shown, body, timeless: false }
+}
+
 fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
     let (from, to) = (from_ms / 1000, to_ms.div_ceil(1000));
     // 최근 것부터, 상한까지만 만든다(나머지는 세기만 한다).
@@ -541,6 +763,12 @@ pub fn build(req: &Request, src: &Sources, now_ms: u64, stop: &AtomicBool) -> Re
                 data = items;
                 zone
             }
+            "topology" => {
+                let picked: Vec<(u64, String)> = src.history.iter().filter(|(t, _)| (req.from_ms..=req.to_ms).contains(t)).cloned().collect();
+                zone_topology(&picked, offset, &m)
+            }
+            "capture" => zone_capture(&src.captures, src.captures_total, offset, &m),
+            "manual" => zone_manual(&src.manual, req.from_ms, req.to_ms, offset, &m),
             _ => zone_audit(&src.audit, req.from_ms, req.to_ms, offset, &m),
         });
     }
@@ -656,7 +884,111 @@ mod tests {
             }),
             history: vec![(NOW - 1000, entry("192.168.0.10", "MYPC에서 192.168.0.10 연결 실패, 공인 203.0.113.9, 경로 C:\\Users\\jgpark\\work, 서버 8.8.8.8"))],
             audit: audit.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n") + "\n깨진 줄\n",
+            ..Sources::default()
         }
+    }
+
+    /// 구성도를 조사한 진단 기록
+    fn map_entry(name: &str, svg: &str) -> String {
+        serde_json::json!({
+            "meta": {"title": "구성도", "recipe": "network_map", "target": "192.168.0.0/24", "light": "green", "steps": 1},
+            "recipe_id": "network_map", "inputs": {"cidr": "192.168.0.0/24"},
+            "plan": {"steps": [{"order": 1, "title": "구성도 조사", "display": "netmap 192.168.0.0/24", "tool": "netmap"}]},
+            "run": {
+                "steps": {"1": {"status": "done", "exit_code": 0, "elapsed_ms": 9000}},
+                "results": {"1": {"light": "green", "text": "장비 2대", "facts": [], "topology": {
+                    "cidr": "192.168.0.0/24", "gateway": "192.168.0.1", "me": "192.168.0.7",
+                    "nodes": [
+                        {"ip": "192.168.0.1", "mac": "aa:bb:cc:dd:ee:ff", "role": "gateway", "kind": "router", "label": "공유기", "vendor": "ipTIME", "ports": [53, 80], "name": null, "descr": null, "ping_ms": 1.2, "notes": []},
+                        {"ip": "192.168.0.21", "mac": "00:11:22:33:44:55", "role": "host", "kind": "printer", "label": "프린터", "vendor": "HP", "ports": [9100], "name": name, "descr": "HP LaserJet", "ping_ms": null, "notes": []}
+                    ],
+                    "links": [{"switch": "192.168.0.2", "port": "Gi0/3", "device": "192.168.0.21", "via": "fdb", "shared": 2}]
+                }}},
+                "lines": []
+            },
+            "topo_svg": {"1": svg}
+        })
+        .to_string()
+    }
+
+    fn capture(name: &str, who: &str, problem: &str) -> (crate::capview::CaptureFile, Result<crate::capview::Analysis, String>) {
+        use crate::capview::{Analysis, CaptureFile, Finding, Share, Talk};
+        let file = CaptureFile { name: name.into(), size: 5 * 1024 * 1024, modified: NOW / 1000 - 600 };
+        let analysis = Analysis {
+            name: name.into(),
+            size: file.size,
+            started: 0.0,
+            seconds: 12.34,
+            packets: 2000,
+            bytes: 1_500_000,
+            link: "이더넷".into(),
+            protocols: vec![Share { label: "TCP".into(), packets: 1800, bytes: 1_400_000 }],
+            talks: vec![Talk { a: who.into(), b: "8.8.8.8".into(), packets: 900, bytes: 700_000 }],
+            findings: vec![Finding { light: "red", title: "TCP 재전송".into(), text: problem.into(), count: 14, mark: "retrans" }],
+            notes: vec![format!("{who}가 가장 많이 보냈습니다")],
+        };
+        (file, Ok(analysis))
+    }
+
+    #[test]
+    fn second_stage_sections_topology_capture_manual() {
+        const SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>192.168.0.1</text></svg>";
+        let mut src = sources();
+        src.history = vec![(NOW - 500, map_entry("PRINTER-1", SVG)), (NOW - 900, map_entry("OLD", SVG)), (NOW - 1000, entry("192.168.0.10", "x"))];
+        src.captures = vec![capture("cap-1.pcap", "192.168.0.7", "192.168.0.7 → 8.8.8.8 에서 다시 보냄"), (crate::capview::CaptureFile { name: "big.pcap".into(), size: 80 << 20, modified: NOW / 1000 - 700 }, Err("파일이 너무 큽니다(80MB).".into()))];
+        src.captures_total = 14;
+        src.manual = [
+            serde_json::json!({"time": NOW - 60_000, "command": "ping -c 2 192.168.0.1", "tool": "ping", "state": "ok", "exit": 0, "secs": 1.0, "output": "PING 192.168.0.1\n2 packets transmitted\n", "cut": false}).to_string(),
+            serde_json::json!({"time": NOW - 30_000, "command": "nc -vz 8.8.8.8 53", "tool": "nc", "state": "error", "exit": 1, "secs": 3.0, "output": "", "cut": true}).to_string(),
+            serde_json::json!({"time": NOW - 40 * 86_400_000, "command": "old-command", "state": "ok"}).to_string(),
+            "깨진 줄".to_string(),
+        ]
+        .join("\n");
+
+        let built = build(&req(&["manual", "capture", "topology"], false), &src, NOW, &no_stop()).unwrap();
+        let html = &built.html;
+        check(html).unwrap();
+        assert_eq!(built.counts, [("topology".to_string(), 2, 1), ("capture".to_string(), 14, 2), ("manual".to_string(), 2, 2)]);
+        assert!(html.contains("구성도 (전체 2건 중 1건), 캡처 분석 (전체 14건 중 2건), 직접 명령 (2건)"));
+        let at = |s: &str| html.find(s).unwrap_or_else(|| panic!("{s}"));
+        assert!(at("id=\"topology\"") < at("id=\"capture\"") && at("id=\"capture\"") < at("id=\"manual\""));
+        // 구성도: 가장 최근 것의 그림과 장비, 포트 연결
+        assert!(html.contains("<figure class=\"topo\"><svg") && html.contains("<h3>장비 2대</h3>"));
+        assert!(html.contains("<td>PRINTER-1</td><td>프린터</td><td class=\"n\">192.168.0.21</td><td class=\"n\">00:11:22:33:44:55</td><td>HP</td><td class=\"k\">9100</td><td>HP LaserJet</td>"));
+        assert!(html.contains("<td>공유기 (게이트웨이)</td><td>공유기·라우터</td>") && !html.contains("OLD"));
+        assert!(html.contains("<td>Gi0/3</td>") && html.contains("MAC 표로 짐작") && html.contains("같은 포트에 2대"));
+        assert!(html.contains("구성도를 2번 조사했습니다"));
+        // 캡처 분석: 요약, 문제, 대화. 못 연 파일은 까닭만
+        assert!(html.contains("전체 14개 중 최근 2개입니다") && html.contains("<th>패킷</th><td>2000개</td>") && html.contains("<th>캡처한 시간</th><td>12.3초</td>"));
+        assert!(html.contains("<span class=\"l r\">문제</span></td><td>TCP 재전송</td>") && html.contains("<td>14건</td>"));
+        assert!(html.contains("<td class=\"n\">192.168.0.7</td><td class=\"n\">8.8.8.8</td><td>900개</td>"));
+        assert!(html.contains("이 파일은 분석하지 못했습니다: 파일이 너무 큽니다(80MB)."));
+        // 직접 명령: 최근 것부터, 기간 밖과 깨진 줄은 뺀다
+        assert!(at("nc -vz 8.8.8.8 53") < at("ping -c 2 192.168.0.1") && !html.contains("old-command"));
+        assert!(html.contains("<td>오류</td><td>1</td><td>3.0초</td><td><span class=\"m\">출력 없음</span></td>"));
+        assert!(html.contains("<pre>PING 192.168.0.1\n2 packets transmitted\n</pre>"));
+        assert!(!html.contains(crate::history::DATA_OPEN), "진단 기록 구역을 고르지 않으면 자료 주석을 넣지 않는다");
+
+        if let Ok(path) = std::env::var("NETX_REPORT_SAMPLE") {
+            std::fs::write(path, html).unwrap();
+        }
+
+        // 가리면 내부 주소와 MAC 뒷부분이 세 구역 모두에서 가려지고, 바깥 주소는 남는다
+        let masked = build(&req(&["topology", "capture", "manual"], true), &src, NOW, &no_stop()).unwrap().html;
+        check(&masked).unwrap();
+        for hidden in ["192.168.0.21", "192.168.0.7", "192.168.0.1<", "00:11:22:33:44:55", "aa:bb:cc:dd:ee:ff"] {
+            assert!(!masked.contains(hidden), "{hidden}");
+        }
+        assert!(masked.contains("00:11:22:**:**:**") && masked.contains("8.8.8.8") && masked.contains("ping -c 2 내부-"));
+
+        // 자료가 없으면 그렇다고 적는다. 위험한 그림은 싣지 않는다
+        let empty = build(&req(&["topology", "capture", "manual"], false), &sources(), NOW, &no_stop()).unwrap();
+        assert_eq!(empty.counts, [("topology".to_string(), 0, 0), ("capture".to_string(), 0, 0), ("manual".to_string(), 0, 0)]);
+        assert!(empty.html.contains("이 기간에 조사한 구성도가 없습니다") && empty.html.contains("이 기간에 저장한 캡처 파일이 없습니다") && empty.html.contains("직접 명령으로 실행한 기록이 없습니다"));
+        src.history = vec![(NOW - 500, map_entry("P", "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"x()\"></svg>"))];
+        let unsafe_figure = build(&req(&["topology"], false), &src, NOW, &no_stop()).unwrap().html;
+        check(&unsafe_figure).unwrap();
+        assert!(unsafe_figure.contains("구성도 그림은 이 기록에 없습니다") && !unsafe_figure.contains("onload"));
     }
 
     fn no_stop() -> AtomicBool {
@@ -880,9 +1212,18 @@ mod tests {
                     serde_json::json!({"time": NOW / 1000 - 3, "source": "bridge", "tool": "rack.handoff", "argv": [a, c]}).to_string(),
                 ]
                 .join("\n"),
+                captures: vec![capture("c.pcap", &a, &b), (crate::capview::CaptureFile { name: "d.pcap".into(), size: 1, modified: NOW / 1000 - 5 }, Err(c.clone()))],
+                captures_total: 2,
+                manual: [
+                    serde_json::json!({"time": NOW - 5, "command": a, "tool": b, "state": c, "exit": 1, "secs": 1.5, "output": d, "cut": true}).to_string(),
+                    serde_json::json!({"time": NOW - 6, "command": d, "state": "ok", "output": format!("{a}\n{b}")}).to_string(),
+                ]
+                .join("\n"),
             };
+            let mut src = src;
+            src.history.push((NOW - 6, map_entry(&d, &a)));
             for mask in [false, true] {
-                let html = build(&req(&["mynet", "history", "audit"], mask), &src, NOW, &no_stop()).unwrap().html;
+                let html = build(&req(&["mynet", "history", "topology", "capture", "manual", "audit"], mask), &src, NOW, &no_stop()).unwrap().html;
                 if let Err(why) = check(&html) {
                     panic!("{round}회째(가리기 {mask}): {why}");
                 }

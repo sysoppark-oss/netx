@@ -47,6 +47,7 @@ fn main() {
                 "history_list",
                 "history_load",
                 "history_delete",
+                "manual_save",
                 "report_make",
                 "report_cancel",
                 "report_open",

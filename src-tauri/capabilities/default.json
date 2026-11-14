@@ -42,6 +42,7 @@
     "allow-history-list",
     "allow-history-load",
     "allow-history-delete",
+    "allow-manual-save",
     "allow-report-make",
     "allow-report-cancel",
     "allow-report-open",

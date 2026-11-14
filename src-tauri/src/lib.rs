@@ -12,6 +12,7 @@ mod commands;
 mod engine;
 mod env_check;
 mod history;
+mod manuallog;
 mod report;
 mod report_fig;
 mod estimate;
@@ -99,6 +100,7 @@ pub fn run() {
             commands::history_list,
             commands::history_load,
             commands::history_delete,
+            commands::manual_save,
             commands::report_make,
             commands::report_cancel,
             commands::report_open,

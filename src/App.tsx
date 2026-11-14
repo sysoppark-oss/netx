@@ -1,6 +1,7 @@
 import { CaptureView } from "./components/CaptureView";
 import { HistoryView } from "./components/HistoryView";
 import { ReportView } from "./components/ReportView";
+import { manualSave } from "./lib/report";
 import { toStandaloneSvg } from "./components/Topology";
 import { historySave, reportEntry, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
@@ -233,6 +234,15 @@ export default function App() {
 
   // 실행이 끝나면 AI에게 요약과 판정을 받는다.
   const planRunDone = planRun !== null && !planRun.active && Object.keys(planRun.steps).length > 0;
+
+  // 직접 명령으로 실행한 것이 끝나면 명령·종료 상태·출력 앞부분을 남긴다(보고서의 "직접 명령" 구역).
+  useEffect(() => {
+    if (!planRunDone || planRunId === null || planRunId < 0 || recipe || ai || !(manualMode || mode === "expert") || !plan || recorded.current.has(planRunId)) return;
+    const done = peekRun(planRunId);
+    if (!done) return;
+    recorded.current.add(planRunId);
+    void manualSave({ plan, run: { steps: done.steps, lines: done.lines } }).catch(() => {});
+  }, [planRunDone, planRunId, recipe, ai, manualMode, mode, plan]);
 
   // 끝난 진단을 최근 진단 기록에 남긴다(레시피로 실행한 것만, 기록에서 다시 연 것은 빼고).
   useEffect(() => {

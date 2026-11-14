@@ -236,6 +236,14 @@ fn read_tail(path: &std::path::Path, max: u64) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// 직접 명령으로 실행한 것이 끝나면 명령·종료 상태·출력 앞부분을 남긴다(보고서의 "직접 명령" 구역이 읽는다).
+#[tauri::command]
+pub fn manual_save(app: AppHandle, record: serde_json::Value) -> Result<usize, String> {
+    let (data_dir, _) = data_dirs(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    crate::manuallog::save(&data_dir, &record, now)
+}
+
 /// 보고서를 만들고, 저장 창에서 사용자가 고른 자리에 쓴다. 저장 창을 닫거나 취소하면 아무것도 남기지 않고 None을 돌려준다.
 #[tauri::command]
 pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Result<Option<ReportSaved>, String> {
@@ -257,14 +265,32 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
     let version = if info.commit.is_empty() { info.version.to_string() } else { format!("{} ({})", info.version, info.commit) };
     let req = request.clone();
     let dir = data_dir.clone();
+    let work_dir = work.clone();
     let built = tauri::async_runtime::spawn_blocking(move || {
-        let history = if req.history_id.is_some() || req.sections.iter().any(|s| s == "history") { crate::history::collect(&dir, req.history_id.as_deref())? } else { Vec::new() };
+        let wants = |id: &str| req.history_id.is_none() && req.sections.iter().any(|s| s == id);
+        // 구성도 구역의 자료도 진단 기록에 들어 있다.
+        let history = if req.history_id.is_some() || wants("history") || wants("topology") { crate::history::collect(&dir, req.history_id.as_deref())? } else { Vec::new() };
         if req.history_id.is_some() && history.is_empty() {
             return Err("그 기록을 찾지 못했습니다.".to_string());
         }
         let audit = if req.history_id.is_none() && req.sections.iter().any(|s| s == "audit") { read_tail(&dir.join("audit.log"), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
+        // 캡처 파일은 기간 안에 저장한 것을 최근 것부터 정해진 수만 분석한다(큰 파일은 몇 초씩 걸린다).
+        let (mut captures, mut captures_total) = (Vec::new(), 0);
+        if wants("capture") {
+            let (from, to) = (req.from_ms / 1000, req.to_ms.div_ceil(1000));
+            let files: Vec<_> = crate::capview::list(&work_dir).into_iter().filter(|f| (from..=to).contains(&f.modified)).collect();
+            captures_total = files.len();
+            for file in files.into_iter().take(crate::report::MAX_CAPTURES) {
+                if REPORT_STOP.load(Ordering::SeqCst) {
+                    return Err("보고서 만들기를 취소했습니다.".to_string());
+                }
+                let analysis = crate::capview::open(&work_dir, &file.name);
+                captures.push((file, analysis));
+            }
+        }
+        let manual = if wants("manual") { read_tail(&dir.join(crate::manuallog::FILE), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
         let (host, user) = pc_names();
-        let sources = crate::report::Sources { version, host, user, net, history, audit };
+        let sources = crate::report::Sources { version, host, user, net, history, audit, captures, captures_total, manual };
         crate::report::build(&req, &sources, now, &REPORT_STOP)
     })
     .await
