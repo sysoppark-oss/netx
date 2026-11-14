@@ -268,6 +268,7 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
     let req = request.clone();
     let dir = data_dir.clone();
     let work_dir = work.clone();
+    let (collected, collected_total) = if request.history_id.is_none() && request.sections.iter().any(|s| s == "collect") { crate::collect::app::report_rows(&app, request.from_ms, request.to_ms, crate::report::MAX_ROWS) } else { (Vec::new(), 0) };
     let built = tauri::async_runtime::spawn_blocking(move || {
         let wants = |id: &str| req.history_id.is_none() && req.sections.iter().any(|s| s == id);
         // 구성도 구역의 자료도 진단 기록에 들어 있다.
@@ -292,7 +293,7 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
         }
         let manual = if wants("manual") { read_tail(&dir.join(crate::manuallog::FILE), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
         let (host, user) = pc_names();
-        let sources = crate::report::Sources { version, host, user, net, history, audit, captures, captures_total, manual };
+        let sources = crate::report::Sources { version, host, user, net, history, audit, captures, captures_total, manual, collected, collected_total };
         crate::report::build(&req, &sources, now, &REPORT_STOP)
     })
     .await

@@ -127,6 +127,63 @@ export interface SentRow {
   sent: number;
 }
 
+export interface Seen {
+  pc: string;
+  pc_name: string;
+  n: number;
+  ok: number;
+  caution: number;
+  danger: number;
+  first_at: number;
+  last_at: number;
+  last_verdict: Verdict;
+}
+
+export interface TargetView {
+  target: string;
+  total: number;
+  seen: Seen[];
+  single: boolean;
+  differs: boolean;
+  alias: boolean;
+}
+
+export interface Analysis {
+  made: number;
+  targets: TargetView[];
+  /** [1970년부터의 시간 번호, 정상, 주의, 위험, 판정 없음] */
+  hours: [number, number, number, number, number][];
+}
+
+export const collectAnalysis = () => invoke<Analysis>("collect_analysis");
+
+export interface DayCount {
+  day: string;
+  ok: number;
+  caution: number;
+  danger: number;
+  unknown: number;
+}
+
+/** 시간별 건수를 이 PC의 시각으로 날짜별, 시각(0~23시)별로 묶는다. */
+export function trend(hours: Analysis["hours"]): { days: DayCount[]; byHour: number[] } {
+  const days = new Map<string, DayCount>();
+  const byHour = new Array<number>(24).fill(0);
+  const two = (v: number) => String(v).padStart(2, "0");
+  for (const [hour, ok, caution, danger, unknown] of hours) {
+    const d = new Date(hour * 3_600_000);
+    const day = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+    const sum = days.get(day) ?? { day, ok: 0, caution: 0, danger: 0, unknown: 0 };
+    sum.ok += ok;
+    sum.caution += caution;
+    sum.danger += danger;
+    sum.unknown += unknown;
+    days.set(day, sum);
+    byHour[d.getHours()] += caution + danger;
+  }
+  return { days: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)), byHour };
+}
+
 export const collectOverview = () => invoke<Overview>("collect_overview");
 export const collectSet = (c: Pick<CollectConfig, "send" | "mask" | "receive" | "name" | "keep_days">) => invoke<CollectConfig>("collect_set", { send: c.send, mask: c.mask, receive: c.receive, name: c.name, keepDays: c.keep_days });
 export const collectJoin = (addr: string, port: number | null, code: string) => invoke<Join>("collect_join", { addr, port, code });

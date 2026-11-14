@@ -132,6 +132,7 @@ pub fn run() {
             collect::app::collect_board,
             collect::app::collect_list,
             collect::app::collect_item,
+            collect::app::collect_analysis,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,
             term::cmd::term_ports,

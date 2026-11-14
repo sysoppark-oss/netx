@@ -20,6 +20,7 @@ export const REPORT_ZONES: ReportZone[] = [
   { id: "capture", title: "캡처 분석", hint: "기간 안의 캡처 파일(최근 10개): 요약, 찾은 문제, 상위 대화 (패킷 내용은 싣지 않음)" },
   { id: "manual", title: "직접 명령", hint: "직접 명령으로 실행한 것: 명령, 종료 상태, 출력 앞 40줄" },
   { id: "terminal", title: "터미널", hint: "터미널로 접속한 세션 목록: 종류, 대상, 사용자, 시각 (기본 해제)", off: true },
+  { id: "collect", title: "모음함", hint: "이 PC의 모음함에 모인 다른 PC(와 이 PC)의 진단 결과: 보낸 PC, 대상, 판정, 요약 (기본 해제)", off: true },
   { id: "audit", title: "감사 로그", hint: "실행 확인, 다른 프로그램에서 받은 의뢰" },
 ];
 

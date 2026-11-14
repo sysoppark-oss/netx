@@ -53,6 +53,7 @@
     "allow-collect-board",
     "allow-collect-list",
     "allow-collect-item",
+    "allow-collect-analysis",
     "allow-history-save",
     "allow-history-list",
     "allow-history-load",

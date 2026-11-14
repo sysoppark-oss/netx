@@ -6,6 +6,7 @@ import {
   SENT_FIELDS,
   STEP_STATE_LABEL,
   VERDICT_LABEL,
+  collectAnalysis,
   collectBoard,
   collectForget,
   collectItem,
@@ -21,6 +22,8 @@ import {
   collectSet,
   dayBound,
   timeText,
+  trend,
+  type Analysis,
   type Board,
   type Finished,
   type Overview,
@@ -30,7 +33,7 @@ import {
   type Verdict,
 } from "../lib/collect";
 
-type Tab = "inbox" | "send" | "receive";
+type Tab = "inbox" | "analysis" | "send" | "receive";
 
 const TONE: Record<Verdict, string> = { ok: "text-safe", caution: "text-caution", danger: "text-danger", unknown: "text-dim" };
 const BTN = "rounded border border-line px-2.5 py-1 text-xs hover:bg-raised disabled:opacity-50";
@@ -288,6 +291,117 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
             </button>
           </div>
         )}
+      </section>
+    </div>
+  );
+}
+
+function AnalysisTab({ onError }: { onError: (m: string) => void }) {
+  const [a, setA] = useState<Analysis | null>(null);
+  const [only, setOnly] = useState<"all" | "multi" | "differs" | "single">("all");
+  useEffect(() => {
+    const load = () =>
+      void collectAnalysis()
+        .then(setA)
+        .catch((e) => onError(String(e)));
+    load();
+    const t = setInterval(load, 30_000);
+    return () => clearInterval(t);
+  }, [onError]);
+  if (!a) return <p className="text-sm text-dim">읽는 중…</p>;
+  if (!a.made) return <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">요약을 아직 만들지 않았습니다. 모음함으로 쓰는 동안 5분마다 만듭니다.</p>;
+  const { days, byHour } = trend(a.hours);
+  const top = Math.max(1, ...days.map((d) => d.ok + d.caution + d.danger + d.unknown));
+  const topHour = Math.max(1, ...byHour);
+  const targets = a.targets.filter((t) => (only === "multi" ? !t.single : only === "differs" ? t.differs : only === "single" ? t.single : true));
+  return (
+    <div className="space-y-4 text-xs">
+      <p className="text-dim">
+        요약을 만든 시각: {timeText(a.made)} (5분마다 다시 만듭니다). 모인 결과는 보낸 PC가 알려 온 것입니다. 한 PC에서만 나온 것은 다른 지점이 확인해 준 적이 없는 것이니 따로 표시합니다.
+      </p>
+      <section>
+        <h2 className="mb-1 font-semibold text-dim">날짜별 추이 (최근 30일)</h2>
+        {days.length === 0 ? (
+          <p className="text-dim">최근 30일에 모인 결과가 없습니다.</p>
+        ) : (
+          <div className="flex h-28 items-end gap-0.5 rounded border border-line px-2 pt-2">
+            {days.map((d) => {
+              const part = (n: number) => `${(n / top) * 100}%`;
+              return (
+                <div key={d.day} className="flex h-full min-w-0 flex-1 flex-col justify-end" title={`${d.day} — 정상 ${d.ok}, 주의 ${d.caution}, 위험 ${d.danger}, 판정 없음 ${d.unknown}`}>
+                  <div className="bg-danger" style={{ height: part(d.danger) }} />
+                  <div className="bg-caution" style={{ height: part(d.caution) }} />
+                  <div className="bg-safe" style={{ height: part(d.ok) }} />
+                  <div className="bg-line" style={{ height: part(d.unknown) }} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {days.length > 0 && (
+          <p className="mt-0.5 flex justify-between text-dim">
+            <span>{days[0].day}</span>
+            <span>
+              <span className="text-safe">■</span> 정상 <span className="text-caution">■</span> 주의 <span className="text-danger">■</span> 위험
+            </span>
+            <span>{days[days.length - 1].day}</span>
+          </p>
+        )}
+      </section>
+      <section>
+        <h2 className="mb-1 font-semibold text-dim">주의·위험이 나온 시각대 (0~23시, 이 PC의 시각)</h2>
+        <div className="flex h-14 items-end gap-0.5 rounded border border-line px-2 pt-2">
+          {byHour.map((n, h) => (
+            <div key={h} className="flex h-full flex-1 flex-col justify-end" title={`${h}시 — ${n}건`}>
+              <div className="bg-caution" style={{ height: `${(n / topHour) * 100}%` }} />
+            </div>
+          ))}
+        </div>
+      </section>
+      <section>
+        <div className="mb-1 flex items-center gap-2">
+          <h2 className="font-semibold text-dim">대상별 — 지점마다 어떻게 보였나</h2>
+          <span className="flex-1" />
+          <select value={only} onChange={(e) => setOnly(e.target.value as typeof only)} className={FIELD}>
+            <option value="all">모두</option>
+            <option value="multi">여러 PC가 본 대상</option>
+            <option value="differs">PC마다 판정이 다른 대상</option>
+            <option value="single">한 PC에서만 나온 대상</option>
+          </select>
+        </div>
+        {targets.length === 0 ? (
+          <p className="rounded border border-line px-3 py-6 text-center text-dim">해당하는 대상이 없습니다.</p>
+        ) : (
+          <ul className="space-y-1">
+            {targets.map((t) => (
+              <li key={`${t.target}|${t.seen[0]?.pc}`} className="rounded border border-line px-2 py-1.5">
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="break-all font-mono">{t.target}</span>
+                  <span className="text-dim">· 모두 {t.total}건</span>
+                  {t.alias && (
+                    <span title="보낸 PC가 가린 내부 주소입니다. 그 PC 안에서만 같은 대상을 가리킵니다.">
+                      <Badge>가명</Badge>
+                    </span>
+                  )}
+                  {t.single ? <Badge>한 PC에서만</Badge> : <Badge tone="text-accent">{t.seen.length}대의 PC</Badge>}
+                  {t.differs && <Badge tone="text-caution">PC마다 판정이 다름</Badge>}
+                </div>
+                <ul className="mt-1 space-y-0.5">
+                  {t.seen.map((s) => (
+                    <li key={s.pc} className="flex flex-wrap gap-2">
+                      <span className="w-28 shrink-0 truncate">{s.pc_name || s.pc.slice(0, 8)}</span>
+                      <span className={`w-16 shrink-0 ${TONE[s.last_verdict] ?? "text-dim"}`}>{VERDICT_LABEL[s.last_verdict] ?? "판정 없음"}</span>
+                      <span className="text-dim">
+                        {s.n}건 (정상 {s.ok}, 주의 {s.caution}, 위험 {s.danger}) · 마지막 {timeText(s.last_at)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        )}
+        {a.targets.length >= 100 && <p className="mt-1 text-dim">여러 PC가 본 대상, 건수가 많은 대상 순으로 100개까지 보입니다.</p>}
       </section>
     </div>
   );
@@ -572,6 +686,7 @@ export function CollectView({ onClose }: { onClose: () => void }) {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "inbox", label: "받은 결과" },
+    { id: "analysis", label: "종합 분석" },
     { id: "send", label: `보내기${ov?.config.send ? " ●" : ""}` },
     { id: "receive", label: `이 PC를 모음함으로${ov?.config.receive ? " ●" : ""}` },
   ];
@@ -606,6 +721,8 @@ export function CollectView({ onClose }: { onClose: () => void }) {
             ) : (
               <Inbox board={board} onError={setError} reload={reload} />
             )
+          ) : tab === "analysis" ? (
+            <AnalysisTab onError={setError} />
           ) : tab === "send" ? (
             <Send ov={ov} onError={setError} reload={reload} />
           ) : (

@@ -76,6 +76,7 @@ fn main() {
                 "collect_board",
                 "collect_list",
                 "collect_item",
+                "collect_analysis",
                 "open_terminal",
                 "term_take_preset",
                 "term_ports",

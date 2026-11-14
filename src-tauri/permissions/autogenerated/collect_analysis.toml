@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-analysis"
+description = "Enables the collect_analysis command without any pre-configured scope."
+commands.allow = ["collect_analysis"]
+
+[[permission]]
+identifier = "deny-collect-analysis"
+description = "Denies the collect_analysis command without any pre-configured scope."
+commands.deny = ["collect_analysis"]

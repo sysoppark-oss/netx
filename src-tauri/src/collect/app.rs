@@ -305,6 +305,19 @@ pub fn collect_item(shared: State<'_, Shared>, pc: String, seq: u64) -> Result<O
     Ok(hub(&shared)?.inbox.item(&pc, seq))
 }
 
+#[tauri::command(async)]
+pub fn collect_analysis(shared: State<'_, Shared>) -> Result<store::Analysis, String> {
+    Ok(hub(&shared)?.inbox.analysis(super::now_ms()))
+}
+
+/// 상세 보고서의 "모음함" 구역에 실을 것: 기간 안의 건(최근 것부터)과 전체 건수. 모듈을 열지 못했으면 빈 목록.
+pub fn report_rows(app: &AppHandle, from: u64, to: u64, max: usize) -> (Vec<crate::report::Collected>, usize) {
+    let Some(hub) = app.try_state::<Shared>().and_then(|s| s.0.clone().ok()) else { return (Vec::new(), 0) };
+    let (rows, total) = hub.inbox.report(from, to, max);
+    let rows = rows.into_iter().map(|(r, summary)| crate::report::Collected { at: r.at, got: r.got, pc: if r.pc_name.is_empty() { r.pc.chars().take(8).collect() } else { r.pc_name }, kind: r.kind, title: r.title, target: r.target, verdict: r.verdict, masked: r.masked, skew: r.skew, summary }).collect();
+    (rows, total as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

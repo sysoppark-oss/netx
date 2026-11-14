@@ -21,7 +21,7 @@ pub const MAX_ROWS: usize = 2000;
 pub const MAX_AUDIT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다.
-pub const SECTIONS: [(&str, &str); 7] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("terminal", "터미널"), ("audit", "감사 로그")];
+pub const SECTIONS: [(&str, &str); 8] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("terminal", "터미널"), ("collect", "모음함"), ("audit", "감사 로그")];
 /// 한 보고서에 분석해 싣는 캡처 파일 수
 pub const MAX_CAPTURES: usize = 10;
 
@@ -73,6 +73,29 @@ pub struct Sources {
     pub captures_total: usize,
     /// 직접 명령 기록 파일(`manual.jsonl`)의 내용
     pub manual: String,
+    /// 모음함에 모인 결과 가운데 기간 안의 것(최근 것부터)과 그 전체 건수
+    pub collected: Vec<Collected>,
+    pub collected_total: usize,
+}
+
+/// 모음함의 한 건. 글자는 다른 PC가 보낸 자료다(글자로만 싣는다).
+#[derive(Debug, Clone, Default)]
+pub struct Collected {
+    /// 진단 시각, 받은 시각 (밀리초)
+    pub at: u64,
+    pub got: u64,
+    /// 보낸 PC의 이름
+    pub pc: String,
+    pub kind: String,
+    pub title: String,
+    pub target: String,
+    /// ok | caution | danger | unknown
+    pub verdict: String,
+    /// 보낸 PC가 가려서 보낸 건
+    pub masked: bool,
+    /// 보낸 PC의 시계가 어긋나 받은 시각으로 바꿔 적은 건
+    pub skew: bool,
+    pub summary: Vec<String>,
 }
 
 pub struct Built {
@@ -758,6 +781,45 @@ fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> 
     Zone { id: "manual", title: "직접 명령", count, shown, body, timeless: false, items }
 }
 
+/// 모음함: 다른 PC(와 이 PC)의 NetX가 진단해 이 PC에 모은 결과. 받은 글자는 모두 바꿔 쓴다.
+fn zone_collect(rows: &[Collected], total: usize, offset: i32, m: &Masker) -> Zone {
+    let mut items = Vec::new();
+    let mut lines = Vec::new();
+    for r in rows.iter().take(MAX_ROWS) {
+        let verdict = match r.verdict.as_str() {
+            "ok" => "정상",
+            "caution" => "주의",
+            "danger" => "위험",
+            _ => "판정 없음",
+        };
+        let summary: Vec<String> = r.summary.iter().map(|s| m.text(s)).collect();
+        let (pc, target, title) = (m.text(&r.pc), m.text(&r.target), m.text(&r.title));
+        let marks = [(r.masked, "보낸 PC에서 가림"), (r.skew, "시계 어긋남")].iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
+        lines.push(format!(
+            "<tr><td class=\"n\">{}</td><td>{}</td><td>{}</td><td class=\"k\">{}</td><td>{verdict}</td><td>{}{}</td></tr>",
+            local_time(r.at, offset).0,
+            esc(&pc),
+            esc(if title.is_empty() { &r.kind } else { &title }),
+            esc(&target),
+            esc(&summary.join(" / ")),
+            if marks.is_empty() { String::new() } else { format!(" <span class=\"m\">({marks})</span>") },
+        ));
+        items.push(serde_json::json!({"time": iso(r.at, offset), "received": iso(r.got, offset), "pc": pc, "kind": r.kind, "title": title, "target": target, "verdict": r.verdict, "masked": r.masked, "clock_skew": r.skew, "summary": summary}));
+    }
+    let shown = lines.len();
+    let body = if lines.is_empty() {
+        "<p class=\"m\">이 기간에 모음함에 모인 결과가 없습니다.</p>".to_string()
+    } else {
+        format!(
+            "<p class=\"m\">다른 PC(와 이 PC)의 NetX가 진단해 이 PC의 모음함에 모은 결과를 진단 시각의 최근 것부터 적었습니다. 내용은 보낸 PC가 알려 온 것이며, 원본 출력은 보낸 PC에만 있습니다.{}</p>\
+<table class=\"w\"><tr><th>진단 시각</th><th>보낸 PC</th><th>진단</th><th>대상</th><th>판정</th><th>요약</th></tr>{}</table>",
+            if total > shown { format!(" 전체 {total}건 중 최근 {shown}건입니다.") } else { String::new() },
+            lines.concat()
+        )
+    };
+    Zone { id: "collect", title: "모음함", count: total.max(shown), shown, body, timeless: false, items }
+}
+
 fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
     let (from, to) = (from_ms / 1000, to_ms.div_ceil(1000));
     // 최근 것부터, 상한까지만 만든다(나머지는 세기만 한다).
@@ -875,6 +937,7 @@ pub fn build(req: &Request, src: &Sources, now_ms: u64, stop: &AtomicBool) -> Re
             "capture" => zone_capture(&src.captures, src.captures_total, offset, &m),
             "manual" => zone_manual(&src.manual, req.from_ms, req.to_ms, offset, &m),
             "terminal" => zone_terminal(&src.audit, req.from_ms, req.to_ms, offset, &m),
+            "collect" => zone_collect(&src.collected, src.collected_total, offset, &m),
             _ => zone_audit(&src.audit, req.from_ms, req.to_ms, offset, &m),
         });
     }
@@ -1007,6 +1070,23 @@ mod tests {
             audit: audit.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n") + "\n깨진 줄\n",
             ..Sources::default()
         }
+    }
+
+    #[test]
+    fn collect_zone_lists_received_results_as_plain_text() {
+        let row = |pc: &str, target: &str, summary: &str| Collected { at: NOW - 5000, got: NOW - 4000, pc: pc.into(), kind: "route_latency".into(), title: "라우팅 지연".into(), target: target.into(), verdict: "danger".into(), masked: true, skew: true, summary: vec![summary.into()] };
+        let src = Sources { collected: vec![row("용인<b>", "192.168.0.10", "<script>alert(1)</script> 지연"), row("평창", "example.com", "정상")], collected_total: 7, host: "MYPC".into(), ..Sources::default() };
+        let built = build(&Request { data: true, ..req(&["collect"], true) }, &src, NOW, &no_stop()).unwrap();
+        assert_eq!(built.counts, [("collect".to_string(), 7, 2)]);
+        assert!(built.html.contains("전체 7건 중 최근 2건"));
+        assert!(built.html.contains("용인&lt;b&gt;") && !built.html.contains("<script>alert"));
+        assert!(built.html.contains("보낸 PC에서 가림, 시계 어긋남"));
+        assert!(!built.html.contains("192.168.0.10"), "이 PC에서 가리기를 켜면 받은 내부 주소도 가린다");
+        let data: Value = serde_json::from_str(&built.data.unwrap()).unwrap();
+        assert!(data.to_string().contains("example.com") && !data.to_string().contains("192.168.0.10"));
+        // 비어 있을 때
+        let empty = build(&req(&["collect"], true), &Sources::default(), NOW, &no_stop()).unwrap();
+        assert!(empty.html.contains("모음함에 모인 결과가 없습니다"));
     }
 
     /// 구성도를 조사한 진단 기록
@@ -1402,6 +1482,8 @@ mod tests {
                 .join("\n"),
                 captures: vec![capture("c.pcap", &a, &b), (crate::capview::CaptureFile { name: "d.pcap".into(), size: 1, modified: NOW / 1000 - 5 }, Err(c.clone()))],
                 captures_total: 2,
+                collected: vec![Collected { at: NOW - 9, got: NOW - 8, pc: a.clone(), kind: b.clone(), title: c.clone(), target: d.clone(), verdict: a.clone(), masked: true, skew: false, summary: vec![b.clone(), d.clone()] }],
+                collected_total: 1,
                 manual: [
                     serde_json::json!({"time": NOW - 5, "command": a, "tool": b, "state": c, "exit": 1, "secs": 1.5, "output": d, "cut": true}).to_string(),
                     serde_json::json!({"time": NOW - 6, "command": d, "state": "ok", "output": format!("{a}\n{b}")}).to_string(),

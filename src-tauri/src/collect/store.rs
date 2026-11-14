@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS gaps(pc TEXT NOT NULL, first INTEGER NOT NULL, last I
 CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY AUTOINCREMENT, pc TEXT NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL, strike INTEGER NOT NULL, note TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS downtime(first INTEGER NOT NULL, last INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS sum_target(
+  target TEXT NOT NULL, pc TEXT NOT NULL, n INTEGER NOT NULL, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL,
+  first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, last_verdict TEXT NOT NULL, PRIMARY KEY(target, pc));
+CREATE TABLE IF NOT EXISTS sum_hour(hour INTEGER PRIMARY KEY, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL, unknown INTEGER NOT NULL);
 ";
 
 /// 받기를 거절한 까닭
@@ -214,6 +218,48 @@ pub struct Alert {
     pub kind: String,
     pub note: String,
 }
+
+/// 종합 분석: 한 대상을 한 PC가 본 것
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Seen {
+    pub pc: String,
+    pub pc_name: String,
+    pub n: u64,
+    pub ok: u64,
+    pub caution: u64,
+    pub danger: u64,
+    pub first_at: u64,
+    pub last_at: u64,
+    pub last_verdict: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TargetView {
+    pub target: String,
+    pub total: u64,
+    pub seen: Vec<Seen>,
+    /// 한 PC에서만 나온 대상(다른 지점이 확인해 준 적이 없다)
+    pub single: bool,
+    /// PC마다 마지막 판정이 다르다
+    pub differs: bool,
+    /// 보낸 PC가 가린 내부 주소(가명). 그 PC 안에서만 같은 대상이다.
+    pub alias: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct Analysis {
+    /// 요약 표를 만든 시각(0이면 아직 만들지 않았다)
+    pub made: u64,
+    /// 여러 PC가 본 대상을 앞에, 그다음 건수가 많은 순서로
+    pub targets: Vec<TargetView>,
+    /// (1970년부터의 시간 번호, 정상, 주의, 위험, 판정 없음) — 최근 30일
+    pub hours: Vec<(u64, u64, u64, u64, u64)>,
+}
+
+/// 종합 분석에 보이는 대상 수
+pub const ANALYSIS_TARGETS: usize = 100;
+/// 요약 표를 다시 만드는 간격
+pub const SUMMARY_EVERY: u64 = 5 * 60_000;
 
 pub struct Inbox {
     db: Mutex<Connection>,
@@ -376,7 +422,106 @@ impl Inbox {
         n
     }
 
+    /// 주기 작업: 종합 분석이 읽는 요약 표를 다시 만든다. 화면 조회는 이 표만 읽고 DB에 쓰지 않는다.
+    pub fn summarize(&self, now: u64) -> Result<(), String> {
+        let mut db = self.db();
+        let tx = db.transaction().map_err(e)?;
+        tx.execute_batch(
+            "DELETE FROM sum_target; DELETE FROM sum_hour;
+             INSERT INTO sum_target(target, pc, n, ok, caution, danger, first_at, last_at, last_verdict)
+               SELECT target, pc, COUNT(*), SUM(verdict = 'ok'), SUM(verdict = 'caution'), SUM(verdict = 'danger'), MIN(at), MAX(at), verdict
+               FROM items WHERE target != '' GROUP BY target, pc;
+             INSERT INTO sum_hour(hour, ok, caution, danger, unknown)
+               SELECT at / 3600000, SUM(verdict = 'ok'), SUM(verdict = 'caution'), SUM(verdict = 'danger'), SUM(verdict NOT IN ('ok', 'caution', 'danger'))
+               FROM items GROUP BY at / 3600000;",
+        )
+        .map_err(e)?;
+        tx.execute("INSERT INTO meta(k, v) VALUES('summed', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1", params![now as i64]).map_err(e)?;
+        tx.commit().map_err(e)
+    }
+
+    /// 요약 표를 마지막으로 만든 시각
+    pub fn summarized(&self) -> u64 {
+        self.db().query_row("SELECT v FROM meta WHERE k = 'summed'", [], |r| r.get::<_, i64>(0)).optional().ok().flatten().unwrap_or(0) as u64
+    }
+
     // ---- 조회(읽기만) ----
+
+    /// 종합 분석: 요약 표에서 읽는다.
+    pub fn analysis(&self, now: u64) -> Analysis {
+        let made = self.summarized();
+        let db = self.db();
+        let mut by_target: Vec<TargetView> = Vec::new();
+        if let Ok(mut st) = db.prepare(
+            "SELECT s.target, s.pc, COALESCE(p.name, ''), s.n, s.ok, s.caution, s.danger, s.first_at, s.last_at, s.last_verdict
+             FROM sum_target s LEFT JOIN pcs p ON p.id = s.pc ORDER BY s.target, s.last_at DESC",
+        ) {
+            let rows = st.query_map([], |r| {
+                let n = |i: usize| r.get::<_, i64>(i).map(|v| v as u64);
+                Ok((r.get::<_, String>(0)?, Seen { pc: r.get(1)?, pc_name: r.get(2)?, n: n(3)?, ok: n(4)?, caution: n(5)?, danger: n(6)?, first_at: n(7)?, last_at: n(8)?, last_verdict: r.get(9)? }))
+            });
+            for (target, seen) in rows.map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+                // 가명(내부-…)은 보낸 PC 안에서만 같은 대상이므로 PC마다 따로 둔다.
+                let alias = target.starts_with("내부-");
+                match by_target.last_mut().filter(|t| t.target == target && !alias) {
+                    Some(t) => {
+                        t.total += seen.n;
+                        t.seen.push(seen);
+                    }
+                    None => by_target.push(TargetView { target, total: seen.n, seen: vec![seen], single: true, differs: false, alias }),
+                }
+            }
+        }
+        for t in &mut by_target {
+            t.single = t.seen.len() == 1;
+            t.differs = t.seen.iter().any(|s| s.last_verdict != t.seen[0].last_verdict);
+        }
+        by_target.sort_by(|a, b| b.seen.len().cmp(&a.seen.len()).then(b.total.cmp(&a.total)).then(a.target.cmp(&b.target)));
+        by_target.truncate(ANALYSIS_TARGETS);
+
+        let since = (now.saturating_sub(30 * DAY) / HOUR) as i64;
+        let hours = db
+            .prepare("SELECT hour, ok, caution, danger, unknown FROM sum_hour WHERE hour >= ?1 ORDER BY hour")
+            .and_then(|mut st| {
+                let n = |r: &rusqlite::Row<'_>, i: usize| r.get::<_, i64>(i).map(|v| v as u64);
+                st.query_map(params![since], |r| Ok((n(r, 0)?, n(r, 1)?, n(r, 2)?, n(r, 3)?, n(r, 4)?))).map(|rows| rows.flatten().collect())
+            })
+            .unwrap_or_default();
+        Analysis { made, targets: by_target, hours }
+    }
+
+    /// 보고서용: 기간(진단 시각) 안의 건을 최근 것부터 `max`건, 그리고 전체 건수. 요약 문장도 함께.
+    pub fn report(&self, from: u64, to: u64, max: usize) -> (Vec<(Row, Vec<String>)>, u64) {
+        let (from, to) = (from.min(i64::MAX as u64) as i64, to.min(i64::MAX as u64) as i64);
+        let db = self.db();
+        let total: i64 = db.query_row("SELECT COUNT(*) FROM items WHERE at >= ?1 AND at <= ?2", params![from, to], |r| r.get(0)).unwrap_or(0);
+        let Ok(mut st) = db.prepare(
+            "SELECT i.pc, COALESCE(p.name, ''), i.seq, i.at, i.got, i.kind, i.title, i.target, i.verdict, i.skew, i.stale, i.masked, i.body
+             FROM items i LEFT JOIN pcs p ON p.id = i.pc WHERE i.at >= ?1 AND i.at <= ?2 ORDER BY i.at DESC, i.got DESC LIMIT ?3",
+        ) else {
+            return (Vec::new(), 0);
+        };
+        let rows = st.query_map(params![from, to, max as i64], |r| {
+            let row = Row {
+                pc: r.get(0)?,
+                pc_name: r.get(1)?,
+                seq: r.get::<_, i64>(2)? as u64,
+                at: r.get::<_, i64>(3)? as u64,
+                got: r.get::<_, i64>(4)? as u64,
+                kind: r.get(5)?,
+                title: r.get(6)?,
+                target: r.get(7)?,
+                verdict: r.get(8)?,
+                skew: r.get(9)?,
+                stale: r.get(10)?,
+                masked: r.get(11)?,
+            };
+            let body: String = r.get(12)?;
+            let summary = serde_json::from_str(&body).ok().and_then(|v| wire::from_ocsf(&v)).map(|p| p.item.summary).unwrap_or_default();
+            Ok((row, summary))
+        });
+        (rows.map(|r| r.flatten().collect()).unwrap_or_default(), total as u64)
+    }
 
     pub fn pcs(&self, now: u64) -> Vec<Pc> {
         let db = self.db();
@@ -722,6 +867,44 @@ mod tests {
         let pcs = inbox.pcs(NOW + QUIET_AFTER + 1);
         assert!(pcs.iter().all(|p| p.quiet));
         assert_eq!(pcs.iter().find(|p| p.id == "pcA").unwrap().items, 1);
+    }
+
+    #[test]
+    fn analysis_reads_the_summary_and_tells_single_site_and_differing_targets_apart() {
+        let inbox = Inbox::open(&tmp("sum")).unwrap();
+        for (id, name) in [("pcA", "용인"), ("pcB", "평창")] {
+            inbox.pair(id, name, "100.64.0.2", false, NOW).unwrap();
+        }
+        let put = |pc: &str, seq: u64, target: &str, verdict: &str, at: u64| {
+            let f = Finished { verdict: verdict.into(), ..item(target, at) };
+            assert_eq!(inbox.take(pc, seq, &encode(&f, pc, seq, false, "t").unwrap(), NOW).unwrap(), Taken::Stored);
+        };
+        put("pcA", 1, "example.com", "ok", NOW - 3 * HOUR);
+        put("pcA", 2, "example.com", "danger", NOW - HOUR);
+        put("pcB", 1, "example.com", "ok", NOW - 2 * HOUR);
+        put("pcA", 3, "only-a.example", "caution", NOW);
+        put("pcA", 4, "내부-ab12cd", "ok", NOW);
+        put("pcB", 2, "내부-ab12cd", "ok", NOW);
+        // 주기 작업 전에는 비어 있다(조회가 표를 만들지 않는다)
+        assert_eq!(inbox.analysis(NOW), Analysis::default());
+        inbox.summarize(NOW).unwrap();
+        let a = inbox.analysis(NOW);
+        assert_eq!(a.made, NOW);
+        let first = &a.targets[0];
+        assert_eq!((first.target.as_str(), first.total, first.single, first.differs), ("example.com", 3, false, true));
+        let from_a = first.seen.iter().find(|s| s.pc == "pcA").unwrap();
+        assert_eq!((from_a.n, from_a.ok, from_a.danger, from_a.last_verdict.as_str(), from_a.pc_name.as_str()), (2, 1, 1, "danger", "용인"));
+        let only = a.targets.iter().find(|t| t.target == "only-a.example").unwrap();
+        assert!(only.single && !only.differs);
+        // 가명은 같은 글자라도 PC마다 다른 대상이다
+        let aliases: Vec<_> = a.targets.iter().filter(|t| t.alias).collect();
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases.iter().all(|t| t.single));
+        assert_eq!(a.hours.iter().map(|h| h.1 + h.2 + h.3 + h.4).sum::<u64>(), 6);
+        assert_eq!(a.hours.last().unwrap().0, NOW / HOUR);
+        // 보고서용 목록
+        let (rows, total) = inbox.report(NOW - HOUR, NOW, 2);
+        assert_eq!((rows.len(), total), (2, 4));
     }
 
     #[test]

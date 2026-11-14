@@ -168,6 +168,10 @@ pub async fn run_listener(hub: Arc<Hub>) {
             hub.inbox.purge(now, config.keep_days);
             last_purge = now;
         }
+        // 테일스케일이 꺼져 듣지 못하는 동안에도(이 PC의 결과는 들어온다) 요약은 만든다.
+        if now > hub.inbox.summarized() + super::store::SUMMARY_EVERY {
+            let _ = hub.inbox.summarize(now);
+        }
         let Some(addr) = tailnet_addr() else {
             set_listening(&hub, None, Some("이 PC에 테일스케일 주소가 없습니다. 테일스케일이 켜져 있는지 확인하세요.".into()));
             tokio::select! { _ = hub.wake.notified() => {}, _ = tokio::time::sleep(Duration::from_secs(30)) => {} }
@@ -186,7 +190,11 @@ pub async fn run_listener(hub: Arc<Hub>) {
         let serving = serve_on(hub.clone(), listener);
         tokio::pin!(serving);
         loop {
-            hub.inbox.mark_listening(now_ms());
+            let now = now_ms();
+            hub.inbox.mark_listening(now);
+            if now > hub.inbox.summarized() + super::store::SUMMARY_EVERY {
+                let _ = hub.inbox.summarize(now);
+            }
             tokio::select! {
                 _ = &mut serving => break,
                 _ = tokio::time::sleep(Duration::from_secs(60)) => {}
