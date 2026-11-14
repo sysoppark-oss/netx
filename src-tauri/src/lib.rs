@@ -8,6 +8,7 @@ mod audit;
 mod basic;
 mod bridge;
 mod capview;
+mod collect;
 mod commands;
 mod engine;
 mod env_check;
@@ -66,6 +67,8 @@ pub fn run() {
             // 다른 프로그램(스토리방화벽 등)이 진단 대상을 넘길 수 있는 입구를 연다.
             #[cfg(target_os = "windows")]
             bridge::pipe::start(app.handle().clone());
+            // 모음함: 보내기도 받기도 기본은 꺼져 있다. 켜기 전에는 듣지도 보내지도 않는다.
+            collect::app::start(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -115,6 +118,20 @@ pub fn run() {
             bridge::bridge_take_handoff,
             bridge::bridge_report,
             bridge::bridge_status,
+            collect::app::collect_overview,
+            collect::app::collect_set,
+            collect::app::collect_submit,
+            collect::app::collect_join,
+            collect::app::collect_join_cancel,
+            collect::app::collect_forget,
+            collect::app::collect_sent,
+            collect::app::collect_pair_open,
+            collect::app::collect_pair_close,
+            collect::app::collect_pair_decide,
+            collect::app::collect_pc_set,
+            collect::app::collect_board,
+            collect::app::collect_list,
+            collect::app::collect_item,
             term::cmd::open_terminal,
             term::cmd::term_take_preset,
             term::cmd::term_ports,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-pair-close"
+description = "Enables the collect_pair_close command without any pre-configured scope."
+commands.allow = ["collect_pair_close"]
+
+[[permission]]
+identifier = "deny-collect-pair-close"
+description = "Denies the collect_pair_close command without any pre-configured scope."
+commands.deny = ["collect_pair_close"]

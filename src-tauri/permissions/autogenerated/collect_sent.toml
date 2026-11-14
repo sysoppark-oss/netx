@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-sent"
+description = "Enables the collect_sent command without any pre-configured scope."
+commands.allow = ["collect_sent"]
+
+[[permission]]
+identifier = "deny-collect-sent"
+description = "Denies the collect_sent command without any pre-configured scope."
+commands.deny = ["collect_sent"]
