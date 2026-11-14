@@ -19,7 +19,7 @@ export const REPORT_ZONES: ReportZone[] = [
   { id: "topology", title: "구성도", hint: "기간 안에서 가장 최근에 조사한 구성도의 그림, 장비 목록, 포트 연결 관계" },
   { id: "capture", title: "캡처 분석", hint: "기간 안의 캡처 파일(최근 10개): 요약, 찾은 문제, 상위 대화 (패킷 내용은 싣지 않음)" },
   { id: "manual", title: "직접 명령", hint: "직접 명령으로 실행한 것: 명령, 종료 상태, 출력 앞 40줄" },
-  { id: "terminal", title: "터미널", hint: "접속 목록 (장비 설정과 암호가 섞일 수 있어 기본 해제)", later: true, off: true },
+  { id: "terminal", title: "터미널", hint: "터미널로 접속한 세션 목록: 종류, 대상, 사용자, 시각 (기본 해제)", off: true },
   { id: "audit", title: "감사 로그", hint: "실행 확인, 다른 프로그램에서 받은 의뢰" },
 ];
 
@@ -47,6 +47,8 @@ export interface ReportSaved {
   path: string;
   /** [구역 id, 기간 안 전체 건수, 실은 건수] */
   counts: [string, number, number][];
+  /** 함께 저장한 원자료 JSON의 자리 */
+  data_path?: string | null;
 }
 
 export interface ReportRequest {
@@ -55,11 +57,13 @@ export interface ReportRequest {
   to_ms: number;
   mask: boolean;
   history_id?: string;
+  /** 원자료 JSON(`…-data.json`)도 함께 저장한다 */
+  data?: boolean;
 }
 
 /** 보고서를 만들고 저장한다. 저장 창을 닫았거나 취소했으면 null. */
 export async function reportMake(request: ReportRequest): Promise<ReportSaved | null> {
-  return invoke<ReportSaved | null>("report_make", { request: { ...request, history_id: request.history_id ?? null, offset_minutes: -new Date().getTimezoneOffset() } });
+  return invoke<ReportSaved | null>("report_make", { request: { ...request, history_id: request.history_id ?? null, data: request.data ?? false, offset_minutes: -new Date().getTimezoneOffset() } });
 }
 
 export async function reportCancel(): Promise<void> {

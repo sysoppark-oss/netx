@@ -23,6 +23,11 @@ export function ReportSavedBar({ saved, onError }: { saved: ReportSaved; onError
     <p className="flex items-center gap-3 border-b border-safe/40 bg-safe/10 px-4 py-2 text-xs">
       <span className="min-w-0 flex-1 break-all">
         저장했습니다: <span className="font-mono">{saved.path}</span>
+        {saved.data_path && (
+          <span className="block text-dim">
+            원자료: <span className="font-mono">{saved.data_path}</span>
+          </span>
+        )}
       </span>
       <button onClick={() => open(false)} className="shrink-0 rounded border border-accent/60 px-2.5 py-1 text-accent hover:bg-raised">
         열기
@@ -40,6 +45,7 @@ export function ReportView({ onClose }: { onClose: () => void }) {
   const [from, setFrom] = useState(() => dayText(Date.now() - 7 * 86_400_000));
   const [to, setTo] = useState(() => dayText(Date.now()));
   const [mask, setMask] = useState(true);
+  const [data, setData] = useState(false);
   const [askPlain, setAskPlain] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<ReportSaved | null>(null);
@@ -58,7 +64,7 @@ export function ReportView({ onClose }: { onClose: () => void }) {
     setSaved(null);
     setBusy(true);
     try {
-      const result = await reportMake({ sections, ...period, mask });
+      const result = await reportMake({ sections, ...period, mask, data });
       if (result) setSaved(result);
       else setNote("저장하지 않았습니다. 만들던 보고서는 남기지 않았습니다.");
     } catch (e) {
@@ -94,6 +100,11 @@ export function ReportView({ onClose }: { onClose: () => void }) {
                       {z.title}
                       {z.later && <span className="ml-1.5 rounded border border-line px-1 text-[11px] text-dim">다음 판</span>}
                       <span className="block text-xs text-dim">{z.hint}</span>
+                      {z.id === "terminal" && picked[z.id] && (
+                        <span className="block text-xs text-caution">
+                          장비 설정과 암호가 출력에 섞여 있을 수 있습니다. 이 판은 접속 목록(대상, 시각)만 싣습니다. NetX는 터미널에 오간 글자를 저장하지 않아 출력은 실을 수 없습니다.
+                        </span>
+                      )}
                     </span>
                   </label>
                 </li>
@@ -127,6 +138,16 @@ export function ReportView({ onClose }: { onClose: () => void }) {
               <span>
                 내부 주소, MAC 뒷부분, PC 이름, 사용자 이름, 이 PC의 공인 주소를 가립니다
                 <span className="block text-xs text-dim">남에게 보여 줄 때를 위한 것입니다. 바깥 목적지 주소와 도메인은 가리지 않습니다. 암호와 커뮤니티 문자열은 어느 쪽이든 싣지 않습니다.</span>
+              </span>
+            </label>
+          </fieldset>
+          <fieldset disabled={busy}>
+            <legend className="mb-1.5 text-xs font-semibold text-dim">원자료</legend>
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-1" checked={data} onChange={(e) => setData(e.target.checked)} />
+              <span>
+                원자료 JSON도 함께 저장합니다
+                <span className="block text-xs text-dim">보고서와 같은 자리에 같은 이름 뒤에 -data.json을 붙여 저장합니다. 다른 프로그램으로 읽거나 나중에 통합 보고서로 합칠 때 씁니다. 가리기를 켜면 원자료도 가린 채로 저장합니다.</span>
               </span>
             </label>
           </fieldset>

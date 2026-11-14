@@ -204,6 +204,8 @@ pub struct ReportSaved {
     pub path: String,
     /// (구역 id, 기간 안 전체 건수, 실은 건수)
     pub counts: Vec<(String, usize, usize)>,
+    /// 함께 저장한 원자료 JSON의 자리 (골랐을 때만)
+    pub data_path: Option<String>,
 }
 
 fn env_name(keys: &[&str]) -> String {
@@ -273,7 +275,7 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
         if req.history_id.is_some() && history.is_empty() {
             return Err("그 기록을 찾지 못했습니다.".to_string());
         }
-        let audit = if req.history_id.is_none() && req.sections.iter().any(|s| s == "audit") { read_tail(&dir.join("audit.log"), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
+        let audit = if wants("audit") || wants("terminal") { read_tail(&dir.join("audit.log"), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
         // 캡처 파일은 기간 안에 저장한 것을 최근 것부터 정해진 수만 분석한다(큰 파일은 몇 초씩 걸린다).
         let (mut captures, mut captures_total) = (Vec::new(), 0);
         if wants("capture") {
@@ -314,6 +316,17 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
         path = PathBuf::from(with);
     }
     std::fs::write(&path, built.html.as_bytes()).map_err(|e| format!("보고서를 저장하지 못했습니다: {e}"))?;
+    // 원자료 JSON은 같은 이름에 `-data.json`을 붙여 옆에 둔다. 쓰지 못하면 보고서도 남기지 않는다.
+    let mut data_path = None;
+    if let Some(data) = &built.data {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "netx-report".into());
+        let beside = path.with_file_name(format!("{stem}-data.json"));
+        if let Err(e) = std::fs::write(&beside, data.as_bytes()) {
+            let _ = std::fs::remove_file(&path);
+            return Err(format!("원자료 파일을 저장하지 못했습니다: {e}"));
+        }
+        data_path = Some(beside.to_string_lossy().into_owned());
+    }
     let shown = path.to_string_lossy().into_owned();
     let what = match &request.history_id {
         Some(id) => format!("history:{id}"),
@@ -326,7 +339,7 @@ pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Res
     };
     audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "report", tool: "netx-report", argv: &[what, period, if request.mask { "masked".into() } else { "plain".into() }, shown.clone()], risk: Risk::Safe, root: false, confirmed: !request.mask });
     *LAST_REPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
-    Ok(Some(ReportSaved { path: shown, counts: built.counts }))
+    Ok(Some(ReportSaved { path: shown, counts: built.counts, data_path }))
 }
 
 /// 만들고 있는 보고서를 그만둔다. 파일은 남지 않는다.

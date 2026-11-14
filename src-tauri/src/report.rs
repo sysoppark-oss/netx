@@ -20,8 +20,8 @@ pub const MAX_ROWS: usize = 2000;
 /// 읽는 감사 로그의 상한. 넘으면 뒤쪽(최근)만 읽는다.
 pub const MAX_AUDIT_BYTES: u64 = 16 * 1024 * 1024;
 
-/// 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다. 터미널과 원자료 JSON은 3단계.
-pub const SECTIONS: [(&str, &str); 6] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("audit", "감사 로그")];
+/// 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다.
+pub const SECTIONS: [(&str, &str); 7] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("terminal", "터미널"), ("audit", "감사 로그")];
 /// 한 보고서에 분석해 싣는 캡처 파일 수
 pub const MAX_CAPTURES: usize = 10;
 
@@ -37,6 +37,9 @@ pub struct Request {
     /// 주면 그 진단 기록 한 건만 담는다.
     #[serde(default)]
     pub history_id: Option<String>,
+    /// 원자료 JSON(`…-data.json`)도 함께 만든다 (2.1, 2.6).
+    #[serde(default)]
+    pub data: bool,
 }
 
 /// 내 네트워크 구역에 싣는 값
@@ -76,6 +79,8 @@ pub struct Built {
     pub html: String,
     /// (구역 id, 기간 안 전체 건수, 실은 건수)
     pub counts: Vec<(String, usize, usize)>,
+    /// 원자료 JSON (요청했을 때만). 모양은 의뢰서 2.6과 docs/REPORT_DATA_v1.md
+    pub data: Option<String>,
 }
 
 // ---- 가리기 (2.4) ----
@@ -369,6 +374,27 @@ struct Zone {
     body: String,
     /// 기간이 없는 구역(만든 시각 기준)
     timeless: bool,
+    /// 원자료 JSON에 싣는 항목(가린 것은 가린 채로)
+    items: Vec<Value>,
+}
+
+/// "2026-11-14T05:12:00+09:00" 모양의 시각 (2.6)
+fn iso(ms: u64, offset_minutes: i32) -> String {
+    let offset = offset_minutes.clamp(-900, 900);
+    let stamp = local_time(ms, offset).1; // YYYYMMDD-HHMMSS
+    let part = |a: usize, b: usize| stamp.get(a..b).unwrap_or("00");
+    format!(
+        "{}-{}-{}T{}:{}:{}{}{:02}:{:02}",
+        stamp.get(0..4).unwrap_or("1970"),
+        part(4, 6),
+        part(6, 8),
+        part(9, 11),
+        part(11, 13),
+        part(13, 15),
+        if offset < 0 { '-' } else { '+' },
+        offset.abs() / 60,
+        offset.abs() % 60
+    )
 }
 
 fn row(label: &str, value: &str) -> String {
@@ -400,7 +426,13 @@ fn zone_mynet(net: Option<&Net>, m: &Masker) -> Zone {
             )
         }
     };
-    Zone { id: "mynet", title: "내 네트워크", count: 1, shown: 1, body, timeless: true }
+    let items = net
+        .map(|n| {
+            let t = |v: &Option<String>| v.as_deref().map(|v| m.text(v));
+            vec![serde_json::json!({"iface": t(&n.iface), "mac": t(&n.mac), "ip": t(&n.ip), "prefix": n.prefix, "gateway": t(&n.gateway), "dns": n.dns.iter().map(|d| m.text(d)).collect::<Vec<_>>(), "link": t(&n.link), "public_ip": t(&n.public_ip)})]
+        })
+        .unwrap_or_default();
+    Zone { id: "mynet", title: "내 네트워크", count: 1, shown: 1, body, timeless: true, items }
 }
 
 fn zone_history(entries: &[(u64, String)], offset: i32, m: &Masker) -> (Zone, Vec<Value>) {
@@ -416,7 +448,18 @@ fn zone_history(entries: &[(u64, String)], offset: i32, m: &Masker) -> (Zone, Ve
     if data.is_empty() {
         body.push_str("<p class=\"m\">이 기간에 남은 진단 기록이 없습니다.</p>");
     }
-    (Zone { id: "history", title: "최근 진단", count: data.len(), shown: data.len(), body, timeless: false }, data)
+    // 원자료에는 그림 글자(구성도 SVG)를 빼고 싣는다.
+    let items = data
+        .iter()
+        .cloned()
+        .map(|mut item| {
+            if let Some(entry) = item.get_mut("entry").and_then(Value::as_object_mut) {
+                entry.remove("topo_svg");
+            }
+            item
+        })
+        .collect();
+    (Zone { id: "history", title: "최근 진단", count: data.len(), shown: data.len(), body, timeless: false, items }, data)
 }
 
 fn source_text(source: &str) -> &'static str {
@@ -511,6 +554,7 @@ fn zone_topology(entries: &[(u64, String)], offset: i32, m: &Masker) -> Zone {
     let text = |v: &Value, key: &str, max: usize| -> String { v.get(key).and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control()).take(max).collect() };
     let mut count = 0;
     let mut body = String::new();
+    let mut items = Vec::new();
     for (time, json) in entries {
         let Ok(mut entry) = serde_json::from_str::<Value>(json) else { continue };
         let Some((order, _)) = entry.get("run").and_then(|r| r.get("results")).and_then(Value::as_object).and_then(|results| results.iter().find(|(_, r)| r.get("topology").is_some_and(Value::is_object))) else { continue };
@@ -521,6 +565,7 @@ fn zone_topology(entries: &[(u64, String)], offset: i32, m: &Masker) -> Zone {
         let order = order.clone();
         m.value(&mut entry);
         let Some(topo) = entry.get("run").and_then(|r| r.get("results")).and_then(|r| r.get(&order)).and_then(|r| r.get("topology")) else { continue };
+        items.push(serde_json::json!({"time": time, "topology": topo}));
         body.push_str(&format!(
             "<p class=\"m\">조사한 시각: {} · 대역: <span class=\"k\">{}</span> · 게이트웨이: <span class=\"k\">{}</span></p>",
             local_time(*time, offset).0,
@@ -584,7 +629,7 @@ fn zone_topology(entries: &[(u64, String)], offset: i32, m: &Masker) -> Zone {
     } else if count > 1 {
         body.push_str(&format!("<p class=\"m\">이 기간에 구성도를 {count}번 조사했습니다. 가장 최근 것만 실었습니다. 나머지는 \"최근 진단\" 구역에 있습니다.</p>"));
     }
-    Zone { id: "topology", title: "구성도", count, shown: count.min(1), body, timeless: false }
+    Zone { id: "topology", title: "구성도", count, shown: count.min(1), body, timeless: false, items }
 }
 
 /// 캡처 분석: 파일마다 요약, 프로토콜, 찾은 문제, 상위 대화. 패킷 내용은 싣지 않는다.
@@ -646,13 +691,26 @@ fn zone_capture(captures: &[(crate::capview::CaptureFile, Result<crate::capview:
         }
         body.push_str("</section>");
     }
-    Zone { id: "capture", title: "캡처 분석", count: total, shown: captures.len(), body, timeless: false }
+    let items = captures
+        .iter()
+        .map(|(file, analysis)| {
+            let mut item = serde_json::json!({"name": file.name, "size": file.size, "modified": file.modified});
+            match analysis {
+                Ok(a) => item["analysis"] = serde_json::to_value(a).unwrap_or(Value::Null),
+                Err(why) => item["error"] = Value::String(why.clone()),
+            }
+            m.value(&mut item);
+            item
+        })
+        .collect();
+    Zone { id: "capture", title: "캡처 분석", count: total, shown: captures.len(), body, timeless: false, items }
 }
 
 /// 직접 명령: 실행한 명령, 종료 상태, 출력 앞부분. 기록은 `manuallog`가 남긴다.
 fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
     let mut count = 0;
     let mut rows = Vec::new();
+    let mut items = Vec::new();
     for line in log.lines().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         let Some(time) = v.get("time").and_then(Value::as_u64) else { continue };
@@ -663,6 +721,9 @@ fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> 
         if rows.len() >= MAX_ROWS {
             continue;
         }
+        let mut item = v.clone();
+        m.value(&mut item);
+        items.push(item);
         let text = |key: &str, max: usize| -> String { v.get(key).and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(max).collect() };
         let state = match text("state", 20).as_str() {
             "ok" => "끝남",
@@ -694,7 +755,7 @@ fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> 
             rows.concat()
         )
     };
-    Zone { id: "manual", title: "직접 명령", count, shown, body, timeless: false }
+    Zone { id: "manual", title: "직접 명령", count, shown, body, timeless: false, items }
 }
 
 fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
@@ -702,6 +763,7 @@ fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Z
     // 최근 것부터, 상한까지만 만든다(나머지는 세기만 한다).
     let mut count = 0;
     let mut rows = Vec::new();
+    let mut items = Vec::new();
     for line in log.lines().rev() {
         let Some(time) = serde_json::from_str::<Value>(line).ok().and_then(|v| v.get("time")?.as_u64()) else { continue };
         if time < from || time > to {
@@ -711,6 +773,10 @@ fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Z
         if rows.len() < MAX_ROWS {
             if let Some((_, html)) = audit_row(line, offset, m) {
                 rows.push(html);
+                if let Ok(mut item) = serde_json::from_str::<Value>(line) {
+                    m.value(&mut item);
+                    items.push(item);
+                }
             }
         }
     }
@@ -725,7 +791,46 @@ fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Z
             rows.concat()
         )
     };
-    Zone { id: "audit", title: "감사 로그", count, shown, body, timeless: false }
+    Zone { id: "audit", title: "감사 로그", count, shown, body, timeless: false, items }
+}
+
+/// 터미널: 접속한 세션의 목록(종류, 대상, 사용자, 시각). 감사 로그에 남은 접속 기록에서 읽는다.
+/// NetX는 터미널에 오간 글자를 저장하지 않으므로 출력은 싣지 않는다(실을 것이 없다).
+fn zone_terminal(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
+    let (from, to) = (from_ms / 1000, to_ms.div_ceil(1000));
+    let mut count = 0;
+    let mut rows = Vec::new();
+    let mut items = Vec::new();
+    for line in log.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("source").and_then(Value::as_str) != Some("terminal") {
+            continue;
+        }
+        let Some(time) = v.get("time").and_then(Value::as_u64) else { continue };
+        if time < from || time > to {
+            continue;
+        }
+        count += 1;
+        if rows.len() >= MAX_ROWS {
+            continue;
+        }
+        let text = |key: &str, max: usize| -> String { m.text(&v.get(key).and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control()).take(max).collect::<String>()) };
+        let (kind, target, user) = (text("kind", 20), text("target", 200), text("user", 80));
+        rows.push(format!("<tr><td class=\"n\">{}</td><td>{}</td><td class=\"k\">{}</td><td>{}</td></tr>", local_time(time.saturating_mul(1000), offset).0, esc(&kind), esc(&target), esc(&user)));
+        items.push(serde_json::json!({"time": time, "kind": kind, "target": target, "user": user}));
+    }
+    let shown = rows.len();
+    let body = if rows.is_empty() {
+        "<p class=\"m\">이 기간에 터미널로 접속한 기록이 없습니다.</p>".to_string()
+    } else {
+        format!(
+            "<p class=\"m\">터미널로 접속한 세션을 최근 것부터 적었습니다. 터미널에 오간 글자(명령, 장비 출력, 암호)는 NetX가 저장하지 않으므로 싣지 않습니다.{}</p>\
+<table class=\"w\"><tr><th>접속한 시각</th><th>종류</th><th>대상</th><th>사용자</th></tr>{}</table>",
+            if count > shown { format!(" 전체 {count}건 중 최근 {shown}건입니다.") } else { String::new() },
+            rows.concat()
+        )
+    };
+    Zone { id: "terminal", title: "터미널", count, shown, body, timeless: false, items }
 }
 
 const STYLE: &str = ".head th{white-space:nowrap}.note{border-left:4px solid #1d2330;padding:.3em .8em;background:#f3f5f8}\
@@ -769,6 +874,7 @@ pub fn build(req: &Request, src: &Sources, now_ms: u64, stop: &AtomicBool) -> Re
             }
             "capture" => zone_capture(&src.captures, src.captures_total, offset, &m),
             "manual" => zone_manual(&src.manual, req.from_ms, req.to_ms, offset, &m),
+            "terminal" => zone_terminal(&src.audit, req.from_ms, req.to_ms, offset, &m),
             _ => zone_audit(&src.audit, req.from_ms, req.to_ms, offset, &m),
         });
     }
@@ -828,7 +934,22 @@ pub fn build(req: &Request, src: &Sources, now_ms: u64, stop: &AtomicBool) -> Re
         html.push_str(&format!("{}{encoded}{}", crate::history::DATA_OPEN, crate::history::DATA_CLOSE));
     }
     html.push_str("</body></html>\n");
-    Ok(Built { html, counts: zones.iter().map(|z| (z.id.to_string(), z.count, z.shown)).collect() })
+    // 원자료 JSON (2.6): 머리는 HTML의 표와 같은 내용, 구역마다 실은 항목. 가린 것은 가린 채로 들어간다.
+    let data = req.data.then(|| {
+        let sections: Vec<Value> = zones.iter().map(|z| serde_json::json!({"id": z.id, "title": z.title, "count": z.count, "shown": z.shown, "items": z.items})).collect();
+        let period = if single { Value::Null } else { serde_json::json!({"from": iso(req.from_ms, offset), "to": iso(req.to_ms, offset)}) };
+        let doc = serde_json::json!({
+            "report": "antioch.report/1",
+            "program": "netx",
+            "version": src.version,
+            "generated_at": iso(now_ms, offset),
+            "period": period,
+            "masked": req.mask,
+            "sections": sections,
+        });
+        serde_json::to_string_pretty(&doc).unwrap_or_default()
+    });
+    Ok(Built { html, counts: zones.iter().map(|z| (z.id.to_string(), z.count, z.shown)).collect(), data })
 }
 
 /// 보고서 파일의 기본 이름 (2.1)
@@ -843,7 +964,7 @@ mod tests {
     const NOW: u64 = 1_794_443_800_000; // 2026-11-12 09:36 (KST)
 
     fn req(sections: &[&str], mask: bool) -> Request {
-        Request { sections: sections.iter().map(|s| s.to_string()).collect(), from_ms: NOW - 7 * 86_400_000, to_ms: NOW, mask, offset_minutes: 540, history_id: None }
+        Request { sections: sections.iter().map(|s| s.to_string()).collect(), from_ms: NOW - 7 * 86_400_000, to_ms: NOW, mask, offset_minutes: 540, history_id: None, data: false }
     }
 
     fn entry(target: &str, raw: &str) -> String {
@@ -928,6 +1049,73 @@ mod tests {
             notes: vec![format!("{who}가 가장 많이 보냈습니다")],
         };
         (file, Ok(analysis))
+    }
+
+    #[test]
+    fn terminal_section_lists_sessions_only() {
+        let mut src = sources();
+        src.audit.push_str(&serde_json::json!({"time": NOW / 1000 - 10, "source": "terminal", "kind": "telnet", "target": "192.168.0.21:23", "user": ""}).to_string());
+        src.audit.push('\n');
+        src.audit.push_str(&serde_json::json!({"time": NOW / 1000 - 40 * 86_400, "source": "terminal", "kind": "ssh", "target": "old-host:22", "user": "x"}).to_string());
+        let built = build(&req(&["terminal"], false), &src, NOW, &no_stop()).unwrap();
+        check(&built.html).unwrap();
+        assert_eq!(built.counts, [("terminal".to_string(), 2, 2)]);
+        let at = |s: &str| built.html.find(s).unwrap_or_else(|| panic!("{s}"));
+        assert!(at("<td>telnet</td><td class=\"k\">192.168.0.21:23</td>") < at("<td>ssh</td><td class=\"k\">192.168.0.1:22</td><td>admin</td>"));
+        assert!(!built.html.contains("old-host") && !built.html.contains("nc -vz"), "기간 밖과 터미널이 아닌 기록은 싣지 않는다");
+        assert!(built.html.contains("NetX가 저장하지 않으므로 싣지 않습니다"));
+        let masked = build(&req(&["terminal"], true), &src, NOW, &no_stop()).unwrap().html;
+        assert!(!masked.contains("192.168.0.21") && masked.contains("내부-"));
+        let none = build(&req(&["terminal"], false), &Sources::default(), NOW, &no_stop()).unwrap();
+        assert!(none.html.contains("터미널로 접속한 기록이 없습니다"));
+    }
+
+    #[test]
+    fn raw_data_json_follows_the_common_shape() {
+        let mut src = sources();
+        src.captures = vec![capture("cap-1.pcap", "192.168.0.7", "x")];
+        src.captures_total = 3;
+        src.manual = serde_json::json!({"time": NOW - 60_000, "command": "ping 192.168.0.1", "state": "ok", "exit": 0, "output": "MYPC ok\n"}).to_string();
+        src.history.push((NOW - 500, map_entry("PRINTER-1", "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")));
+        let mut want = req(&["mynet", "history", "topology", "capture", "manual", "terminal", "audit"], false);
+        assert_eq!(build(&want, &src, NOW, &no_stop()).unwrap().data, None, "고르지 않으면 만들지 않는다");
+        want.data = true;
+        let built = build(&want, &src, NOW, &no_stop()).unwrap();
+        let doc: Value = serde_json::from_str(built.data.as_deref().unwrap()).unwrap();
+        assert_eq!((doc["report"].as_str(), doc["program"].as_str(), doc["version"].as_str(), doc["masked"].as_bool()), (Some("antioch.report/1"), Some("netx"), Some("0.1.0 (abc1234)"), Some(false)));
+        assert_eq!(doc["generated_at"], "2026-11-12T09:36:40+09:00");
+        assert_eq!(doc["period"], serde_json::json!({"from": "2026-11-05T09:36:40+09:00", "to": "2026-11-12T09:36:40+09:00"}));
+        let sections = doc["sections"].as_array().unwrap();
+        let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
+        assert_eq!(ids, ["mynet", "history", "topology", "capture", "manual", "terminal", "audit"]);
+        for (section, (id, count, shown)) in sections.iter().zip(&built.counts) {
+            assert_eq!((section["id"].as_str(), section["count"].as_u64(), section["shown"].as_u64()), (Some(id.as_str()), Some(*count as u64), Some(*shown as u64)));
+            assert!(section["items"].is_array() && section["title"].is_string());
+        }
+        let of = |id: &str| sections.iter().find(|s| s["id"] == id).unwrap()["items"].as_array().unwrap().clone();
+        assert_eq!(of("mynet")[0]["ip"], "192.168.0.7");
+        assert_eq!(of("history").len(), 2);
+        assert!(of("history").iter().all(|i| i["entry"].get("topo_svg").is_none()), "그림 글자는 원자료에 싣지 않는다");
+        assert_eq!(of("topology")[0]["topology"]["nodes"][1]["name"], "PRINTER-1");
+        assert_eq!((of("capture")[0]["name"].as_str(), of("capture")[0]["analysis"]["packets"].as_u64()), (Some("cap-1.pcap"), Some(2000)));
+        assert_eq!(of("manual")[0]["command"], "ping 192.168.0.1");
+        assert_eq!(of("terminal")[0]["target"], "192.168.0.1:22");
+        assert_eq!(of("audit").len(), 3);
+
+        // 가리면 원자료도 가린 채로 나간다
+        want.mask = true;
+        let masked = build(&want, &src, NOW, &no_stop()).unwrap().data.unwrap();
+        for hidden in ["192.168.0.7", "192.168.0.21", "192.168.0.1\"", "MYPC", "jgpark", "203.0.113.9", "a4:5e:60:11:22:33", "00:11:22:33:44:55"] {
+            assert!(!masked.contains(hidden), "{hidden}");
+        }
+        assert!(masked.contains("\"masked\": true") && masked.contains("8.8.8.8"));
+        // 한 건짜리 보고서는 기간이 없다
+        let mut one = req(&[], true);
+        one.history_id = Some("1".into());
+        one.data = true;
+        let doc: Value = serde_json::from_str(&build(&one, &src, NOW, &no_stop()).unwrap().data.unwrap()).unwrap();
+        assert!(doc["period"].is_null() && doc["sections"][0]["id"] == "history");
+        assert_eq!(iso(0, -330), "1969-12-31T18:30:00-05:30");
     }
 
     #[test]
@@ -1077,7 +1265,7 @@ mod tests {
         let only = build(&req(&["mynet"], true), &sources(), NOW, &no_stop()).unwrap().html;
         assert!(only.contains("id=\"mynet\"") && !only.contains("id=\"audit\"") && !only.contains("id=\"history\"") && !only.contains(crate::history::DATA_OPEN));
         assert!(build(&req(&[], true), &sources(), NOW, &no_stop()).is_err());
-        assert!(build(&req(&["terminal"], true), &sources(), NOW, &no_stop()).is_err(), "아직 없는 구역만 고르면 만들지 않는다");
+        assert!(build(&req(&["agents"], true), &sources(), NOW, &no_stop()).is_err(), "없는 구역만 고르면 만들지 않는다");
         let mut backwards = req(&["audit"], true);
         backwards.from_ms = NOW + 1;
         assert!(build(&backwards, &sources(), NOW, &no_stop()).is_err());
@@ -1223,7 +1411,7 @@ mod tests {
             let mut src = src;
             src.history.push((NOW - 6, map_entry(&d, &a)));
             for mask in [false, true] {
-                let html = build(&req(&["mynet", "history", "topology", "capture", "manual", "audit"], mask), &src, NOW, &no_stop()).unwrap().html;
+                let html = build(&req(&["mynet", "history", "topology", "capture", "manual", "terminal", "audit"], mask), &src, NOW, &no_stop()).unwrap().html;
                 if let Err(why) = check(&html) {
                     panic!("{round}회째(가리기 {mask}): {why}");
                 }
