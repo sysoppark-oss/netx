@@ -95,6 +95,7 @@ pub fn run() {
             commands::save_topology,
             commands::apply_update,
             commands::get_word,
+            commands::set_word_lang,
             commands::open_church_mail,
             commands::history_save,
             commands::history_list,

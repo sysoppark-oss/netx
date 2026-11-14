@@ -33,6 +33,7 @@
     "allow-save-topology",
     "allow-apply-update",
     "allow-get-word",
+    "allow-set-word-lang",
     "allow-open-church-mail",
     "allow-open-terminal",
     "allow-bridge-take-handoff",

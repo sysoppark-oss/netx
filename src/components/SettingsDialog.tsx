@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { saveSettings, testLlm } from "../lib/backend";
 import type { Provider, Settings, SettingsView } from "../lib/types";
+import { WordLanguage } from "./Word";
 
 const PRESETS: Record<Exclude<Provider, "none">, { base_url: string; model: string; hint: string }> = {
   ollama: {
@@ -245,6 +246,8 @@ export function SettingsDialog({
           서명을 확인한 뒤에만 설치합니다.
         </p>
         <p className="mt-1 text-xs leading-relaxed text-dim">새 판 확인을 위해 GitHub에 접속하며 이 PC의 정보는 보내지 않습니다.</p>
+
+        <WordLanguage />
 
         {status && <p className={`mt-4 text-sm ${status.ok ? "text-safe" : "text-danger"}`}>{status.text}</p>}
 

@@ -205,7 +205,13 @@ export async function applyUpdate(): Promise<void> {
 /** 말씀 자료를 받는다. 날짜는 이 PC의 현지 날짜이고, 구절을 고르는 데만 쓴다. 네트워크를 쓰지 않는다. */
 export async function getWord(date: Date): Promise<WordView | null> {
   if (!isTauri()) return null;
-  return invoke<WordView>("get_word", { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() });
+  // 저장된 말씀 언어가 없을 때만 Windows 표시 언어를 본다(WebView2는 Windows 표시 언어를 알려 준다).
+  return invoke<WordView>("get_word", { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(), display: navigator.language || null });
+}
+
+/** 말씀 언어를 바꾼다. 실린 언어만 받는다(끄는 값은 없다). */
+export async function setWordLang(lang: string): Promise<string> {
+  return invoke<string>("set_word_lang", { lang });
 }
 
 /** 교회 안내에 적힌 전자우편 주소로 메일 프로그램을 연다(주소는 백엔드가 문안에서 읽는다). */

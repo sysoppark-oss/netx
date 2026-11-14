@@ -42,6 +42,7 @@ fn main() {
                 "save_topology",
                 "apply_update",
                 "get_word",
+                "set_word_lang",
                 "open_church_mail",
                 "history_save",
                 "history_list",

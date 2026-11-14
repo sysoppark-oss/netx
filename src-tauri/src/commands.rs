@@ -534,17 +534,29 @@ pub fn save_topology(app: AppHandle, svg: String) -> Result<String, String> {
 
 // ---- 말씀 표시 ----
 
+/// 지금 쓸 말씀 언어. `display`는 화면이 알려 준 Windows 표시 언어("ko-KR" 등)이고, 저장된 값이 없을 때만 본다.
+fn word_lang(display: Option<&str>) -> &'static str {
+    let (saved, installed) = crate::word::stored();
+    crate::word::choose(saved.as_deref(), installed.as_deref(), display)
+}
+
 /// 말씀 자료. `year`·`month`·`day`는 사용자 PC의 현지 날짜다(구절을 고르는 데만 쓴다).
 #[tauri::command]
-pub fn get_word(year: i32, month: u32, day: u32) -> Result<crate::word::WordView, String> {
-    crate::word::view(year, month, day)
+pub fn get_word(year: i32, month: u32, day: u32, display: Option<String>) -> Result<crate::word::WordView, String> {
+    crate::word::view(word_lang(display.as_deref()), year, month, day)
+}
+
+/// 말씀 언어를 바꾼다(내 설정으로 저장). 실린 언어만 받는다. 끄는 값은 없다.
+#[tauri::command]
+pub fn set_word_lang(lang: String) -> Result<&'static str, String> {
+    crate::word::save(&lang)
 }
 
 /// 교회 안내에 적힌 전자우편 주소로 사용자의 메일 프로그램을 연다. 주소는 문안 파일에서만 읽고, 화면에서 받지 않는다.
 /// 메일을 보내거나 내용을 채우지 않는다.
 #[tauri::command]
 pub fn open_church_mail() -> Result<(), String> {
-    let addr = crate::word::church_email().ok_or("전자우편 주소가 없습니다")?;
+    let addr = crate::word::church_email(word_lang(None)).ok_or("전자우편 주소가 없습니다")?;
     let program = if cfg!(target_os = "windows") { "explorer.exe" } else { "xdg-open" };
     std::process::Command::new(program).arg(format!("mailto:{addr}")).stdin(std::process::Stdio::null()).spawn().map(|_| ()).map_err(|e| format!("메일 프로그램을 열지 못했습니다: {e}"))
 }

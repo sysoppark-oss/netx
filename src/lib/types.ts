@@ -375,6 +375,10 @@ export interface Verse {
 }
 
 export interface WordView {
+  /** 지금 쓰는 말씀 언어 */
+  lang: string;
+  /** 고를 수 있는 언어 [코드, 이름] */
+  languages: [string, string][];
   /** 번역본 이름 */
   version: string;
   today: Verse | null;
