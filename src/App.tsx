@@ -586,13 +586,14 @@ export default function App() {
 
         <button
           onClick={() => setSettingsOpen(true)}
-          title="설정 (AI 연결, 구성도용 SNMP, 자동 업데이트)"
-          className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
-            aiOn ? "border-safe/40 text-safe" : "border-line text-dim"
-          }`}
+          title="설정 (AI 연결, 구성도용 SNMP, 음성 입력, 자동 업데이트, 말씀 언어)"
+          className="flex shrink-0 items-center gap-2 rounded-full border border-line px-3 py-1 text-xs whitespace-nowrap hover:border-accent"
         >
-          <span className={`h-2 w-2 rounded-full ${aiOn ? "bg-safe" : "bg-dim"}`} />
-          {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
+          <span className="font-semibold text-ink">⚙ 설정</span>
+          <span className={`flex items-center gap-1.5 border-l border-line pl-2 ${aiOn ? "text-safe" : "text-dim"}`}>
+            <span className={`h-2 w-2 rounded-full ${aiOn ? "bg-safe" : "bg-dim"}`} />
+            {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
+          </span>
         </button>
 
         {inbox.length > 0 && (
@@ -1014,7 +1015,7 @@ export default function App() {
             ) : aiOn ? (
               "실행이 끝나면 AI 브리핑과 판정이 표시됩니다"
             ) : (
-              "AI를 연결하면 실행 결과의 요약과 판정을 볼 수 있습니다 (우측 위 AI 꺼짐)"
+              "AI를 연결하면 실행 결과의 요약과 판정을 볼 수 있습니다 (우측 위 [⚙ 설정])"
             )}
           </span>
           {showCommands && (

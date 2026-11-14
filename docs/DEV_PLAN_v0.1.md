@@ -392,3 +392,5 @@
 - 2026-11-14 보고서 만들기 3단계(의뢰서 4.3의 3): 구역 `terminal`(감사 로그의 터미널 접속 기록에서 세션 목록 — 종류, 대상, 사용자, 시각. 기본 체크 해제, 체크하면 경고. **출력은 싣지 않는다: NetX는 터미널에 오간 글자를 저장하지 않는다**)과 원자료 JSON(요청의 `data`, 보고서 옆 `<이름>-data.json`, 머리는 2.6의 `antioch.report/1`, 구역마다 `items` — 모양은 `docs/REPORT_DATA_v1.md`, 가리면 원자료도 가린 채, JSON을 못 쓰면 보고서도 지움). 이로써 NetX 쪽 구역(4.1)은 모두 들어갔다. 리눅스 시험 256개.
 
 - 2026-11-14 영어 말씀(World English Bible) 표시: `word/en.json`·`dedication.en.md`·`church.en.md`를 `include_str!`로 그대로 넣음(`word.rs`의 `PACKS`, 글자 수정 없음). 언어 목록 한국어·English. 고르는 순서는 `word/README.md`대로 `choose`(HKCU `SOFTWARE\Antioch\WordLang` → HKLM 같은 값 → Windows 표시 언어(화면의 `navigator.language`) → en → ko), 값은 목록과 글자 비교만. 설정 화면 "말씀 언어"(`Word.tsx`의 `WordLanguage`, 명령 `set_word_lang` → HKCU에 저장, 끄는 선택지 없음). 긴 구절은 언어마다(영어 7곳, 기다리는 화면 93곳). 오늘의 말씀은 두 언어에서 같은 날 같은 곳(README 확인 값 시험을 두 언어로). **설치 화면 첫 장의 언어 선택과 HKLM 쓰기는 넣지 않음**(자동 업데이트가 언어 창에서 멈출 수 있어 Tauri NSIS 문서 확인이 먼저). 화면 언어(UiLang)는 한국어 화면뿐이라 쓰지 않음. 리눅스 시험 259개.
+
+- 2026-11-15 머리줄의 설정 단추를 알아보기 쉽게: "AI 꺼짐"만 보이던 단추를 "⚙ 설정 | ● AI 꺼짐"으로(사용자: "AI 꺼짐으로 되어 있는 곳이 설정인지 모를 수 있음"). 영어 말씀은 사용자가 노트북에서 확인("영어로 변경하면 영어로 나옴").
