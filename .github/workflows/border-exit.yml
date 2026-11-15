@@ -1,31 +1,28 @@
 name: 출국 심사
 
-# 국경경비대 출국 심사(border/)를 돌려, 올라온 변경을 비자 · 신고 · 실제 변경으로 맞춰 본다.
+# 국경경비대 출국 심사(border/)의 권위 있는 심사. main으로 가는 PR에서 돈다.
+#  - 이 워크플로 파일, 검사기, 비자를 모두 기본 가지(main)의 것으로 쓴다. 올라온 가지가 고칠 수 없다.
+#  - 올라온 변경은 git 자료로만 받는다. 꺼내 놓지도, 짓지도, 실행하지도 않는다.
+#  - 캐시와 다른 작업의 산출물을 받지 않는다. 토큰 권한도 비밀값도 쓰지 않는다.
+#  - 다른 사람이 만든 액션을 쓰지 않는다(git과 cargo만).
+# dev 푸시에서 도는 참고용 심사는 border-preview.yml에 따로 있다(검사 이름이 겹치지 않게 나눴다).
 #
-# 두 가지로 돈다.
-#  1) main으로 가는 PR (pull_request_target): 권위 있는 심사.
-#     - 이 워크플로 파일, 검사기, 비자를 모두 기본 가지(main)의 것으로 쓴다. 올라온 가지가 고칠 수 없다.
-#     - 올라온 변경은 git 자료로만 받는다. 꺼내 놓지도, 짓지도, 실행하지도 않는다.
-#     - 캐시와 다른 작업의 산출물을 받지 않는다. 토큰 권한도 비밀값도 쓰지 않는다.
-#  2) dev에 푸시 (push): 참고용 심사. dev의 검사기로 돌므로 권위가 없다. 실패로 표시하지 않는다.
-#
-# 다른 사람이 만든 액션을 쓰지 않는다(git과 cargo만).
+# 한계: GitHub의 "필수 검사"는 이름으로 맞춘다. 올라온 가지가 같은 이름의 검사를 내는 워크플로를
+# 새로 넣으면 이름만으로는 구별되지 않는다. 그래서 워크플로 파일의 변경은 이 심사가 언제나
+# "사람이 볼 것"으로 올리고, 합치는 것은 사람이 요약을 읽고 누른다.
 on:
   pull_request_target:
     branches: [main]
-  push:
-    branches: [dev]
 
 permissions: {}
 
 concurrency:
-  group: border-${{ github.event.pull_request.number || github.ref }}
+  group: border-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   exit:
     name: 출국 심사 (권위 있음)
-    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -58,38 +55,3 @@ jobs:
             2) echo "::error title=출국 심사::비자 밖의 변경이 있습니다"; exit 1 ;;
             *) echo "::error title=출국 심사::검사하지 못했습니다. 통과로 치지 않습니다"; exit 1 ;;
           esac
-
-  preview:
-    name: 출국 심사 (참고용)
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: 저장소 받기
-        run: |
-          set -euo pipefail
-          git clone --quiet "https://github.com/${GITHUB_REPOSITORY}.git" repo
-          git -C repo checkout --quiet --detach "$GITHUB_SHA"
-
-      - name: 검사기 짓기와 시험
-        run: |
-          set -euo pipefail
-          cargo test --locked --manifest-path repo/border/Cargo.toml
-          cargo build --release --locked --manifest-path repo/border/Cargo.toml
-
-      - name: 심사
-        run: |
-          set -uo pipefail
-          {
-            echo "> 참고용입니다. dev의 검사기로 돌았습니다. 권위 있는 심사는 main으로 가는 PR에서 돕니다."
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
-          code=0
-          if git -C repo cat-file -e "origin/main:.border/visa.toml" 2>/dev/null; then
-            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --out report.md > /dev/null || code=$?
-          else
-            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --visa repo/.border/visa.toml --out report.md > /dev/null || code=$?
-          fi
-          echo "끝날 때의 값: $code (0 통과, 1 사람 확인 필요, 2 비자 밖, 3 검사 못 함)"
-          cat report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
-          exit 0
