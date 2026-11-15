@@ -34,16 +34,17 @@ allow = [
   ".gitignore",
   ".github/workflows/**",
   ".vscode/**",
+  "word/**",
 ]
 
 # 건드리면 안 되는 곳 (allow보다 앞선다)
 deny = [
-  "word/**",   # 말씀 자료. 글자를 바꾸지 않는다
   "LICENSE",
 ]
 
 # 바뀌면 언제나 사람이 보는 곳
 always = [
+  "word/**",                     # 말씀 자료. 더하거나 고치면 기획자가 확인한다 (기획자 결정 2026-11-15)
   "src-tauri/src/security/**",   # 검증기와 값 검사. 모든 실행이 여기를 지난다
 ]
 
