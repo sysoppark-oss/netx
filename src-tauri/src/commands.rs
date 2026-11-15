@@ -166,6 +166,208 @@ fn data_dirs(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     Ok((data, work))
 }
 
+// ---- 최근 진단 기록 ----
+// 끝난 진단의 계획과 결과를 이 PC의 자료 폴더에만 남긴다.
+
+#[tauri::command(async)]
+pub fn history_save(app: AppHandle, entry: String) -> Result<String, String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    crate::history::save(&data_dir(&app)?, &entry, now)
+}
+
+#[tauri::command(async)]
+pub fn history_list(app: AppHandle) -> Result<Vec<crate::history::Item>, String> {
+    Ok(crate::history::list(&data_dir(&app)?))
+}
+
+#[tauri::command(async)]
+pub fn history_load(app: AppHandle, id: String) -> Result<String, String> {
+    crate::history::load(&data_dir(&app)?, &id)
+}
+
+/// `id`를 주면 그 한 건, 주지 않으면 모두 지운다.
+#[tauri::command(async)]
+pub fn history_delete(app: AppHandle, id: Option<String>) -> Result<usize, String> {
+    crate::history::delete(&data_dir(&app)?, id.as_deref())
+}
+
+// ---- 보고서 만들기 ----
+// 고른 구역을 보고서(HTML) 한 파일로 만들어 사용자가 고른 자리에만 쓴다. 어디로도 보내지 않는다.
+// 저장할 자리는 운영체제의 저장 창에서 사용자가 고르고, 화면은 경로를 정하지 못한다.
+
+static REPORT_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 방금 저장한 보고서. [열기]와 [폴더 열기]는 이것만 연다.
+static LAST_REPORT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[derive(Serialize)]
+pub struct ReportSaved {
+    pub path: String,
+    /// (구역 id, 기간 안 전체 건수, 실은 건수)
+    pub counts: Vec<(String, usize, usize)>,
+    /// 함께 저장한 원자료 JSON의 자리 (골랐을 때만)
+    pub data_path: Option<String>,
+}
+
+fn env_name(keys: &[&str]) -> String {
+    keys.iter().filter_map(|k| std::env::var(k).ok()).find(|v| !v.trim().is_empty()).unwrap_or_default()
+}
+
+/// 이 PC의 이름과 지금 사용자의 이름(보고서에서 가릴 것). 알 수 없으면 빈 글자.
+fn pc_names() -> (String, String) {
+    let mut host = env_name(&["COMPUTERNAME", "HOSTNAME"]);
+    if host.is_empty() {
+        host = std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()).unwrap_or_default();
+    }
+    let mut user = env_name(&["USERNAME", "USER", "LOGNAME"]);
+    if user.is_empty() {
+        // 사용자 폴더(C:\Users\이름, /home/이름)의 마지막 이름
+        user = PathBuf::from(env_name(&["USERPROFILE", "HOME"])).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    }
+    (host, user)
+}
+
+fn read_tail(path: &std::path::Path, max: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return String::new() };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if size > max {
+        let _ = file.seek(SeekFrom::Start(size - max));
+    }
+    let mut bytes = Vec::new();
+    let _ = file.take(max).read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// 직접 명령으로 실행한 것이 끝나면 명령·종료 상태·출력 앞부분을 남긴다(보고서의 "직접 명령" 구역이 읽는다).
+#[tauri::command]
+pub fn manual_save(app: AppHandle, record: serde_json::Value) -> Result<usize, String> {
+    let (data_dir, _) = data_dirs(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    crate::manuallog::save(&data_dir, &record, now)
+}
+
+/// 보고서를 만들고, 저장 창에서 사용자가 고른 자리에 쓴다. 저장 창을 닫거나 취소하면 아무것도 남기지 않고 None을 돌려준다.
+#[tauri::command]
+pub async fn report_make(app: AppHandle, request: crate::report::Request) -> Result<Option<ReportSaved>, String> {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_dialog::DialogExt;
+    REPORT_STOP.store(false, Ordering::SeqCst);
+    let (data_dir, work) = data_dirs(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let wants = |id: &str| request.history_id.is_none() && request.sections.iter().any(|s| s == id);
+    // 가릴 때는 내 네트워크 구역을 싣지 않아도 이 PC의 공인 주소를 알아야 한다.
+    let net = if wants("mynet") || request.mask {
+        let info = crate::netinfo::current().await;
+        let mac = crate::netinfo::my_mac(info.iface.as_deref());
+        Some(crate::report::Net { iface: info.iface, ip: info.ip, prefix: info.prefix, gateway: info.gateway, dns: info.dns, link: info.link, public_ip: info.public_ip, mac })
+    } else {
+        None
+    };
+    let info = app_info();
+    let version = if info.commit.is_empty() { info.version.to_string() } else { format!("{} ({})", info.version, info.commit) };
+    let req = request.clone();
+    let dir = data_dir.clone();
+    let work_dir = work.clone();
+    let (collected, collected_total) = if request.history_id.is_none() && request.sections.iter().any(|s| s == "collect") { crate::collect::app::report_rows(&app, request.from_ms, request.to_ms, crate::report::MAX_ROWS) } else { (Vec::new(), 0) };
+    let built = tauri::async_runtime::spawn_blocking(move || {
+        let wants = |id: &str| req.history_id.is_none() && req.sections.iter().any(|s| s == id);
+        // 구성도 구역의 자료도 진단 기록에 들어 있다.
+        let history = if req.history_id.is_some() || wants("history") || wants("topology") { crate::history::collect(&dir, req.history_id.as_deref())? } else { Vec::new() };
+        if req.history_id.is_some() && history.is_empty() {
+            return Err("그 기록을 찾지 못했습니다.".to_string());
+        }
+        let audit = if wants("audit") || wants("terminal") { read_tail(&dir.join("audit.log"), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
+        // 캡처 파일은 기간 안에 저장한 것을 최근 것부터 정해진 수만 분석한다(큰 파일은 몇 초씩 걸린다).
+        let (mut captures, mut captures_total) = (Vec::new(), 0);
+        if wants("capture") {
+            let (from, to) = (req.from_ms / 1000, req.to_ms.div_ceil(1000));
+            let files: Vec<_> = crate::capview::list(&work_dir).into_iter().filter(|f| (from..=to).contains(&f.modified)).collect();
+            captures_total = files.len();
+            for file in files.into_iter().take(crate::report::MAX_CAPTURES) {
+                if REPORT_STOP.load(Ordering::SeqCst) {
+                    return Err("보고서 만들기를 취소했습니다.".to_string());
+                }
+                let analysis = crate::capview::open(&work_dir, &file.name);
+                captures.push((file, analysis));
+            }
+        }
+        let manual = if wants("manual") { read_tail(&dir.join(crate::manuallog::FILE), crate::report::MAX_AUDIT_BYTES) } else { String::new() };
+        let (host, user) = pc_names();
+        let sources = crate::report::Sources { version, host, user, net, history, audit, captures, captures_total, manual, collected, collected_total };
+        crate::report::build(&req, &sources, now, &REPORT_STOP)
+    })
+    .await
+    .map_err(|e| format!("보고서를 만들지 못했습니다: {e}"))??;
+
+    // 저장할 자리는 사용자가 고른다. 처음 보이는 곳은 작업 폴더다.
+    let name = crate::report::file_name(now, request.offset_minutes);
+    let mut dialog = app.dialog().file().set_title("보고서 저장").set_directory(&work).set_file_name(&name).add_filter("보고서 (HTML)", &["html"]);
+    // 저장 창이 NetX 창 뒤에 숨지 않게 본창에 붙인다.
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file()).await.map_err(|e| format!("저장 창을 열지 못했습니다: {e}"))?;
+    let Some(mut path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    if REPORT_STOP.load(Ordering::SeqCst) {
+        return Ok(None);
+    }
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm")) {
+        let mut with = path.into_os_string();
+        with.push(".html");
+        path = PathBuf::from(with);
+    }
+    std::fs::write(&path, built.html.as_bytes()).map_err(|e| format!("보고서를 저장하지 못했습니다: {e}"))?;
+    // 원자료 JSON은 같은 이름에 `-data.json`을 붙여 옆에 둔다. 쓰지 못하면 보고서도 남기지 않는다.
+    let mut data_path = None;
+    if let Some(data) = &built.data {
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "netx-report".into());
+        let beside = path.with_file_name(format!("{stem}-data.json"));
+        if let Err(e) = std::fs::write(&beside, data.as_bytes()) {
+            let _ = std::fs::remove_file(&path);
+            return Err(format!("원자료 파일을 저장하지 못했습니다: {e}"));
+        }
+        data_path = Some(beside.to_string_lossy().into_owned());
+    }
+    let shown = path.to_string_lossy().into_owned();
+    let what = match &request.history_id {
+        Some(id) => format!("history:{id}"),
+        None => built.counts.iter().map(|(id, _, _)| id.as_str()).collect::<Vec<_>>().join(","),
+    };
+    let period = if request.history_id.is_some() {
+        "one".to_string()
+    } else {
+        format!("{} ~ {}", crate::history::local_time(request.from_ms, request.offset_minutes).0, crate::history::local_time(request.to_ms, request.offset_minutes).0)
+    };
+    audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "report", tool: "netx-report", argv: &[what, period, if request.mask { "masked".into() } else { "plain".into() }, shown.clone()], risk: Risk::Safe, root: false, confirmed: !request.mask });
+    *LAST_REPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+    Ok(Some(ReportSaved { path: shown, counts: built.counts, data_path }))
+}
+
+/// 만들고 있는 보고서를 그만둔다. 파일은 남지 않는다.
+#[tauri::command]
+pub fn report_cancel() {
+    REPORT_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 방금 저장한 보고서를 기본 브라우저로 열거나(`folder`가 거짓), 그 파일이 있는 폴더를 연다. 다른 경로는 받지 않는다.
+#[tauri::command]
+pub fn report_open(folder: bool) -> Result<(), String> {
+    let path = LAST_REPORT.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|p| p.is_file()).ok_or("방금 저장한 보고서 파일을 찾지 못했습니다.")?;
+    let target = if folder { path.parent().map(PathBuf::from).ok_or("폴더를 찾지 못했습니다.")? } else { path };
+    let program = if cfg!(target_os = "windows") { "explorer.exe" } else { "xdg-open" };
+    std::process::Command::new(program).arg(&target).stdin(std::process::Stdio::null()).spawn().map(|_| ()).map_err(|e| format!("열지 못했습니다: {e}"))
+}
+
+/// 다른 PC의 NetX가 내보낸 보고서 파일의 내용을 받아 기록에 더한다. 파일은 화면에서 사용자가 고른다.
+#[tauri::command(async)]
+pub fn history_import(app: AppHandle, html: String) -> Result<usize, String> {
+    let data_dir = data_dir(&app)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let added = crate::history::import(&data_dir, &html, now)?;
+    audit::log(&data_dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "import", tool: "history-report", argv: &[added.to_string()], risk: Risk::Safe, root: false, confirmed: false });
+    Ok(added)
+}
+
 // ---- 캡처 분석 ----
 // 작업 폴더의 캡처 파일만 이름으로 연다. 읽기 전용이고 아무것도 밖으로 보내지 않는다.
 
@@ -333,17 +535,29 @@ pub fn save_topology(app: AppHandle, svg: String) -> Result<String, String> {
 
 // ---- 말씀 표시 ----
 
+/// 지금 쓸 말씀 언어. `display`는 화면이 알려 준 Windows 표시 언어("ko-KR" 등)이고, 저장된 값이 없을 때만 본다.
+fn word_lang(display: Option<&str>) -> &'static str {
+    let (saved, installed) = crate::word::stored();
+    crate::word::choose(saved.as_deref(), installed.as_deref(), display)
+}
+
 /// 말씀 자료. `year`·`month`·`day`는 사용자 PC의 현지 날짜다(구절을 고르는 데만 쓴다).
 #[tauri::command]
-pub fn get_word(year: i32, month: u32, day: u32) -> Result<crate::word::WordView, String> {
-    crate::word::view(year, month, day)
+pub fn get_word(year: i32, month: u32, day: u32, display: Option<String>) -> Result<crate::word::WordView, String> {
+    crate::word::view(word_lang(display.as_deref()), year, month, day)
+}
+
+/// 말씀 언어를 바꾼다(내 설정으로 저장). 실린 언어만 받는다. 끄는 값은 없다.
+#[tauri::command]
+pub fn set_word_lang(lang: String) -> Result<&'static str, String> {
+    crate::word::save(&lang)
 }
 
 /// 교회 안내에 적힌 전자우편 주소로 사용자의 메일 프로그램을 연다. 주소는 문안 파일에서만 읽고, 화면에서 받지 않는다.
 /// 메일을 보내거나 내용을 채우지 않는다.
 #[tauri::command]
 pub fn open_church_mail() -> Result<(), String> {
-    let addr = crate::word::church_email().ok_or("전자우편 주소가 없습니다")?;
+    let addr = crate::word::church_email(word_lang(None)).ok_or("전자우편 주소가 없습니다")?;
     let program = if cfg!(target_os = "windows") { "explorer.exe" } else { "xdg-open" };
     std::process::Command::new(program).arg(format!("mailto:{addr}")).stdin(std::process::Stdio::null()).spawn().map(|_| ()).map_err(|e| format!("메일 프로그램을 열지 못했습니다: {e}"))
 }

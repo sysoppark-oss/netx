@@ -132,6 +132,8 @@ export interface NetInfo {
   rx_bytes: number | null;
   tx_bytes: number | null;
   at_ms: number;
+  /** 느린 조회가 아직 돌고 있어 빈 항목이 곧 채워진다. */
+  pending: boolean;
 }
 
 export interface ValidatedPlan {
@@ -373,6 +375,10 @@ export interface Verse {
 }
 
 export interface WordView {
+  /** 지금 쓰는 말씀 언어 */
+  lang: string;
+  /** 고를 수 있는 언어 [코드, 이름] */
+  languages: [string, string][];
   /** 번역본 이름 */
   version: string;
   today: Verse | null;

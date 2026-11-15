@@ -1,4 +1,11 @@
 import { CaptureView } from "./components/CaptureView";
+import { HistoryView } from "./components/HistoryView";
+import { ReportView } from "./components/ReportView";
+import { CollectView } from "./components/CollectView";
+import { collectSubmit } from "./lib/collect";
+import { manualSave } from "./lib/report";
+import { toStandaloneSvg } from "./components/Topology";
+import { historySave, reportEntry, worstLight, type HistoryEntry } from "./lib/history";
 import { OPEN_CAPTURE_EVENT } from "./lib/capture";
 import { useEffect, useRef, useState } from "react";
 import { AddStep } from "./components/AddStep";
@@ -19,6 +26,7 @@ import {
   getSettings,
   voiceTyping,
   onHandoff,
+  bridgeReport,
   type Handoff,
   getToolStatus,
   getTools,
@@ -28,7 +36,9 @@ import {
   runMixed,
   suggest,
 } from "./lib/backend";
-import { useRun } from "./lib/runs";
+import { hasRun, peekRun, restoreRun, useRun } from "./lib/runs";
+import { handoffInputs, ranOnHandoff } from "./lib/handoff";
+import { addReceived, loadReceived, receivedAt, saveReceived, type Received } from "./lib/inbox";
 import { USER_LEVELS, levelRank } from "./lib/types";
 import type {
   AppInfo,
@@ -91,14 +101,57 @@ export default function App() {
   const situationRef = useRef<HTMLInputElement>(null);
   // 캡처 분석 화면: null이면 닫힘, 글자는 먼저 열 파일 이름(빈 글자면 가장 최근 것)
   const [capture, setCapture] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [collectOpen, setCollectOpen] = useState(false);
+  // 메뉴별로 마지막에 보던 화면(입력, 계획, 실행 번호)
+  const kept = useRef<Record<string, { inputs: Record<string, string>; plan: ValidatedPlan | null; planRunId: number | null; extras: string[]; custom: Record<string, boolean> }>>({});
+  // 기록으로 이미 남긴 실행 번호
+  const recorded = useRef<Set<number>>(new Set());
   // 다른 프로그램이 넘긴 진단 대상: 입력칸에 채우고 알림을 보인다. 실행하지 않는다.
   const [handoff, setHandoff] = useState<Handoff | null>(null);
+  // 넘겨받은 대상을 지금 열린 진단의 입력칸에도 채웠는지
+  const [handoffFilled, setHandoffFilled] = useState(false);
+  // 알림을 받는 쪽이 볼 지금 상태(열린 진단, 실행 중인지)
+  const live = useRef<{ recipe: Recipe | null; running: boolean }>({ recipe: null, running: false });
+  // 받은 의뢰 목록(최근 20건). 띠를 닫아도 여기서 다시 찾는다.
+  const [inbox, setInbox] = useState<Received[]>(loadReceived);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  // 방금 온 의뢰: 몇 초 동안 띠를 깜박인다.
+  const [handoffFresh, setHandoffFresh] = useState(false);
+  useEffect(() => saveReceived(inbox), [inbox]);
+  useEffect(() => {
+    if (!handoffFresh) return;
+    const timer = setTimeout(() => setHandoffFresh(false), 6000);
+    return () => clearTimeout(timer);
+  }, [handoffFresh, handoff]);
+
+  // 마지막으로 보인 의뢰. 띠를 닫은 뒤에도 그 대상의 진단 결과는 보낸 쪽에 돌려준다.
+  const lastHandoff = useRef<Handoff | null>(null);
+
+  /** 넘겨받은 대상을 띠에 보이고 입력칸에 채운다. 실행하지 않는다. */
+  function showHandoff(h: Handoff) {
+    lastHandoff.current = h;
+    setHandoff(h);
+    setSituation(h.target);
+    // 열려 있는 진단에 대상을 받는 칸이 있으면 거기에도 채운다. 실행 중이면 건드리지 않는다.
+    const { recipe: open, running } = live.current;
+    const filled = open && !running ? handoffInputs(open.id, h.target) : {};
+    setHandoffFilled(Object.keys(filled).length > 0);
+    if (Object.keys(filled).length > 0) {
+      setInputs((prev) => ({ ...prev, ...filled }));
+      setPlan(null);
+      setPlanRunId(null);
+    }
+  }
+
   useEffect(() => {
     let stop = () => {};
     let gone = false;
     void onHandoff((h) => {
-      setHandoff(h);
-      setSituation(h.target);
+      showHandoff(h);
+      setHandoffFresh(true);
+      setInbox((list) => addReceived(list, h, Date.now()));
     }).then((s) => (gone ? s() : (stop = s)));
     return () => {
       gone = true;
@@ -130,6 +183,7 @@ export default function App() {
   const run = useRun(runId);
   const planRun = useRun(planRunId);
   const installing = useRun(installRunId)?.active ?? false;
+  live.current = { recipe, running: planRun?.active ?? false };
   const rawRef = useRef<HTMLPreElement>(null);
   const rawCount = run?.lines.length ?? 0;
 
@@ -183,6 +237,56 @@ export default function App() {
 
   // 실행이 끝나면 AI에게 요약과 판정을 받는다.
   const planRunDone = planRun !== null && !planRun.active && Object.keys(planRun.steps).length > 0;
+
+  // 직접 명령으로 실행한 것이 끝나면 명령·종료 상태·출력 앞부분을 남긴다(보고서의 "직접 명령" 구역).
+  useEffect(() => {
+    if (!planRunDone || planRunId === null || planRunId < 0 || recipe || ai || !(manualMode || mode === "expert") || !plan || recorded.current.has(planRunId)) return;
+    const done = peekRun(planRunId);
+    if (!done) return;
+    recorded.current.add(planRunId);
+    void manualSave({ plan, run: { steps: done.steps, lines: done.lines } }).catch(() => {});
+  }, [planRunDone, planRunId, recipe, ai, manualMode, mode, plan]);
+
+  // 끝난 진단을 최근 진단 기록에 남긴다(레시피로 실행한 것만, 기록에서 다시 연 것은 빼고).
+  useEffect(() => {
+    if (!planRunDone || planRunId === null || planRunId < 0 || !recipe || !plan || recorded.current.has(planRunId)) return;
+    const done = peekRun(planRunId);
+    if (!done) return;
+    recorded.current.add(planRunId);
+    const target = plan.target ?? Object.values(inputs).find((v) => v) ?? "";
+    // 구성도는 내보낸 보고서에 넣을 수 있게 그림으로도 남긴다.
+    const topo_svg: Record<string, string> = {};
+    for (const [order, result] of Object.entries(done.results)) {
+      if (result.topology) topo_svg[order] = toStandaloneSvg(result.topology);
+    }
+    const entry = {
+      meta: { title: recipe.title, recipe: recipe.id, target, light: worstLight(done), steps: plan.steps.length },
+      recipe_id: recipe.id,
+      inputs,
+      extras,
+      plan,
+      run: done,
+      topo_svg,
+    };
+    void historySave(entry).catch(() => {});
+    // 모음함: 보내기나 받기를 켠 PC에서만 백엔드가 받아 넣는다(기본은 둘 다 꺼짐 — 아무것도 나가지 않는다).
+    void collectSubmit(reportEntry(entry)).catch(() => {});
+    // 다른 프로그램이 넘긴 대상을 진단한 것이면 결과를 보낸 쪽에 돌려준다(대상을 고쳐 실행한 것은 보내지 않는다).
+    const asked = lastHandoff.current;
+    if (asked?.request_id && ranOnHandoff(recipe.id, inputs, asked.target)) {
+      const who = asked.from === "storyfirewall" ? "스토리방화벽" : asked.from;
+      void bridgeReport(asked.request_id, reportEntry(entry))
+        .then((sent) => {
+          if (!sent) return;
+          setNotice(
+            sent.live
+              ? `진단 결과를 ${who}에 보냈습니다 (${asked.target}, 단계별 결과 포함).`
+              : `${who}의 접속이 끊겨 진단 결과를 보관했습니다. ${who}이(가) 다시 물으면 전달합니다 (${asked.target}).`,
+          );
+        })
+        .catch(() => {});
+    }
+  }, [planRunDone, planRunId]);
   useEffect(() => {
     if (!planRunDone || planRunId === null || !aiOn || brief?.runId === planRunId) return;
     const id = planRunId;
@@ -208,19 +312,61 @@ export default function App() {
         : null;
   const shownBrief = brief && brief.runId === planRunId ? brief : null;
 
+  /** 지금 보던 진단의 입력, 계획, 결과를 기억해 둔다. 다른 메뉴에 갔다 오면 그대로 다시 보인다. */
+  function leaveRecipe() {
+    if (recipe) kept.current[recipe.id] = { inputs, plan, planRunId, extras, custom };
+  }
+
   function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
+    leaveRecipe();
     setAi(null);
     setManualMode(false);
+    setRecipe(r);
+    setError(null);
+    setNotice(null);
+    // 다른 메뉴에 갔다가 돌아온 것이면 보던 화면을 되살린다. 같은 메뉴를 다시 누르면 새로 시작한다.
+    const back = Object.keys(prefilled).length === 0 && recipe?.id !== r.id ? kept.current[r.id] : undefined;
+    if (back) {
+      setInputs(back.inputs);
+      setExtras(back.extras);
+      setCustom(back.custom);
+      setPlan(back.plan);
+      setPlanRunId(back.planRunId !== null && hasRun(back.planRunId) ? back.planRunId : null);
+      return;
+    }
     setExtras([]);
     setCustom({});
-    setRecipe(r);
     // 기본값이 있는 입력은 미리 채워 둔다.
     const defaults = Object.fromEntries(r.inputs.filter((i) => i.default).map((i) => [i.name, i.default as string]));
     setInputs({ ...defaults, ...prefilled });
     setPlan(null);
     setPlanRunId(null);
+  }
+
+  /** 기록에서 고른 진단을 그때의 계획과 결과로 다시 연다. */
+  function openHistory(entry: HistoryEntry, time: number) {
+    const r = recipes.find((x) => x.id === entry.recipe_id);
+    setHistoryOpen(false);
+    if (!r) {
+      setError("이 기록의 진단 종류를 지금 판에서 찾지 못했습니다.");
+      return;
+    }
+    leaveRecipe();
+    setAi(null);
+    setManualMode(false);
+    setRecipe(r);
+    setInputs(entry.inputs);
+    setExtras(entry.extras);
+    setCustom({});
+    setPlan(entry.plan);
+    setPlanRunId(restoreRun(entry.run));
     setError(null);
-    setNotice(null);
+    const d = new Date(time);
+    setNotice(
+      entry.meta.imported
+        ? `다른 PC에서 가져온 기록입니다 (가져온 시각 ${d.toLocaleString("ko-KR")}). 이 PC에서 실행한 결과가 아닙니다. 다시 실행하면 이 PC에서 새로 진단합니다.`
+        : `기록에서 연 결과입니다 (${d.toLocaleString("ko-KR")}). 지금 상태를 보려면 다시 실행하세요.`,
+    );
   }
 
   async function makePlan(r: Recipe | null = recipe, values: Record<string, string> = inputs, added: string[] = extras) {
@@ -251,6 +397,7 @@ export default function App() {
 
   function openManual() {
     setAi(null);
+    leaveRecipe();
     setRecipe(null);
     setPlan(null);
     setExtras([]);
@@ -277,7 +424,8 @@ export default function App() {
       const res = await suggest(situation, level);
       setMode("easy");
       if (res.kind === "plan") {
-        setRecipe(null);
+        leaveRecipe();
+    setRecipe(null);
         setManualMode(false);
         setExtras([]);
         setPlan(null);
@@ -354,7 +502,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/* 상단 헤더 */}
-      <header className="flex items-center gap-4 border-b border-line bg-panel px-5 py-3">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-panel px-5 py-3">
         <div className="flex shrink-0 items-baseline gap-2">
           <span className="text-lg font-bold tracking-tight text-accent">NetX</span>
           <span className="text-xs text-dim" title={info?.channel ? `${info.channel} 채널 · 새 버전이 올라오면 서명을 확인한 뒤 자동으로 업데이트됩니다` : undefined}>
@@ -443,19 +591,105 @@ export default function App() {
 
         <button
           onClick={() => setSettingsOpen(true)}
-          title="설정 (AI 연결, 구성도용 SNMP, 자동 업데이트)"
-          className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
-            aiOn ? "border-safe/40 text-safe" : "border-line text-dim"
-          }`}
+          title="설정 (AI 연결, 구성도용 SNMP, 음성 입력, 자동 업데이트, 말씀 언어)"
+          className="flex shrink-0 items-center gap-2 rounded-full border border-line px-3 py-1 text-xs whitespace-nowrap hover:border-accent"
         >
-          <span className={`h-2 w-2 rounded-full ${aiOn ? "bg-safe" : "bg-dim"}`} />
-          {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
+          <span className="font-semibold text-ink">⚙ 설정</span>
+          <span className={`flex items-center gap-1.5 border-l border-line pl-2 ${aiOn ? "text-safe" : "text-dim"}`}>
+            <span className={`h-2 w-2 rounded-full ${aiOn ? "bg-safe" : "bg-dim"}`} />
+            {aiOn ? (settings?.provider === "ollama" ? "AI 로컬" : "AI 온라인") : "AI 꺼짐"}
+          </span>
         </button>
+
+        {inbox.length > 0 && (
+          <div className="relative shrink-0">
+            <button
+              onClick={() => setInboxOpen((v) => !v)}
+              title="다른 프로그램이 넘긴 진단 대상 (최근 20건)"
+              className={`rounded-full border px-3 py-1 text-xs whitespace-nowrap ${
+                inbox.some((r) => !r.read) ? "border-accent bg-accent font-bold text-void" : "border-line text-dim"
+              }`}
+            >
+              받은 의뢰 {inbox.filter((r) => !r.read).length || inbox.length}
+            </button>
+            {inboxOpen && (
+              <div className="absolute right-0 z-50 mt-2 w-96 rounded-md border border-line bg-panel p-2 text-xs shadow-lg">
+                <p className="px-2 pb-1 text-dim">고르면 입력칸에 다시 채웁니다. 자동으로 실행하지 않습니다.</p>
+                <ul className="max-h-80 overflow-y-auto">
+                  {inbox.map((r) => (
+                    <li key={`${r.at}-${r.target}`}>
+                      <button
+                        onClick={() => {
+                          showHandoff(r);
+                          setInbox((list) => list.map((x) => (x.at === r.at && x.target === r.target ? { ...x, read: true } : x)));
+                          setInboxOpen(false);
+                        }}
+                        className="flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left hover:bg-raised"
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${r.read ? "bg-transparent" : "bg-accent"}`} />
+                        <span className="shrink-0 text-dim">{receivedAt(r.at)}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-mono text-ink">{r.target}</span>
+                          {r.name && <span className="text-dim"> — {r.name}</span>}
+                        </span>
+                        <span className="shrink-0 text-dim">{r.from === "storyfirewall" ? "스토리방화벽" : r.from}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() => {
+                    setInbox([]);
+                    setInboxOpen(false);
+                  }}
+                  className="mt-1 w-full rounded border border-line px-2 py-1 text-dim hover:bg-raised"
+                >
+                  목록 비우기
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <EnvBadge env={env} onClick={() => setWizardOpen(true)} />
       </header>
 
       <UpdateBar />
+      {handoff && (
+        <div
+          role="status"
+          className={`relative z-50 flex items-center gap-3 border-b-2 border-accent bg-accent/25 px-5 py-2.5 text-sm ${handoffFresh ? "animate-pulse" : ""}`}
+        >
+          <span className="shrink-0 rounded bg-accent px-2 py-0.5 text-xs font-bold text-void">조회 의뢰</span>
+          <span className="min-w-0 flex-1">
+            <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
+            <span className="font-mono text-accent">{handoff.target}</span>
+            {handoff.name && (
+              <span className="text-dim">
+                {" "}
+                — <span className="font-mono">{handoff.name}</span>(으)로 접속한 것으로 기록된 주소
+              </span>
+            )}
+            {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
+            <span className="block text-xs text-dim">
+              {handoffFilled
+                ? "지금 열린 진단의 입력칸에 채워 두었습니다. [계획 보기]를 누르세요. 자동으로 실행하지 않습니다."
+                : recipe && Object.keys(handoffInputs(recipe.id, handoff.target)).length === 0
+                  ? "서브넷 스캔, 구성도, 포트 추적, 대역폭은 넘겨받은 대상을 넣을 칸이 없어 그대로 둡니다. 왼쪽에서 라우팅 지연 분석, 웹 장애 진단, 패킷 캡처를 고르면 채워집니다. 자동으로 실행하지 않습니다."
+                  : "입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다."}
+            </span>
+          </span>
+          <button
+            onClick={() => {
+              setHandoff(null);
+              setInbox((list) => list.map((r) => (r.target === handoff.target ? { ...r, read: true } : r)));
+            }}
+            className="shrink-0 rounded border border-accent px-3 py-1 text-xs font-semibold hover:bg-accent hover:text-void"
+          >
+            닫기
+          </button>
+        </div>
+      )}
       <NetBar />
 
       <div className="flex min-h-0 flex-1">
@@ -470,7 +704,11 @@ export default function App() {
                   return (
                     <li key={r.id}>
                       <button
-                        onClick={() => pickRecipe(r)}
+                        onClick={() => {
+                          const filled = handoff ? handoffInputs(r.id, handoff.target) : {};
+                          setHandoffFilled(Object.keys(filled).length > 0);
+                          pickRecipe(r, filled);
+                        }}
                         disabled={!ok}
                         title={ok ? r.description : "현재 등급에서는 쓸 수 없습니다"}
                         className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised disabled:opacity-40 disabled:hover:bg-transparent ${
@@ -485,6 +723,30 @@ export default function App() {
                 })}
               </ul>
               <h2 className="mt-4 mb-2 px-1 text-xs font-semibold text-dim">직접 하기</h2>
+              <button
+                onClick={() => setHistoryOpen(true)}
+                title="끝난 진단의 결과를 다시 봅니다. 최근 30건까지 이 PC에만 남습니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">🕘</span>
+                <span className="flex-1">최근 진단</span>
+              </button>
+              <button
+                onClick={() => setReportOpen(true)}
+                title="구역과 기간을 골라 보고서 파일 하나를 만듭니다. 고른 자리에 파일로만 저장하고 어디로도 보내지 않습니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">📄</span>
+                <span className="flex-1">보고서 만들기</span>
+              </button>
+              <button
+                onClick={() => setCollectOpen(true)}
+                title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 모음함으로 보냅니다. 둘 다 기본은 꺼져 있습니다."
+                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
+              >
+                <span className="text-base">📥</span>
+                <span className="flex-1">모음함</span>
+              </button>
               <button
                 onClick={() => setCapture("")}
                 title="저장해 둔 패킷 캡처를 열어 요약, 문제 찾기, 패킷 목록을 봅니다."
@@ -534,19 +796,6 @@ export default function App() {
 
         {/* 중앙: 제안 카드 영역 */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
-          {handoff && (
-            <p className="mx-auto mb-5 flex max-w-3xl items-center gap-3 rounded-md border border-accent/50 px-3 py-2 text-sm">
-              <span className="min-w-0 flex-1">
-                <span className="font-semibold">{handoff.from === "storyfirewall" ? "스토리방화벽" : handoff.from}</span>에서 진단 대상을 넘겨받았습니다:{" "}
-                <span className="font-mono text-accent">{handoff.target}</span>
-                {handoff.note && <span className="text-dim"> ({handoff.note})</span>}
-                <span className="block text-xs text-dim">입력칸에 채워 두었습니다. [제안 받기]를 누르거나 왼쪽에서 진단을 고르세요. 자동으로 실행하지 않습니다.</span>
-              </span>
-              <button onClick={() => setHandoff(null)} className="shrink-0 rounded border border-line px-2 py-0.5 text-xs hover:bg-raised">
-                닫기
-              </button>
-            </p>
-          )}
           {error && (
             <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
           )}
@@ -779,7 +1028,7 @@ export default function App() {
             ) : aiOn ? (
               "실행이 끝나면 AI 브리핑과 판정이 표시됩니다"
             ) : (
-              "AI를 연결하면 실행 결과의 요약과 판정을 볼 수 있습니다 (우측 위 AI 꺼짐)"
+              "AI를 연결하면 실행 결과의 요약과 판정을 볼 수 있습니다 (우측 위 [⚙ 설정])"
             )}
           </span>
           {showCommands && (
@@ -826,6 +1075,18 @@ export default function App() {
       {settingsOpen && settings && (
         <SettingsDialog initial={settings} onClose={() => setSettingsOpen(false)} onSaved={setSettings} />
       )}
+      {historyOpen && (
+        <HistoryView
+          onOpen={openHistory}
+          onReport={() => {
+            setHistoryOpen(false);
+            setReportOpen(true);
+          }}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+      {reportOpen && <ReportView onClose={() => setReportOpen(false)} />}
+      {collectOpen && <CollectView onClose={() => setCollectOpen(false)} />}
       {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );

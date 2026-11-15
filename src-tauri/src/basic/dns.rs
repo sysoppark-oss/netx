@@ -237,7 +237,7 @@ async fn ask_tcp(server: SocketAddr, packet: &[u8], id: u16) -> Option<Answer> {
 }
 
 async fn system_server() -> Option<IpAddr> {
-    crate::netinfo::current().await.dns.iter().find_map(|s| s.parse().ok())
+    crate::netinfo::settled().await.dns.iter().find_map(|s| s.parse().ok())
 }
 
 pub async fn run(plan: Plan, emit: Emit<'_>) -> Result<i32, String> {

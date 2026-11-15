@@ -34,14 +34,21 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 webpki-roots = "1"
 portable-pty = "0.9"
 serialport = { version = "4", default-features = false }
+# 모음함(collect): 저장은 SQLite(MIT, 묶음 SQLite는 공유 저작물), 기기 인증서는 rcgen(MIT/Apache-2.0), 짝 맺기 증명은 hmac(MIT/Apache-2.0)
+rusqlite = { version = "0.37", features = ["bundled"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+hmac = "0.12"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_System_WinRT", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Pipes", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-future = "0.3"
+ipconfig = { version = "0.3", default-features = false }
 winreg = "0.55"
 getrandom = "0.3"
 

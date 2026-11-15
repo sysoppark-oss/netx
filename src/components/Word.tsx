@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { bridgeStatus, getWord, openChurchMail, type BridgeStatus } from "../lib/backend";
+import { bridgeStatus, getWord, openChurchMail, type BridgeStatus, setWordLang } from "../lib/backend";
 import type { AppInfo, Verse, WordView } from "../lib/types";
 
 /**
@@ -18,6 +18,14 @@ const dateKey = (d: Date) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate
 let loaded: { key: string; view: Promise<WordView | null> } | null = null;
 const startedAt = Date.now();
 
+// 말씀 언어를 바꾸면 열려 있는 화면이 모두 다시 받는다.
+const listeners = new Set<() => void>();
+
+function reload() {
+  loaded = null;
+  listeners.forEach((f) => f());
+}
+
 function load(now: Date): Promise<WordView | null> {
   const key = dateKey(now);
   if (loaded?.key !== key) loaded = { key, view: getWord(now).catch(() => null) };
@@ -28,13 +36,21 @@ function load(now: Date): Promise<WordView | null> {
 function useWord(): WordView | null {
   const [view, setView] = useState<WordView | null>(null);
   const [day, setDay] = useState(() => dateKey(new Date()));
+  const [turn, setTurn] = useState(0);
   useEffect(() => {
     let alive = true;
     void load(new Date()).then((v) => alive && setView(v));
     return () => {
       alive = false;
     };
-  }, [day]);
+  }, [day, turn]);
+  useEffect(() => {
+    const bump = () => setTurn((n) => n + 1);
+    listeners.add(bump);
+    return () => {
+      listeners.delete(bump);
+    };
+  }, []);
   useEffect(() => {
     const timer = setInterval(() => setDay(dateKey(new Date())), 60_000);
     return () => clearInterval(timer);
@@ -90,6 +106,41 @@ function WithMail({ text, email }: { text: string; email: string | null }) {
   );
 }
 
+/** 설정 화면의 "말씀 언어": 바꾸는 항목이다. 끄는 선택지는 없다(word/README.md "언어 선택"). */
+export function WordLanguage() {
+  const view = useWord();
+  const [error, setError] = useState<string | null>(null);
+  if (!view) return null;
+  return (
+    <div className="mt-5 border-t border-line pt-4 text-sm">
+      <label className="flex items-center gap-3">
+        <span>말씀 언어</span>
+        <select
+          value={view.lang}
+          onChange={(e) => {
+            setError(null);
+            void setWordLang(e.target.value)
+              .then(reload)
+              .catch((err) => setError(String(err)));
+          }}
+          className="rounded-md border border-line bg-raised px-2 py-1"
+        >
+          {view.languages.map(([code, name]) => (
+            <option key={code} value={code}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-dim">{view.version}</span>
+      </label>
+      <p className="mt-1 text-xs leading-relaxed text-dim">
+        화면 곳곳의 성경 말씀과 "정보" 화면의 문구를 고른 언어로 보입니다. 고르면 바로 바뀌고, 같은 PC의 다른 안디옥 프로그램도 이 값을 함께 씁니다.
+      </p>
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+    </div>
+  );
+}
+
 /** "정보" 화면: 프로그램 정보, 헌정 문구, [교회 안내] */
 export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: () => void }) {
   const view = useWord();
@@ -115,8 +166,8 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
         {bridge && bridge.state !== "none" && (
           <p className="mt-2 text-xs text-dim">
             다른 프로그램과의 연동 입구:{" "}
-            {bridge.state === "open" ? "열림" : bridge.state === "unchecked" ? "열렸지만 응답 확인 실패" : "닫힘"} · 등록된 프로그램 {bridge.members}개
-            {bridge.members === 0 ? " (등록된 프로그램이 없어 아직 아무도 대상을 넘길 수 없습니다)" : ""}
+            {bridge.state === "open" ? "열림" : bridge.state === "unchecked" ? "열렸지만 응답 확인 실패" : "닫힘"} · 등록된 실행 파일 {bridge.members}개
+            {bridge.members === 0 ? " (등록된 실행 파일이 없어 아직 아무도 대상을 넘길 수 없습니다)" : ""}
           </p>
         )}
 

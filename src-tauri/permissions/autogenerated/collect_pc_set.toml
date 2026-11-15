@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-pc-set"
+description = "Enables the collect_pc_set command without any pre-configured scope."
+commands.allow = ["collect_pc_set"]
+
+[[permission]]
+identifier = "deny-collect-pc-set"
+description = "Denies the collect_pc_set command without any pre-configured scope."
+commands.deny = ["collect_pc_set"]

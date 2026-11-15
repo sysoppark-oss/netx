@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use winreg::RegKey;
 
-use super::{Caller, Handoff, Host, Session, MAX_REQUEST_BYTES};
+use super::{Caller, Handoff, Host};
 use crate::audit::{self, AuditEntry};
 use crate::model::{Level, Risk};
 
@@ -27,6 +27,8 @@ const MODULES_KEY: &str = r"SOFTWARE\Antioch\Modules";
 const MAX_CLIENTS: usize = 4;
 /// 이만큼 아무 요청이 없으면 접속을 끊는다.
 const IDLE: Duration = Duration::from_secs(300);
+/// 의뢰한 진단의 결과를 기다리는 접속은 이만큼까지 둔다.
+const IDLE_WAITING: Duration = Duration::from_secs(1800);
 
 static CLIENTS: AtomicUsize = AtomicUsize::new(0);
 /// 입구 상태: 0 열지 못함(또는 아직), 1 열렸고 스스로 접속해 인사에 답하는 것까지 확인함, 2 열렸지만 확인 실패
@@ -65,11 +67,20 @@ impl Host for AppHost {
     fn focus(&self) {
         if let Some(window) = self.0.get_webview_window("main") {
             let _ = window.unminimize();
+            // Windows가 창을 앞으로 가져오지 못하게 막아도 작업 표시줄 단추는 깜박인다.
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
             let _ = window.set_focus();
         }
     }
 
     fn handoff(&self, h: Handoff) {
+        // NetX가 앞에 있지 않으면 Windows 알림 창으로도 알린다.
+        let focused = self.0.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+        if !focused {
+            use tauri_plugin_notification::NotificationExt;
+            let (title, body) = super::notice_text(&h);
+            let _ = self.0.notification().builder().title(title).body(body).show();
+        }
         if let Ok(dir) = self.0.path().app_local_data_dir() {
             // 감사 로그: 누가(보낸 모듈) 무엇을(대상) 넘겼는지. 실행은 아니다.
             audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "bridge", tool: "rack.handoff", argv: &[h.target.clone(), h.from.clone()], risk: Risk::Safe, root: false, confirmed: false });
@@ -116,17 +127,19 @@ pub(crate) fn admin_dirs() -> Vec<String> {
     ["ProgramFilesDir", "ProgramFilesDir (x86)", "ProgramW6432Dir"].iter().filter_map(|name| final_path(&key.get_value::<String, _>(name).ok()?)).collect()
 }
 
-/// 관리자가 등록한 랙 구성원의 실행 파일 경로들. 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
+/// 관리자가 등록한 랙 구성원의 실행 파일 경로들(모듈마다 `Exe`와, 있으면 `ClientExe`).
+/// 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
 fn registered_members() -> Vec<String> {
     let Ok(modules) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(MODULES_KEY) else { return Vec::new() };
-    let dirs = admin_dirs();
-    modules
+    let found: Vec<String> = modules
         .enum_keys()
         .flatten()
         .take(32)
-        .filter_map(|id| final_path(&modules.open_subkey(id).ok()?.get_value::<String, _>("Exe").ok()?))
-        .filter(|exe| super::under_admin_dirs(exe, &dirs))
-        .collect()
+        .filter_map(|id| modules.open_subkey(id).ok())
+        .flat_map(|key| super::MEMBER_VALUES.iter().filter_map(|name| key.get_value::<String, _>(*name).ok()).collect::<Vec<String>>())
+        .filter_map(|raw| final_path(&raw))
+        .collect();
+    super::admitted(found, &admin_dirs())
 }
 
 fn client_pid(server: &NamedPipeServer) -> Option<u32> {
@@ -174,23 +187,8 @@ fn caller_of(server: &NamedPipeServer) -> Caller {
 async fn serve(server: NamedPipeServer, app: AppHandle) {
     let caller = caller_of(&server);
     let host = AppHost(app);
-    let mut session = Session::default();
-    let (reader, mut writer) = tokio::io::split(server);
-    let mut reader = BufReader::with_capacity(MAX_REQUEST_BYTES + 4096, reader);
-    loop {
-        let mut line = Vec::new();
-        let read = tokio::time::timeout(IDLE, (&mut reader).take(MAX_REQUEST_BYTES as u64 + 2).read_until(b'\n', &mut line)).await;
-        match read {
-            Ok(Ok(n)) if n > 0 && line.ends_with(b"\n") => {}
-            // 끊김, 오류, 너무 긴 줄, 오래 조용함: 접속을 닫는다.
-            _ => break,
-        }
-        let Ok(text) = String::from_utf8(line) else { break };
-        let reply = super::handle(&text, &caller, &host, &mut session);
-        if writer.write_all(reply.as_bytes()).await.is_err() || writer.flush().await.is_err() {
-            break;
-        }
-    }
+    let (reader, writer) = tokio::io::split(server);
+    super::serve(reader, writer, caller, &host, IDLE, IDLE_WAITING).await;
 }
 
 /// 입구를 연다. NetX가 켜져 있는 동안 돈다.

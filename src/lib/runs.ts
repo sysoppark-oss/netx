@@ -5,7 +5,8 @@ import { onRunEvents } from "./backend";
 import type { RunState } from "./types";
 
 const MAX_LINES = 6000;
-const KEEP_RUNS = 5;
+// 메뉴를 옮겨도 앞서 본 결과를 다시 보여 주려고 넉넉히 둔다.
+const KEEP_RUNS = 24;
 
 const runs = new Map<number, RunState>();
 const listeners = new Set<() => void>();
@@ -64,4 +65,26 @@ export function useRun(id: number | null): RunState | null {
     };
   }, []);
   return id == null ? null : get(id);
+}
+
+/** 그 번호의 실행이 아직 보관되어 있는지 */
+export function hasRun(id: number): boolean {
+  return runs.has(id);
+}
+
+/** 보관된 실행을 읽는다(없으면 만들지 않는다). */
+export function peekRun(id: number): RunState | null {
+  return runs.get(id) ?? null;
+}
+
+let restored = 0;
+
+/** 기록에서 읽은 실행을 보관소에 넣고 그 번호를 돌려준다. 실제 실행 번호와 겹치지 않게 음수를 쓴다. */
+export function restoreRun(saved: RunState): number {
+  restored -= 1;
+  const id = restored;
+  runs.set(id, { ...saved, run_id: id, active: false });
+  for (const old of [...runs.keys()].slice(0, Math.max(0, runs.size - KEEP_RUNS))) runs.delete(old);
+  notify();
+  return id;
 }

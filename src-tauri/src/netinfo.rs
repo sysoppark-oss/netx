@@ -3,7 +3,7 @@
 //! 조회 명령은 코드에 고정되어 있고 사용자 입력이 들어가지 않는다.
 //! 공인 IP는 밖에서 본 내 주소라서 외부 서비스(api.ipify.org)에 물어야 알 수 있다. 주소 말고는 아무것도 보내지 않는다.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -28,6 +28,8 @@ pub struct NetInfo {
     pub tx_bytes: Option<u64>,
     /// 측정 시각(밀리초). 속도 계산용.
     pub at_ms: u64,
+    /// 느린 조회가 아직 돌고 있어 빈 항목이 곧 채워진다.
+    pub pending: bool,
 }
 
 #[derive(Clone, Default)]
@@ -60,35 +62,50 @@ fn cache<R>(f: impl FnOnce(&mut Cache) -> R) -> R {
 }
 
 pub async fn current() -> NetInfo {
-    let config = match cache(|c| c.config.clone().filter(|(at, _)| at.elapsed() < CONFIG_TTL)) {
-        Some((_, cfg)) => cfg,
-        // 조회(PowerShell)는 한 번에 하나만 돌린다. 화면이 몇 초마다 묻는데 조회가 그보다 오래 걸리면
-        // 조회가 겹겹이 쌓여 서로 느려지고, 모두 제한 시간을 넘겨 "확인 불가"가 이어진다.
-        None => match Reading::begin() {
-            Some(_guard) => {
-                let fresh = read_config().await;
-                cache(|c| {
-                    let cfg = keep_last_good(c.config.take().map(|(_, old)| old), fresh);
-                    c.config = Some((Instant::now(), cfg.clone()));
-                    cfg
-                })
+    // 화면은 조회를 기다리지 않는다. 느린 조회(PowerShell, 공인 IP)는 뒤에서 돌리고,
+    // 그동안은 지난번 값이나 운영체제에 바로 물은 값(내 주소, 어댑터, 서브넷)을 돌려준다.
+    let known = cache(|c| c.config.clone());
+    let config = match known {
+        Some((at, cfg)) if at.elapsed() < CONFIG_TTL => cfg,
+        known => {
+            // 운영체제에 바로 묻는다(빠르다). Windows에서는 게이트웨이, DNS, 링크 속도까지 여기서 나온다.
+            let quick = tauri::async_runtime::spawn_blocking(quick_config).await.unwrap_or_default();
+            if quick.gateway.is_some() {
+                cache(|c| c.config = Some((Instant::now(), quick.clone())));
+                quick
+            } else {
+                // 바로 읽지 못한 항목은 느린 조회가 뒤에서 채운다. 화면은 기다리지 않는다.
+                if let Some(guard) = Reading::begin() {
+                    tauri::async_runtime::spawn(async move {
+                        let _guard = guard;
+                        let fresh = read_config().await;
+                        cache(|c| {
+                            let cfg = keep_last_good(c.config.take().map(|(_, old)| old), fresh);
+                            c.config = Some((Instant::now(), cfg));
+                        });
+                    });
+                }
+                match known {
+                    Some((_, cfg)) if cfg.ip.is_some() => cfg,
+                    _ => quick,
+                }
             }
-            // 다른 조회가 돌고 있으면 지난번 값을 그대로 쓴다.
-            None => cache(|c| c.config.clone().map(|(_, cfg)| cfg)).unwrap_or_default(),
-        },
-    };
-
-    let fresh = cache(|c| c.public.clone()).filter(|(at, ip)| at.elapsed() < if ip.is_some() { PUBLIC_TTL } else { PUBLIC_RETRY });
-    let public_ip = match fresh {
-        Some((_, ip)) => ip,
-        None => {
-            // 여러 번 겹쳐 묻지 않게 먼저 자리를 잡아 둔다.
-            let previous = cache(|c| c.public.replace((Instant::now(), c.public.as_ref().and_then(|(_, ip)| ip.clone())))).and_then(|(_, ip)| ip);
-            let ip = fetch_public_ip().await.or(previous);
-            cache(|c| c.public = Some((Instant::now(), ip.clone())));
-            ip
         }
     };
+
+    let seen = cache(|c| c.public.clone());
+    let public_ip = seen.as_ref().and_then(|(_, ip)| ip.clone());
+    if seen.is_none_or(|(at, ip)| at.elapsed() >= if ip.is_some() { PUBLIC_TTL } else { PUBLIC_RETRY }) {
+        // 여러 번 겹쳐 묻지 않게 먼저 자리를 잡아 둔다.
+        cache(|c| c.public = Some((Instant::now(), public_ip.clone())));
+        let previous = public_ip.clone();
+        tauri::async_runtime::spawn(async move {
+            let ip = fetch_public_ip().await.or(previous);
+            PUBLIC_TRIED.store(true, std::sync::atomic::Ordering::SeqCst);
+            cache(|c| c.public = Some((Instant::now(), ip)));
+        });
+    }
+    let pending = (config.gateway.is_none() && READING.load(std::sync::atomic::Ordering::SeqCst)) || (public_ip.is_none() && !PUBLIC_TRIED.load(std::sync::atomic::Ordering::SeqCst));
 
     let (rx_bytes, tx_bytes) = counters(config.iface.as_deref());
     let at_ms = {
@@ -106,7 +123,91 @@ pub async fn current() -> NetInfo {
         rx_bytes,
         tx_bytes,
         at_ms,
+        pending,
     }
+}
+
+/// 게이트웨이와 DNS까지 필요한 쪽(진단)이 쓴다. 느린 조회가 돌고 있으면 끝날 때까지 기다린다.
+pub async fn settled() -> NetInfo {
+    loop {
+        let info = current().await;
+        if info.gateway.is_some() || !READING.load(std::sync::atomic::Ordering::SeqCst) {
+            return info;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+/// 공인 IP 조회가 한 번이라도 끝났는지. 끝나기 전에는 "확인 중"으로 보인다.
+static PUBLIC_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 밖으로 나갈 때 쓰는 내 주소. 길만 묻고 패킷은 보내지 않는다(UDP 소켓은 connect로 아무것도 보내지 않는다).
+/// 목적지는 문서용 주소(192.0.2.1)라 실제 상대가 없다.
+fn local_ip() -> Option<Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() && !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
+}
+
+/// 그 주소를 가진 어댑터의 이름과 서브넷 길이.
+fn owner_of<'a>(ip: Ipv4Addr, adapters: impl Iterator<Item = (&'a str, Vec<(IpAddr, u8)>)>) -> Option<(String, u8)> {
+    for (name, addrs) in adapters {
+        if let Some((_, prefix)) = addrs.iter().find(|(a, p)| *a == IpAddr::V4(ip) && *p <= 32) {
+            return Some((name.chars().filter(|c| !c.is_control()).take(64).collect(), *prefix));
+        }
+    }
+    None
+}
+
+/// 어댑터 하나에서 읽은 것: (가진 주소들, 게이트웨이들, DNS 서버들, 보내는 링크 속도 bps)
+type Wiring = (Vec<IpAddr>, Vec<IpAddr>, Vec<IpAddr>, u64);
+
+/// "866.7 Mbps", "1 Gbps" 모양. 모르는 값(0, 최댓값)은 없음.
+fn link_text(bps: u64) -> Option<String> {
+    if bps == 0 || bps == u64::MAX {
+        return None;
+    }
+    let (value, unit) = if bps >= 1_000_000_000 { (bps as f64 / 1e9, "Gbps") } else if bps >= 1_000_000 { (bps as f64 / 1e6, "Mbps") } else { (bps as f64 / 1e3, "Kbps") };
+    let rounded = (value * 10.0).round() / 10.0;
+    Some(if rounded.fract() == 0.0 { format!("{rounded:.0} {unit}") } else { format!("{rounded:.1} {unit}") })
+}
+
+/// 내 주소를 가진 어댑터의 게이트웨이(IPv4 첫 번째), DNS(IPv4, 4개까지), 링크 속도.
+fn wiring_of(ip: Ipv4Addr, adapters: impl Iterator<Item = Wiring>) -> Option<(Option<String>, Vec<String>, Option<String>)> {
+    for (addrs, gateways, dns, speed) in adapters {
+        if !addrs.contains(&IpAddr::V4(ip)) {
+            continue;
+        }
+        let gateway = gateways.iter().find(|g| g.is_ipv4() && !g.is_unspecified()).map(ToString::to_string);
+        let dns = dns.iter().filter(|d| d.is_ipv4() && !d.is_unspecified()).take(4).map(ToString::to_string).collect();
+        return Some((gateway, dns, link_text(speed)));
+    }
+    None
+}
+
+/// Windows: 어댑터 정보를 운영체제 API(GetAdaptersAddresses)로 바로 읽는다. PowerShell을 띄우지 않는다.
+#[cfg(target_os = "windows")]
+fn wiring(ip: Ipv4Addr) -> Option<(Option<String>, Vec<String>, Option<String>)> {
+    let adapters = ipconfig::get_adapters().ok()?;
+    wiring_of(ip, adapters.iter().map(|a| (a.ip_addresses().to_vec(), a.gateways().to_vec(), a.dns_servers().to_vec(), a.transmit_link_speed())))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wiring(_ip: Ipv4Addr) -> Option<(Option<String>, Vec<String>, Option<String>)> {
+    None
+}
+
+/// 운영체제에 바로 물어 아는 것: 내 주소, 어댑터, 서브넷. Windows에서는 게이트웨이, DNS, 링크 속도도.
+/// 여기서 못 읽은 항목은 느린 조회가 채운다.
+fn quick_config() -> Config {
+    let Some(ip) = local_ip() else { return Config::default() };
+    let nets = sysinfo::Networks::new_with_refreshed_list();
+    let owner = owner_of(ip, nets.iter().map(|(n, d)| (n.as_str(), d.ip_networks().iter().map(|i| (i.addr, i.prefix)).collect())));
+    let (gateway, dns, link) = wiring(ip).unwrap_or_default();
+    Config { iface: owner.as_ref().map(|(n, _)| n.clone()), ip: Some(ip.to_string()), prefix: owner.map(|(_, p)| p), gateway, dns, link }
 }
 
 static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -292,6 +393,63 @@ mod tests {
         assert!(Reading::begin_on(&FLAG).is_none(), "조회 중에는 새 조회를 시작하지 않는다");
         drop(first);
         assert!(Reading::begin_on(&FLAG).is_some(), "끝나면 다시 조회할 수 있다");
+    }
+
+    #[test]
+    fn finds_the_adapter_that_owns_my_address() {
+        let v4 = |a: [u8; 4]| IpAddr::V4(Ipv4Addr::from(a));
+        let list = || {
+            vec![
+                ("Loopback", vec![(v4([127, 0, 0, 1]), 8)]),
+                ("Wi-Fi\u{7}", vec![("fe80::1".parse().unwrap(), 64), (v4([192, 168, 123, 7]), 24)]),
+            ]
+            .into_iter()
+        };
+        assert_eq!(owner_of(Ipv4Addr::new(192, 168, 123, 7), list()), Some(("Wi-Fi".to_string(), 24)));
+        assert_eq!(owner_of(Ipv4Addr::new(10, 0, 0, 1), list()), None);
+    }
+
+    #[test]
+    fn the_quick_reading_never_invents_an_address() {
+        // 길이 없는 환경에서는 빈 값이다. 있으면 내 주소는 루프백이 아니다.
+        let c = quick_config();
+        if let Some(ip) = c.ip {
+            let ip: Ipv4Addr = ip.parse().unwrap();
+            assert!(!ip.is_loopback() && !ip.is_unspecified());
+        } else {
+            assert!(c.gateway.is_none() && c.dns.is_empty());
+        }
+    }
+
+    #[test]
+    fn reads_gateway_dns_and_speed_from_my_adapter() {
+        let v4 = |a: [u8; 4]| IpAddr::V4(Ipv4Addr::from(a));
+        let v6 = |s: &str| s.parse::<IpAddr>().unwrap();
+        let list = || {
+            vec![
+                (vec![v4([127, 0, 0, 1])], vec![], vec![], 1_073_741_824u64),
+                (vec![v6("fe80::1"), v4([192, 168, 123, 7])], vec![v6("fe80::fffe"), v4([192, 168, 123, 1])], vec![v6("fec0:0:0:ffff::1"), v4([168, 126, 63, 1]), v4([8, 8, 8, 8])], 866_700_000),
+            ]
+            .into_iter()
+        };
+        let (gateway, dns, link) = wiring_of(Ipv4Addr::new(192, 168, 123, 7), list()).unwrap();
+        assert_eq!(gateway.as_deref(), Some("192.168.123.1"));
+        assert_eq!(dns, ["168.126.63.1", "8.8.8.8"]);
+        assert_eq!(link.as_deref(), Some("866.7 Mbps"));
+        assert_eq!(wiring_of(Ipv4Addr::new(10, 0, 0, 1), list()), None);
+        // 게이트웨이가 없는 어댑터(직결 등)는 없음으로 둔다 → 느린 조회가 한 번 더 본다.
+        let lone = vec![(vec![v4([10, 0, 0, 2])], vec![v4([0, 0, 0, 0])], vec![], 0u64)].into_iter();
+        assert_eq!(wiring_of(Ipv4Addr::new(10, 0, 0, 2), lone), Some((None, vec![], None)));
+    }
+
+    #[test]
+    fn link_speed_reads_like_windows_shows_it() {
+        assert_eq!(link_text(1_000_000_000).as_deref(), Some("1 Gbps"));
+        assert_eq!(link_text(2_500_000_000).as_deref(), Some("2.5 Gbps"));
+        assert_eq!(link_text(100_000_000).as_deref(), Some("100 Mbps"));
+        assert_eq!(link_text(72_200_000).as_deref(), Some("72.2 Mbps"));
+        assert_eq!(link_text(0), None);
+        assert_eq!(link_text(u64::MAX), None);
     }
 
     #[test]
