@@ -1,0 +1,48 @@
+name: 출국 심사 미리 보기
+
+# dev에 푸시할 때 도는 참고용 출국 심사. dev의 검사기로 돌므로 권위가 없다. 실패로 표시하지 않는다.
+# 권위 있는 심사는 border-exit.yml (main으로 가는 PR).
+on:
+  push:
+    branches: [dev]
+
+permissions: {}
+
+concurrency:
+  group: border-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: 출국 심사 (참고용)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 저장소 받기
+        run: |
+          set -euo pipefail
+          git clone --quiet "https://github.com/${GITHUB_REPOSITORY}.git" repo
+          git -C repo checkout --quiet --detach "$GITHUB_SHA"
+
+      - name: 검사기 짓기와 시험
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path repo/border/Cargo.toml
+          cargo build --release --locked --manifest-path repo/border/Cargo.toml
+
+      - name: 심사
+        run: |
+          set -uo pipefail
+          {
+            echo "> 참고용입니다. dev의 검사기로 돌았습니다. 권위 있는 심사는 main으로 가는 PR에서 돕니다."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          code=0
+          if git -C repo cat-file -e "origin/main:.border/visa.toml" 2>/dev/null; then
+            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --out report.md > /dev/null || code=$?
+          else
+            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --visa repo/.border/visa.toml --out report.md > /dev/null || code=$?
+          fi
+          echo "끝날 때의 값: $code (0 통과, 1 사람 확인 필요, 2 비자 밖, 3 검사 못 함)"
+          cat report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          exit 0
