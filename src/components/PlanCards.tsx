@@ -304,8 +304,6 @@ const METER_COLOR = "var(--color-safe)";
  */
 function Progress({ startedAt, estimateSecs }: { startedAt: number; estimateSecs: number | null }) {
   const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
-  const known = estimateSecs !== null;
-  const over = known && elapsed > estimateSecs + 3;
   const lit = meterLit(elapsed, estimateSecs, LIMIT_SECS);
   return (
     <div className="mt-3">
@@ -337,16 +335,7 @@ function Progress({ startedAt, estimateSecs }: { startedAt: number; estimateSecs
           })}
         </div>
       </div>
-      <p className="mt-1 flex justify-between text-xs text-dim">
-        <span>
-          {elapsed.toFixed(0)}초 경과
-          {known && !over && ` · 약 ${Math.max(0, Math.ceil(estimateSecs - elapsed))}초 남음`}
-          {over && " · 예상보다 오래 걸리고 있습니다(대상이 응답하지 않을 수 있습니다)"}
-        </span>
-        <span>
-          {known ? `예상 ${estimateSecs}초 · ` : "끝나는 시간을 알 수 없는 작업 · "}최대 {LIMIT_SECS}초에 자동 중단
-        </span>
-      </p>
+      <p className="mt-1 text-xs text-dim">{elapsed.toFixed(0)}초 경과</p>
     </div>
   );
 }
