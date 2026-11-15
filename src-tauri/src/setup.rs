@@ -15,7 +15,7 @@ use crate::registry::Registry;
 /// 실행 엔진이 쓰는 보조 프로그램
 const HELPERS: &[&str] = &["timeout", "stdbuf", "pkill"];
 
-/// 도구 9종과 보조 프로그램이 들어 있는 Ubuntu 패키지
+/// 도구와 보조 프로그램이 들어 있는 Ubuntu 패키지
 const PACKAGES: &[&str] = &[
     "iputils-ping",
     "fping",
@@ -29,6 +29,10 @@ const PACKAGES: &[&str] = &[
     "iperf3",
     "procps",
     "coreutils",
+    // 서비스 확인, 경로 자세히, TLS 확인
+    "nmap",
+    "iputils-tracepath",
+    "openssl",
 ];
 
 #[derive(Serialize)]

@@ -41,3 +41,9 @@ where = "src-tauri/src/security/values.rs"
 [[declare]]
 what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/setup.rs"
+[[declare]]
+what = "고침"
+where = "src/App.tsx"

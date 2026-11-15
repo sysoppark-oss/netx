@@ -523,7 +523,7 @@ export default function App() {
         </div>
 
         <form
-          className="flex min-w-0 flex-1"
+          className="flex min-w-[18rem] flex-1"
           onSubmit={(e) => {
             e.preventDefault();
             ask();
