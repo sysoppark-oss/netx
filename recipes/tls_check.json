@@ -1,0 +1,77 @@
+{
+  "id": "tls_check",
+  "icon": "🔐",
+  "title": "TLS·인증서 확인",
+  "description": "서버와 TLS로 악수해 판, 암호 묶음, 인증서 검증 결과를 확인한다. 악수 단계는 WSL이 필요하다.",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "label": "주소 (https://는 생략 가능)",
+      "example": "example.com",
+      "hint": "포트가 다르면 주소:포트"
+    },
+    {
+      "name": "depth",
+      "type": "enum",
+      "label": "조사 깊이",
+      "values": [
+        "quick",
+        "normal",
+        "deep"
+      ],
+      "value_labels": [
+        "빠르게 (악수 한 번)",
+        "보통 (+ 웹 응답과 인증서 검증)",
+        "정밀 (+ TLS 1.2와 1.3을 따로 시도)"
+      ],
+      "default": "normal",
+      "example": "normal",
+      "hint": "정밀 조사는 판마다 한 번씩 더 접속합니다."
+    }
+  ],
+  "keywords": [
+    "tls",
+    "ssl",
+    "인증서",
+    "만료",
+    "https",
+    "암호화",
+    "보안 경고"
+  ],
+  "parallel": true,
+  "steps": [
+    {
+      "tool": "openssl",
+      "args": [
+        "(조사 깊이에 따라 조립)"
+      ],
+      "reason": "TLS 악수를 해 보고 판, 암호 묶음, 인증서 검증 결과를 본다.",
+      "expect": "Verification: OK면 인증서가 믿을 만하다. Verification error면 까닭이 함께 나온다."
+    },
+    {
+      "tool": "curl",
+      "args": [
+        "(보통부터)"
+      ],
+      "reason": "인증서를 실제로 검증하면서 웹 응답을 받는다.",
+      "expect": "응답 코드가 나오면 검증 통과. 인증서 오류면 여기서 멈춘다. expire date에서 만료일 확인."
+    },
+    {
+      "tool": "openssl",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "TLS 1.2로만 악수해 본다.",
+      "expect": "되면 TLS 1.2를 받는 서버다."
+    },
+    {
+      "tool": "openssl",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "TLS 1.3으로만 악수해 본다.",
+      "expect": "되면 TLS 1.3을 받는 서버다. 안 되면 오래된 설정이다."
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "id": "route_detail",
+  "icon": "🧭",
+  "title": "경로 자세히",
+  "description": "대상까지의 구간별 손실·지연과, 구간마다 한 번에 보낼 수 있는 크기(MTU)를 확인한다. MTU 단계는 WSL이 필요하다.",
+  "inputs": [
+    {
+      "name": "target",
+      "type": "host",
+      "label": "대상",
+      "example": "8.8.8.8",
+      "hint": "주소 또는 이름"
+    },
+    {
+      "name": "depth",
+      "type": "enum",
+      "label": "조사 깊이",
+      "values": [
+        "quick",
+        "normal",
+        "deep"
+      ],
+      "value_labels": [
+        "빠르게 (5회)",
+        "보통 (10회)",
+        "정밀 (30회 + 큰 패킷 핑)"
+      ],
+      "default": "normal",
+      "example": "normal",
+      "hint": "정밀 조사는 1분쯤 걸립니다."
+    }
+  ],
+  "keywords": [
+    "경로",
+    "mtu",
+    "단편화",
+    "끊김",
+    "vpn",
+    "느림",
+    "어디서"
+  ],
+  "parallel": true,
+  "steps": [
+    {
+      "tool": "mtr",
+      "args": [
+        "(조사 깊이에 따라 조립)"
+      ],
+      "reason": "구간마다 손실과 지연을 잰다.",
+      "expect": "어느 구간부터 손실이나 지연이 커지는지 본다."
+    },
+    {
+      "tool": "tracepath",
+      "args": [
+        "(조사 깊이에 따라 조립)"
+      ],
+      "reason": "구간마다 한 번에 보낼 수 있는 크기(MTU)를 확인한다.",
+      "expect": "pmtu가 1500보다 작아지는 구간이 있으면 그 뒤로 큰 패킷이 쪼개지거나 막힐 수 있다(VPN, PPPoE)."
+    },
+    {
+      "tool": "ping",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "큰 패킷(1400바이트)이 끝까지 가는지 본다.",
+      "expect": "작은 핑은 되는데 이것만 안 되면 MTU 문제다."
+    }
+  ]
+}

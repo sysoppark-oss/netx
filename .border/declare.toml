@@ -1,6 +1,49 @@
 # 이번 가지(dev)의 신고. 기준점(main)에서 본 것으로 적는다.
 # main에 합쳐질 때마다 비우고 새로 적는다.
 
+# 진단 네 가지 (서비스 확인, DNS 깊이 보기, TLS·인증서 확인, 경로 자세히)
+[[declare]]
+what = "만듦"
+where = "tools/nmap.json"
+[[declare]]
+what = "만듦"
+where = "tools/openssl.json"
+[[declare]]
+what = "만듦"
+where = "tools/tracepath.json"
+[[declare]]
+what = "만듦"
+where = "recipes/service_check.json"
+[[declare]]
+what = "만듦"
+where = "recipes/dns_deep.json"
+[[declare]]
+what = "만듦"
+where = "recipes/tls_check.json"
+[[declare]]
+what = "만듦"
+where = "recipes/route_detail.json"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/registry.rs"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/model.rs"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/recipe.rs"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/interpret.rs"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/security/values.rs"
 [[declare]]
 what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
+[[declare]]
+what = "고침"
+where = "src-tauri/src/setup.rs"
+[[declare]]
+what = "고침"
+where = "src/App.tsx"

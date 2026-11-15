@@ -65,6 +65,10 @@ pub enum ValueType {
     DigArg,
     /// lsof -i 주소 지정
     LsofInet,
+    /// 포트를 훑어볼 대상 한 대. 내부 주소가 아니면 위험으로 올린다.
+    ScanHost,
+    /// 주소:포트
+    HostPort,
     /// 포트 목록: 22,80,443 또는 20-25 (내장 포트 스캔)
     PortList,
 }
