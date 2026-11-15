@@ -229,21 +229,44 @@ fn tls_handshake(lines: &[String]) -> Option<StepResult> {
     Some(r)
 }
 
-/// tracepath: 마지막 "Resume: pmtu 1500 hops 12 back 12" 줄.
+/// tracepath: 첫 줄의 "[LOCALHOST] pmtu N"(이 PC 쪽 MTU)과 마지막 "Resume: pmtu N hops H back B" 줄.
 fn tracepath(lines: &[String]) -> Option<StepResult> {
+    let number_after = |line: &str, key: &str| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        words.iter().position(|w| *w == key).and_then(|i| words.get(i + 1)).and_then(|v| v.parse::<u32>().ok())
+    };
     let resume = lines.iter().rev().find(|l| l.trim_start().starts_with("Resume:"))?;
-    let words: Vec<&str> = resume.split_whitespace().collect();
-    let after = |key: &str| words.iter().position(|w| *w == key).and_then(|i| words.get(i + 1)).and_then(|v| v.parse::<u32>().ok());
-    let pmtu = after("pmtu")?;
-    let hops = after("hops");
+    let pmtu = number_after(resume, "pmtu")?;
+    let hops = number_after(resume, "hops");
+    let local = lines.iter().find(|l| l.contains("[LOCALHOST]")).and_then(|l| number_after(l, "pmtu"));
+    let unreached = lines.iter().any(|l| l.contains("Too many hops"));
+    // 경로 가운데에서 줄어든 자리: "pmtu <끝 값>"이 처음 나오는 줄의 구간 번호
+    let narrowed_at = lines
+        .iter()
+        .filter(|l| !l.contains("[LOCALHOST]") && !l.trim_start().starts_with("Resume:") && !l.contains("Too many hops"))
+        .find(|l| number_after(l, "pmtu") == Some(pmtu))
+        .and_then(|l| l.trim_start().split(':').next().and_then(|n| n.trim_end_matches('?').trim().parse::<u32>().ok()));
+
     let mut r = if pmtu >= 1500 {
         StepResult::new(Light::Green, format!("끝까지 한 번에 보낼 수 있는 크기(MTU)는 {pmtu}바이트입니다. 정상입니다."))
+    } else if local == Some(pmtu) {
+        StepResult::new(
+            Light::Green,
+            format!("이 PC(WSL) 쪽 MTU가 처음부터 {pmtu}바이트이고, 경로에서는 더 줄지 않았습니다. WSL의 가상 어댑터나 PC의 VPN(테일스케일 등) 설정에서 온 값일 수 있습니다."),
+        )
     } else {
-        StepResult::new(Light::Yellow, format!("경로의 MTU가 {pmtu}바이트로 줄어듭니다. 큰 패킷이 쪼개지거나 막힐 수 있습니다(VPN, PPPoE 구간)."))
+        let at = narrowed_at.map(|n| format!("{n}번째 구간에서 ")).unwrap_or_default();
+        StepResult::new(Light::Yellow, format!("경로의 MTU가 {at}{pmtu}바이트로 줄어듭니다. 그 뒤로 큰 패킷이 쪼개지거나 막힐 수 있습니다(VPN, PPPoE 구간)."))
     };
-    r = r.fact("경로 MTU", &pmtu.to_string());
+    r = r.fact("경로 MTU", pmtu.to_string());
+    if let Some(l) = local {
+        r = r.fact("이 PC 쪽 MTU", l.to_string());
+    }
     if let Some(h) = hops {
-        r = r.fact("구간 수", &h.to_string());
+        r = r.fact("구간 수", h.to_string());
+    }
+    if unreached {
+        r = r.fact("끝", "대상이 답하지 않아 마지막 구간까지는 확인하지 못했습니다");
     }
     Some(r)
 }
@@ -1021,6 +1044,12 @@ mod tests {
         let r = done("tracepath", " 1?: [LOCALHOST]                      pmtu 1500\n 1:  192.168.0.1    1.2ms\n 2:  10.0.0.1  5.1ms pmtu 1400\n     Resume: pmtu 1400 hops 9 back 9", 0);
         assert_eq!(r.light, Light::Yellow);
         assert!(r.facts.iter().any(|f| f.label == "경로 MTU" && f.value == "1400"));
+        assert!(r.text.contains("2번째 구간"), "{}", r.text);
+        // 용인 노트북의 실제 출력 모양: WSL 쪽이 처음부터 1280이고 대상이 답하지 않는다.
+        let r = done("tracepath", " 1?: [LOCALHOST]                      pmtu 1280\n 1:  172.20.0.1   0.4ms\n 2:  192.168.123.1  2.1ms\n29:  no reply\n30:  no reply\n     Too many hops: pmtu 1280\n     Resume: pmtu 1280", 0);
+        assert_eq!(r.light, Light::Green);
+        assert!(r.text.contains("이 PC(WSL) 쪽"));
+        assert!(r.facts.iter().any(|f| f.label == "끝"));
         let r = done("tracepath", "     Resume: pmtu 1500 hops 3 back 3", 0);
         assert_eq!(r.light, Light::Green);
 
