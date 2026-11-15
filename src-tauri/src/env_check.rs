@@ -76,7 +76,7 @@ async fn detect() -> EnvironmentStatus {
         Some(distros) if !distros.is_empty() => EnvironmentStatus {
             mode: Mode::Full,
             wsl_installed: true,
-            message: format!("WSL2 배포판 {}개를 찾았습니다.", distros.len()),
+            message: format!("Windows 안에 설치된 리눅스(WSL2) {}개를 찾았습니다.", distros.len()),
             distros,
         },
         Some(_) => EnvironmentStatus {
