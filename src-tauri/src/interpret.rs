@@ -173,6 +173,86 @@ pub fn with_highway(mut result: StepResult, road: crate::pcap::Highway) -> StepR
     result
 }
 
+/// nmap: "22/tcp open  ssh  OpenSSH 9.6" 같은 줄에서 열린 포트와 서비스를 센다.
+fn nmap(lines: &[String]) -> Option<StepResult> {
+    let mut open: Vec<String> = Vec::new();
+    let mut seen = 0usize;
+    for line in lines {
+        let mut cols = line.split_whitespace();
+        let (Some(port), Some(state)) = (cols.next(), cols.next()) else { continue };
+        let Some((num, proto)) = port.split_once('/') else { continue };
+        if num.parse::<u16>().is_err() || !matches!(proto, "tcp" | "udp") {
+            continue;
+        }
+        seen += 1;
+        if state == "open" {
+            let rest: Vec<&str> = cols.collect();
+            let what = clip(&rest.join(" "), 60);
+            open.push(if what.is_empty() { num.to_string() } else { format!("{num} ({what})") });
+        }
+    }
+    if seen == 0 && !lines.iter().any(|l| l.contains("Nmap done") || l.contains("Host is up") || l.contains("All ")) {
+        return None;
+    }
+    let mut r = if open.is_empty() {
+        StepResult::new(Light::Yellow, "확인한 포트 가운데 열린 것이 없습니다. 닫혀 있거나 방화벽이 막고 있습니다.".to_string())
+    } else {
+        StepResult::new(Light::Green, format!("열린 포트 {}개를 찾았습니다.", open.len()))
+    };
+    for o in open.iter().take(20) {
+        r = r.fact("열린 포트", o);
+    }
+    Some(r)
+}
+
+/// openssl s_client -brief: 판, 암호 묶음, 검증 결과.
+fn tls_handshake(lines: &[String]) -> Option<StepResult> {
+    let find = |key: &str| lines.iter().find_map(|l| l.trim().strip_prefix(key).map(|v| clip(v.trim(), 120)));
+    let version = find("Protocol version:");
+    let cipher = find("Ciphersuite:");
+    let peer = find("Peer certificate:");
+    let failed = lines.iter().find_map(|l| l.trim().strip_prefix("Verification error:").map(|v| clip(v.trim(), 120)));
+    let verified = lines.iter().any(|l| l.trim() == "Verification: OK");
+    if version.is_none() && failed.is_none() && !verified {
+        return None;
+    }
+    let mut r = match (&failed, verified) {
+        (Some(why), _) => StepResult::new(Light::Red, format!("TLS 악수는 됐지만 인증서 검증에 실패했습니다: {why}")),
+        (None, true) => StepResult::new(Light::Green, "TLS 악수와 인증서 검증이 모두 됐습니다.".to_string()),
+        (None, false) => StepResult::new(Light::Yellow, "TLS 악수는 됐지만 검증 결과를 읽지 못했습니다.".to_string()),
+    };
+    for (k, v) in [("TLS 판", version), ("암호 묶음", cipher), ("인증서", peer)] {
+        if let Some(v) = v {
+            r = r.fact(k, &v);
+        }
+    }
+    Some(r)
+}
+
+/// tracepath: 마지막 "Resume: pmtu 1500 hops 12 back 12" 줄.
+fn tracepath(lines: &[String]) -> Option<StepResult> {
+    let resume = lines.iter().rev().find(|l| l.trim_start().starts_with("Resume:"))?;
+    let words: Vec<&str> = resume.split_whitespace().collect();
+    let after = |key: &str| words.iter().position(|w| *w == key).and_then(|i| words.get(i + 1)).and_then(|v| v.parse::<u32>().ok());
+    let pmtu = after("pmtu")?;
+    let hops = after("hops");
+    let mut r = if pmtu >= 1500 {
+        StepResult::new(Light::Green, format!("끝까지 한 번에 보낼 수 있는 크기(MTU)는 {pmtu}바이트입니다. 정상입니다."))
+    } else {
+        StepResult::new(Light::Yellow, format!("경로의 MTU가 {pmtu}바이트로 줄어듭니다. 큰 패킷이 쪼개지거나 막힐 수 있습니다(VPN, PPPoE 구간)."))
+    };
+    r = r.fact("경로 MTU", &pmtu.to_string());
+    if let Some(h) = hops {
+        r = r.fact("구간 수", &h.to_string());
+    }
+    Some(r)
+}
+
+fn clip(text: &str, max: usize) -> String {
+    let cleaned: String = text.chars().filter(|c| !c.is_control()).take(max).collect();
+    cleaned
+}
+
 /// 끝난 단계의 출력을 해석한다.
 pub fn interpret(program: &str, lines: &[String], status: StepStatus, exit_code: Option<i32>) -> StepResult {
     let parsed = match program {
@@ -192,6 +272,9 @@ pub fn interpret(program: &str, lines: &[String], status: StepStatus, exit_code:
         "ss" => listing(lines, "WSL 안에서 이 조건에 맞는 소켓"),
         "lsof" => listing(lines, "WSL 안에서 이 포트를 연 프로세스"),
         "tcpdump" => tcpdump(lines),
+        "nmap" => nmap(lines),
+        "openssl" => tls_handshake(lines),
+        "tracepath" => tracepath(lines),
         _ => None,
     };
 
@@ -917,6 +1000,36 @@ mod tests {
     }
     fn done(program: &str, text: &str, code: i32) -> StepResult {
         interpret(program, &lines(text), StepStatus::Done, Some(code))
+    }
+
+    #[test]
+    fn reads_nmap_tls_and_tracepath_output() {
+        let r = done("nmap", "Starting Nmap 7.94\nNmap scan report for 192.168.0.1\nHost is up (0.0010s latency).\n\nPORT    STATE  SERVICE VERSION\n22/tcp  open   ssh     OpenSSH 9.6p1 Ubuntu\n80/tcp  closed http\n443/tcp open   https   nginx 1.24.0\n\nNmap done: 1 IP address (1 host up) scanned in 6.42 seconds", 0);
+        assert_eq!(r.light, Light::Green);
+        assert!(r.text.contains("2개"));
+        assert!(r.facts.iter().any(|f| f.value.contains("22") && f.value.contains("OpenSSH")));
+        let r = done("nmap", "Nmap scan report for 192.168.0.1\nHost is up.\nPORT   STATE    SERVICE\n22/tcp filtered ssh\nNmap done: 1 IP address (1 host up) scanned", 0);
+        assert_eq!(r.light, Light::Yellow);
+
+        let r = done("openssl", "CONNECTION ESTABLISHED\nProtocol version: TLSv1.3\nCiphersuite: TLS_AES_256_GCM_SHA384\nPeer certificate: CN=example.com\nHash used: SHA256\nVerification: OK\nDONE", 0);
+        assert_eq!(r.light, Light::Green);
+        assert!(r.facts.iter().any(|f| f.label == "TLS 판" && f.value == "TLSv1.3"));
+        let r = done("openssl", "CONNECTION ESTABLISHED\nProtocol version: TLSv1.2\nVerification error: certificate has expired\nDONE", 0);
+        assert_eq!(r.light, Light::Red);
+        assert!(r.text.contains("certificate has expired"));
+
+        let r = done("tracepath", " 1?: [LOCALHOST]                      pmtu 1500\n 1:  192.168.0.1    1.2ms\n 2:  10.0.0.1  5.1ms pmtu 1400\n     Resume: pmtu 1400 hops 9 back 9", 0);
+        assert_eq!(r.light, Light::Yellow);
+        assert!(r.facts.iter().any(|f| f.label == "경로 MTU" && f.value == "1400"));
+        let r = done("tracepath", "     Resume: pmtu 1500 hops 3 back 3", 0);
+        assert_eq!(r.light, Light::Green);
+
+        // 엉뚱한 출력에도 죽지 않는다.
+        for junk in ["", "///", "1/tcp", "Resume: pmtu x", "Protocol version:", "99999/tcp open x", "\u{202e}22/tcp open"] {
+            for tool in ["nmap", "openssl", "tracepath"] {
+                let _ = done(tool, junk, 1);
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,164 @@
+{
+  "tool": "openssl",
+  "title": "TLS 확인 (openssl s_client)",
+  "description": "서버와 TLS로 악수해 보고, 쓰인 TLS 판과 암호 묶음, 인증서와 검증 결과를 확인한다. WSL에서만 돈다.",
+  "engines": [
+    "wsl"
+  ],
+  "categories": [
+    "TLS",
+    "인증서",
+    "L7"
+  ],
+  "options": [
+    {
+      "flag": "-connect",
+      "type": "host_port",
+      "label": "접속할 곳 (주소:포트)",
+      "group": "대상"
+    },
+    {
+      "flag": "-servername",
+      "type": "host",
+      "label": "서버 이름(SNI)",
+      "group": "대상"
+    },
+    {
+      "flag": "-brief",
+      "type": "boolean",
+      "label": "요약만 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-showcerts",
+      "type": "boolean",
+      "label": "서버가 보낸 인증서를 모두 출력",
+      "group": "출력"
+    },
+    {
+      "flag": "-tls1_2",
+      "type": "boolean",
+      "label": "TLS 1.2로만 시도",
+      "group": "판"
+    },
+    {
+      "flag": "-tls1_3",
+      "type": "boolean",
+      "label": "TLS 1.3으로만 시도",
+      "group": "판"
+    },
+    {
+      "flag": "-verify_return_error",
+      "type": "boolean",
+      "label": "검증에 실패하면 바로 끊기",
+      "group": "검증"
+    },
+    {
+      "flag": "-status",
+      "type": "boolean",
+      "label": "인증서 상태(OCSP) 응답 요청",
+      "group": "검증"
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "대상"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "대상"
+    },
+    {
+      "flag": "-cert",
+      "type": "string",
+      "label": "내 인증서 파일",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-key",
+      "type": "string",
+      "label": "내 키 파일",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-CAfile",
+      "type": "string",
+      "label": "인증 기관 파일",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-CApath",
+      "type": "string",
+      "label": "인증 기관 폴더",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-keylogfile",
+      "type": "string",
+      "label": "세션 키를 파일로",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-sess_out",
+      "type": "string",
+      "label": "세션을 파일로",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-sess_in",
+      "type": "string",
+      "label": "세션 파일 읽기",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-proxy",
+      "type": "string",
+      "label": "프록시 경유",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-msgfile",
+      "type": "string",
+      "label": "메시지를 파일로",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-engine",
+      "type": "string",
+      "label": "엔진 지정",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-pass",
+      "type": "string",
+      "label": "암호 출처",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-psk",
+      "type": "string",
+      "label": "미리 나눈 키",
+      "risk": "forbidden"
+    },
+    {
+      "flag": "-cert_chain",
+      "type": "string",
+      "label": "인증서 묶음 파일",
+      "risk": "forbidden"
+    }
+  ],
+  "positional": [
+    {
+      "name": "command",
+      "type": "enum",
+      "label": "하위 명령",
+      "required": true,
+      "values": [
+        "s_client"
+      ]
+    }
+  ]
+}

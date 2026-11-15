@@ -1,0 +1,110 @@
+{
+  "id": "dns_deep",
+  "icon": "🔎",
+  "title": "DNS 깊이 보기",
+  "description": "한 이름의 레코드를 종류별로 보고, 다른 공개 DNS 서버의 답과 견준다.",
+  "inputs": [
+    {
+      "name": "name",
+      "type": "host",
+      "label": "도메인 이름",
+      "example": "example.com",
+      "hint": "https:// 없이 이름만 적습니다."
+    },
+    {
+      "name": "depth",
+      "type": "enum",
+      "label": "조사 깊이",
+      "values": [
+        "quick",
+        "normal",
+        "deep"
+      ],
+      "value_labels": [
+        "빠르게 (주소만)",
+        "보통 (+ 이름 서버, 메일, 다른 DNS와 견줌)",
+        "정밀 (+ TXT, SOA, 한 곳 더 견줌)"
+      ],
+      "default": "normal",
+      "example": "normal",
+      "hint": "다른 DNS와 견주는 단계는 1.1.1.1과 8.8.8.8에 같은 이름을 묻습니다."
+    }
+  ],
+  "keywords": [
+    "dns",
+    "도메인",
+    "네임서버",
+    "레코드",
+    "mx",
+    "메일",
+    "txt",
+    "전파"
+  ],
+  "parallel": true,
+  "steps": [
+    {
+      "tool": "dig",
+      "args": [
+        "(조사 깊이에 따라 조립)"
+      ],
+      "reason": "IPv4 주소(A)와 유효 시간을 본다.",
+      "expect": "ANSWER에 주소가 나오면 정상."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(조사 깊이에 따라 조립)"
+      ],
+      "reason": "IPv6 주소(AAAA)가 있는지 본다.",
+      "expect": "없어도 문제는 아니다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(보통부터)"
+      ],
+      "reason": "이 이름을 맡은 이름 서버(NS)를 본다.",
+      "expect": "이름 서버가 둘 이상 나오는지 확인한다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(보통부터)"
+      ],
+      "reason": "메일을 받는 서버(MX)를 본다.",
+      "expect": "메일을 쓰지 않는 이름이면 비어 있다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(보통부터)"
+      ],
+      "reason": "다른 공개 DNS(1.1.1.1)의 답과 견준다.",
+      "expect": "내 DNS의 답과 다르면 전파 중이거나 내 DNS에 낡은 답이 남아 있다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "글 레코드(TXT: 메일 발신 확인, 소유 확인)를 본다.",
+      "expect": "v=spf1로 시작하는 줄이 메일 발신 규칙이다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "구역의 기본 정보(SOA: 일련번호)를 본다.",
+      "expect": "이름 서버끼리 일련번호가 같아야 한다."
+    },
+    {
+      "tool": "dig",
+      "args": [
+        "(정밀에서만)"
+      ],
+      "reason": "다른 공개 DNS(8.8.8.8)의 답과 한 번 더 견준다.",
+      "expect": "세 곳의 답이 같으면 전파가 끝난 것이다."
+    }
+  ]
+}

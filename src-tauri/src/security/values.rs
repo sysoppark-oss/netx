@@ -142,6 +142,17 @@ pub fn check(rule: &Rule, v: &str) -> Result<Checked, String> {
             chars_ok(v, 16, |c| c.is_ascii_digit() || "./kKmMgGtT".contains(c), "크기·속도").map(|_| Checked::default())
         }
         ValueType::DigArg => check_host(v.strip_prefix('@').unwrap_or(v)).map(|_| Checked::default()),
+        ValueType::ScanHost => {
+            check_host(v)?;
+            let internal = v.parse::<Ipv4Addr>().map(is_internal).unwrap_or(false);
+            let bump = (!internal).then(|| (Risk::Danger, "내부 주소가 아닙니다. 직접 관리하거나 허가받은 대상인지 확인하세요".to_string()));
+            Ok(Checked { bump, allowlisted: false })
+        }
+        ValueType::HostPort => {
+            let (host, port) = v.rsplit_once(':').ok_or("주소:포트 형식이 아닙니다 (예: example.com:443)")?;
+            check_host(host)?;
+            parse_port(port).map(|_| Checked::default())
+        }
         ValueType::LsofInet => {
             chars_ok(v, 128, |c| c.is_ascii_alphanumeric() || "@:.,[]-".contains(c), "주소 지정").map(|_| Checked::default())
         }
@@ -331,6 +342,22 @@ mod tests {
         assert!(!ok(ValueType::Cidr, "10.0.0.0/8"), "기본 최소 프리픽스 /16보다 넓음");
         assert!(!ok(ValueType::Cidr, "192.168.0.0/33"));
         assert!(!ok(ValueType::Cidr, "192.168.0.0"));
+    }
+
+    #[test]
+    fn scan_host_and_host_port_rules() {
+        assert!(check(&rule(ValueType::ScanHost), "192.168.0.10").unwrap().bump.is_none());
+        assert!(check(&rule(ValueType::ScanHost), "127.0.0.1").unwrap().bump.is_none());
+        assert_eq!(check(&rule(ValueType::ScanHost), "8.8.8.8").unwrap().bump.unwrap().0, Risk::Danger);
+        // 이름은 누구 것인지 알 수 없으므로 위험으로 올린다.
+        assert_eq!(check(&rule(ValueType::ScanHost), "example.com").unwrap().bump.unwrap().0, Risk::Danger);
+        assert!(!ok(ValueType::ScanHost, "192.168.0.0/24"));
+        assert!(!ok(ValueType::ScanHost, "a b"));
+        assert!(ok(ValueType::HostPort, "example.com:443"));
+        assert!(ok(ValueType::HostPort, "192.168.0.1:8443"));
+        for bad in ["example.com", "example.com:", "example.com:0", "example.com:70000", ":443", "a b:443", "x:443;id"] {
+            assert!(!ok(ValueType::HostPort, bad), "{bad}");
+        }
     }
 
     #[test]

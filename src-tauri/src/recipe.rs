@@ -193,6 +193,55 @@ fn built_args(recipe_id: &str, step: usize, vars: &BTreeMap<String, String>) -> 
                 _ => own(&["-I", "-L", "-s", "-S", "-m", "15", "-w", "\\nnetx_final code=%{http_code} redirects=%{num_redirects} url=%{url_effective}\\n", url]),
             }))
         }
+        ("service_check", 0) => {
+            let (host, ports) = (get("host")?, get("ports")?);
+            Some(Ok(if quick {
+                own(&["-Pn", "-sT", "-n", "--open", "-p", ports, host])
+            } else if deep {
+                own(&["-Pn", "-sT", "-sV", "--version-all", "--reason", "-p", ports, host])
+            } else {
+                own(&["-Pn", "-sT", "-sV", "--version-light", "-p", ports, host])
+            }))
+        }
+        ("dns_deep", _) => {
+            let name = get("name")?;
+            Some(Ok(match step {
+                0 => own(&[name]),
+                1 => own(&["-t", "AAAA", name]),
+                _ if quick => vec![],
+                2 => own(&["-t", "NS", name]),
+                3 => own(&["-t", "MX", name]),
+                4 => own(&["@1.1.1.1", name]),
+                _ if !deep => vec![],
+                5 => own(&["-t", "TXT", name]),
+                6 => own(&["-t", "SOA", name]),
+                _ => own(&["@8.8.8.8", name]),
+            }))
+        }
+        ("tls_check", _) => {
+            let (host, port, url) = (get("url.host")?, get("url.port")?, get("url")?);
+            let at = format!("{host}:{port}");
+            const TIMES: &str = "\\nnetx_times dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\\n";
+            Some(Ok(match step {
+                0 => own(&["s_client", "-connect", &at, "-servername", host, "-brief"]),
+                _ if quick => vec![],
+                // 인증서를 검증한다(-k 없음).
+                1 => own(&["-I", "-v", "-s", "-m", "10", "-w", TIMES, url]),
+                _ if !deep => vec![],
+                2 => own(&["s_client", "-connect", &at, "-servername", host, "-tls1_2", "-brief"]),
+                _ => own(&["s_client", "-connect", &at, "-servername", host, "-tls1_3", "-brief"]),
+            }))
+        }
+        ("route_detail", _) => {
+            let target = get("target")?;
+            Some(Ok(match step {
+                0 => own(&["-r", "-w", "-b", "-c", if quick { "5" } else if deep { "30" } else { "10" }, target]),
+                1 if deep => own(&["-b", target]),
+                1 => own(&["-n", target]),
+                2 if deep => own(&["-c", "5", "-s", "1400", target]),
+                _ => vec![],
+            }))
+        }
         ("route_latency", _) => {
             let target = get("target")?;
             let (cycles, pings) = if quick { ("5", "3") } else if deep { ("30", "20") } else { ("10", "5") };
@@ -316,6 +365,55 @@ mod tests {
 
     fn inputs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn new_diagnostics_build_the_expected_commands() {
+        let cmds = |id: &str, pairs: &[(&str, &str)]| {
+            let plan = instantiate(Registry::global().recipe(id).unwrap(), &inputs(pairs)).unwrap();
+            plan.steps.iter().map(|s| format!("{} {}", s.tool, s.args.join(" "))).collect::<Vec<_>>()
+        };
+        assert_eq!(cmds("service_check", &[("host", "192.168.0.1"), ("ports", "22,443"), ("depth", "quick")]), ["nmap -Pn -sT -n --open -p 22,443 192.168.0.1"]);
+        assert_eq!(cmds("service_check", &[("host", "192.168.0.1"), ("depth", "normal")]), ["nmap -Pn -sT -sV --version-light -p 22,80,443,445,3389,8080 192.168.0.1"]);
+        assert_eq!(cmds("dns_deep", &[("name", "example.com"), ("depth", "quick")]), ["dig example.com", "dig -t AAAA example.com"]);
+        assert_eq!(cmds("dns_deep", &[("name", "example.com"), ("depth", "deep")]).len(), 8);
+        let tls = cmds("tls_check", &[("url", "example.com:8443"), ("depth", "deep")]);
+        assert_eq!(tls[0], "openssl s_client -connect example.com:8443 -servername example.com -brief");
+        assert!(tls[1].starts_with("curl -I -v -s -m 10 ") && !tls[1].contains(" -k "));
+        assert_eq!(tls.len(), 4);
+        assert_eq!(cmds("route_detail", &[("target", "8.8.8.8"), ("depth", "normal")]), ["mtr -r -w -b -c 10 8.8.8.8", "tracepath -n 8.8.8.8"]);
+    }
+
+    #[test]
+    fn scanning_an_outside_host_is_marked_dangerous_and_scripts_are_refused() {
+        let reg = Registry::global();
+        let recipe = reg.recipe("service_check").unwrap();
+        let plan = instantiate(recipe, &inputs(&[("host", "8.8.8.8"), ("depth", "normal")])).unwrap();
+        let v = validate_plan(reg, &plan, Level::Senior, Source::Recipe, false);
+        assert_eq!(v.steps[0].risk, Risk::Danger);
+        assert!(!v.steps[0].blocked);
+        assert!(instantiate(recipe, &inputs(&[("host", "192.168.0.0/24")])).is_err());
+        assert!(instantiate(recipe, &inputs(&[("host", "192.168.0.1"), ("ports", "22;id")])).is_err());
+
+        let step = |tool: &str, args: &[&str]| ExecutionPlan {
+            intent: "t".into(),
+            summary: "t".into(),
+            target: None,
+            steps: vec![PlanStep { order: Some(1), tool: tool.into(), args: args.iter().map(|a| a.to_string()).collect(), reason: None, expect: None }],
+        };
+        for (tool, args) in [
+            ("nmap", vec!["--script", "vuln", "192.168.0.1"]),
+            ("nmap", vec!["-sC", "192.168.0.1"]),
+            ("nmap", vec!["-oN", "out.txt", "192.168.0.1"]),
+            ("nmap", vec!["-iL", "hosts.txt"]),
+            ("openssl", vec!["enc", "-in", "x"]),
+            ("openssl", vec!["s_client", "-connect", "example.com:443", "-keylogfile", "k.txt"]),
+            ("openssl", vec!["s_client", "-connect", "example.com"]),
+            ("tracepath", vec!["-n", "a b"]),
+        ] {
+            let v = validate_plan(reg, &step(tool, &args), Level::Senior, Source::Recipe, false);
+            assert!(v.steps[0].blocked, "{tool} {args:?}");
+        }
     }
 
     #[test]

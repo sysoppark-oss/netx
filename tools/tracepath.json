@@ -1,0 +1,69 @@
+{
+  "tool": "tracepath",
+  "title": "경로와 MTU 확인 (tracepath)",
+  "description": "대상까지 거치는 구간과, 구간마다 한 번에 보낼 수 있는 크기(MTU)를 확인한다. 관리자 권한이 필요 없다. WSL에서만 돈다.",
+  "engines": [
+    "wsl"
+  ],
+  "categories": [
+    "경로",
+    "MTU",
+    "L3"
+  ],
+  "options": [
+    {
+      "flag": "-n",
+      "type": "boolean",
+      "label": "주소만 표시(이름 변환 안 함)",
+      "group": "출력"
+    },
+    {
+      "flag": "-b",
+      "type": "boolean",
+      "label": "이름과 주소를 함께 표시",
+      "group": "출력"
+    },
+    {
+      "flag": "-4",
+      "type": "boolean",
+      "label": "IPv4만 사용",
+      "group": "대상"
+    },
+    {
+      "flag": "-6",
+      "type": "boolean",
+      "label": "IPv6만 사용",
+      "group": "대상"
+    },
+    {
+      "flag": "-m",
+      "type": "number",
+      "label": "최대 구간 수",
+      "group": "제한",
+      "min": 1,
+      "max": 64
+    },
+    {
+      "flag": "-l",
+      "type": "number",
+      "label": "처음 보낼 크기(바이트)",
+      "group": "제한",
+      "min": 28,
+      "max": 65535
+    },
+    {
+      "flag": "-p",
+      "type": "port",
+      "label": "목적지 포트",
+      "group": "대상"
+    }
+  ],
+  "positional": [
+    {
+      "name": "target",
+      "type": "host",
+      "label": "대상",
+      "required": true
+    }
+  ]
+}
