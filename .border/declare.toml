@@ -1,2 +1,9 @@
 # 이번 가지(dev)의 신고. 기준점(main)에서 본 것으로 적는다.
 # main에 합쳐질 때마다 비우고 새로 적는다.
+
+[[declare]]
+what = "고침"
+where = "src/components/CollectView.tsx"
+[[declare]]
+what = "고침"
+where = "docs/DEV_PLAN_v0.1.md"
