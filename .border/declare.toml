@@ -1,0 +1,18 @@
+# 이번 작업의 신고 — 국경경비대 출국 심사 첫 판 (2026-11-15, NetX 세션)
+# 이 가지(dev)의 그 전 작업들은 신고 파일이 생기기 전의 것이라 여기에 없다.
+
+[[declare]]
+what = "만듦"
+where = "border/"
+
+[[declare]]
+what = "만듦"
+where = ".border/visa.toml"
+
+[[declare]]
+what = "고침"
+where = ".gitignore"
+
+[[declare]]
+what = "고침"
+where = "docs/DEV_PLAN_v0.1.md"

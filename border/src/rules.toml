@@ -1,0 +1,32 @@
+# 출국 심사의 기본 분류. 저장소마다 다른 것은 비자(.border/visa.toml)에 적는다.
+
+# 가. 빌드·시험 때 실행되는 것 (파일 전체가 대상)
+run = [
+  "**/build.rs",
+  ".github/workflows/**",
+  ".github/actions/**",
+  "**/*.nsh",
+  "scripts/**",
+  "**/Makefile",
+  "**/.cargo/config.toml",
+  "**/.cargo/config",
+  ".husky/**",
+]
+
+# 나. AI 도구의 지침·설정
+ai = [
+  "**/CLAUDE.md",
+  "**/AGENTS.md",
+  "**/GEMINI.md",
+  ".claude/**",
+  ".cursor/**",
+  "**/.cursorrules",
+  "**/.mcp.json",
+  ".vscode/tasks.json",
+  ".github/copilot-instructions.md",
+  "**/.windsurfrules",
+  "**/.aider.conf.yml",
+]
+
+# 다. 패키지를 어디서 받는지 정하는 파일
+registry = ["**/.npmrc", "**/.yarnrc", "**/.yarnrc.yml"]

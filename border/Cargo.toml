@@ -1,0 +1,17 @@
+[package]
+name = "border"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "국경경비대 출국 심사 — 비자·신고·실제 변경을 규칙으로 맞춰 보는 도구"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde_json = "1"
+regex = "1"
+
+[profile.release]
+opt-level = "s"
+strip = true

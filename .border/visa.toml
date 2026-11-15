@@ -1,0 +1,82 @@
+# NetX의 비자 — 에이전트(AI)가 이 저장소에서 건드려도 되는 테두리.
+# 사람(기획자)이 정한다. 이 파일이 바뀌면 출국 심사는 언제나 사람 확인을 요구한다.
+#
+# 초안: NetX 세션(Claude)이 2026-11-15에 적었다. 기획자가 고쳐서 확정하면 아래 줄을 false로 바꾼다.
+version = 1
+draft = true
+
+# 건드려도 되는 곳
+allow = [
+  "src/**",
+  "src-tauri/src/**",
+  "src-tauri/build.rs",
+  "src-tauri/Cargo.toml",
+  "src-tauri/Cargo.lock",
+  "src-tauri/tauri.conf.json",
+  "src-tauri/capabilities/**",
+  "src-tauri/permissions/**",
+  "src-tauri/icons/**",
+  "src-tauri/windows/**",
+  "src-tauri/.gitignore",
+  "docs/**",
+  "recipes/**",
+  "tools/**",
+  "scripts/**",
+  "public/**",
+  "border/**",
+  "package.json",
+  "package-lock.json",
+  "index.html",
+  "README.md",
+  "tsconfig.json",
+  "tsconfig.node.json",
+  "vite.config.ts",
+  ".gitignore",
+  ".github/workflows/**",
+  ".vscode/**",
+]
+
+# 건드리면 안 되는 곳 (allow보다 앞선다)
+deny = [
+  "word/**",   # 말씀 자료. 글자를 바꾸지 않는다
+  "LICENSE",
+]
+
+# 바뀌면 언제나 사람이 보는 곳
+always = [
+  "src-tauri/src/security/**",   # 검증기와 값 검사. 모든 실행이 여기를 지난다
+]
+
+# 다음 AI 세션이 읽는 문서 (알림만)
+ai_docs = ["docs/DEV_PLAN_v0.1.md", "docs/DESIGN.md"]
+
+# 평소 일: 화면 명령을 하나 더할 때마다 늘어나는 줄
+[[usual]]
+path = "src-tauri/build.rs"
+line = '^"[a-z0-9_]+",$'
+
+[[usual]]
+path = "src-tauri/capabilities/*.json"
+line = '^"allow-[a-z0-9-]+",?$'
+
+[[usual]]
+path = "src-tauri/tauri.conf.json"
+line = '^"version": "[0-9.]+",?$'
+
+# 풀지 않는 설정 (분류 라)
+[[guard]]
+name = "앱 설정(창, 보안 정책, 묶음)"
+path = "src-tauri/tauri.conf.json"
+
+[[guard]]
+name = "화면이 부를 수 있는 명령의 허용 목록"
+path = "src-tauri/capabilities/**"
+
+[[guard]]
+name = "콘텐츠 보안 정책과 프로토타입 잠금"
+line = '"csp"|freezePrototype|withGlobalTauri'
+
+[[guard]]
+name = "업데이트 공개 키와 주소"
+path = "src-tauri/**"
+line = 'pubkey|endpoints'
