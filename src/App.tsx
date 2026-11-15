@@ -502,7 +502,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/* 상단 헤더 */}
-      <header className="flex items-center gap-4 border-b border-line bg-panel px-5 py-3">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-panel px-5 py-3">
         <div className="flex shrink-0 items-baseline gap-2">
           <span className="text-lg font-bold tracking-tight text-accent">NetX</span>
           <span className="text-xs text-dim" title={info?.channel ? `${info.channel} 채널 · 새 버전이 올라오면 서명을 확인한 뒤 자동으로 업데이트됩니다` : undefined}>

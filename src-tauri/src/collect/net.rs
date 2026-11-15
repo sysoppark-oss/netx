@@ -123,10 +123,43 @@ fn allowed_peer(ip: IpAddr) -> bool {
 
 /// 이 PC의 테일스케일 주소(있으면)
 pub fn tailnet_addr() -> Option<Ipv4Addr> {
+    let mut found: Vec<Ipv4Addr> = Vec::new();
+    // 1. 어댑터 목록(sysinfo). Windows에서는 테일스케일의 터널 어댑터가 여기에 안 나오는 PC가 있었다.
     let nets = sysinfo::Networks::new_with_refreshed_list();
-    let mut found: Vec<Ipv4Addr> = nets.values().flat_map(|d| d.ip_networks().iter().map(|n| n.addr)).filter_map(|a| if let IpAddr::V4(v4) = a { Some(v4) } else { None }).filter(|a| tailnet(*a)).collect();
+    found.extend(nets.values().flat_map(|d| d.ip_networks().iter().map(|n| n.addr)).filter_map(v4));
+    // 2. Windows: 운영체제 API(GetAdaptersAddresses)로 한 번 더 읽는다.
+    found.extend(os_addrs());
+    // 3. 테일스케일 대역으로 가는 길에 쓰이는 내 주소. 소켓에 목적지만 정하고 아무것도 보내지 않는다.
+    found.extend(routed_addr());
+    pick_tailnet(found)
+}
+
+fn v4(a: IpAddr) -> Option<Ipv4Addr> {
+    if let IpAddr::V4(v) = a { Some(v) } else { None }
+}
+
+/// 테일스케일 대역의 주소만 남겨 가장 작은 것을 고른다(여럿이어도 늘 같은 것을 고르게).
+fn pick_tailnet(mut found: Vec<Ipv4Addr>) -> Option<Ipv4Addr> {
+    found.retain(|a| tailnet(*a));
     found.sort();
     found.into_iter().next()
+}
+
+#[cfg(target_os = "windows")]
+fn os_addrs() -> Vec<Ipv4Addr> {
+    ipconfig::get_adapters().map(|list| list.iter().flat_map(|a| a.ip_addresses().to_vec()).filter_map(v4).collect()).unwrap_or_default()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn os_addrs() -> Vec<Ipv4Addr> {
+    Vec::new()
+}
+
+fn routed_addr() -> Option<Ipv4Addr> {
+    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    // 100.100.100.100은 테일스케일이 자기 안내용으로 쓰는 주소다. UDP의 connect는 패킷을 보내지 않는다.
+    sock.connect((Ipv4Addr::new(100, 100, 100, 100), 9)).ok()?;
+    v4(sock.local_addr().ok()?.ip())
 }
 
 /// 한 줄을 읽는다. 상한을 넘거나 끊기면 없음.
@@ -469,6 +502,16 @@ async fn send_all(hub: &Hub, k: &Collector) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn picks_only_tailnet_addresses_and_always_the_same_one() {
+        let a = |x: [u8; 4]| Ipv4Addr::from(x);
+        assert_eq!(super::pick_tailnet(vec![a([192, 168, 0, 2]), a([100, 101, 5, 9]), a([100, 64, 0, 7]), a([10, 0, 0, 1])]), Some(a([100, 64, 0, 7])));
+        assert_eq!(super::pick_tailnet(vec![a([192, 168, 0, 2]), a([100, 128, 0, 1]), a([8, 8, 8, 8])]), None);
+        assert_eq!(super::pick_tailnet(Vec::new()), None);
+        // 이 시험 PC에 테일스케일이 없어도 멈추거나 죽지 않는다.
+        let _ = super::tailnet_addr();
+    }
+
     use super::*;
     use crate::collect::store::Filter;
     use crate::collect::{PORT_DEFAULT, test_hub};

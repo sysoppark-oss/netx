@@ -20,3 +20,11 @@ where = "docs/DEV_PLAN_v0.1.md"
 [[declare]]
 what = "만듦"
 where = ".github/workflows/border-exit.yml"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/net.rs"
+
+[[declare]]
+what = "고침"
+where = "src/App.tsx"
