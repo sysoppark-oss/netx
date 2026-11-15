@@ -48,8 +48,9 @@ jobs:
         run: |
           set -uo pipefail
           head="$(cat head.txt)"
-          base/border/target/release/border exit --repo base --base main --head "$head" --out report.md
-          code=$?
+          # GitHub의 셸은 명령이 0이 아닌 값으로 끝나면 그 자리에서 멈춘다. 값을 받아서 아래에서 가른다.
+          code=0
+          base/border/target/release/border exit --repo base --base main --head "$head" --out report.md || code=$?
           cat report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           case "$code" in
             0) exit 0 ;;
@@ -83,11 +84,12 @@ jobs:
             echo "> 참고용입니다. dev의 검사기로 돌았습니다. 권위 있는 심사는 main으로 가는 PR에서 돕니다."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
+          code=0
           if git -C repo cat-file -e "origin/main:.border/visa.toml" 2>/dev/null; then
-            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --out report.md
+            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --out report.md > /dev/null || code=$?
           else
-            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --visa repo/.border/visa.toml --out report.md
+            repo/border/target/release/border exit --repo repo --base origin/main --head "$GITHUB_SHA" --visa repo/.border/visa.toml --out report.md > /dev/null || code=$?
           fi
-          echo "끝날 때의 값: $?"
+          echo "끝날 때의 값: $code (0 통과, 1 사람 확인 필요, 2 비자 밖, 3 검사 못 함)"
           cat report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           exit 0
