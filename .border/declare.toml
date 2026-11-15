@@ -7,3 +7,9 @@ where = "src/components/CollectView.tsx"
 [[declare]]
 what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
+[[declare]]
+what = "만듦"
+where = "src/lib/meter.ts"
+[[declare]]
+what = "고침"
+where = "src/components/PlanCards.tsx"
