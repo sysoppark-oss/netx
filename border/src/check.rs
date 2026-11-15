@@ -149,7 +149,8 @@ pub fn run(req: &Request) -> Result<Outcome, String> {
         if glob::any(&visa.always, path) {
             push(&mut out, "늘", ch, kind_word(ch), declared);
         }
-        for g in &visa.guard {
+        // 비자 파일은 위에서 이미 올렸다. 규칙을 적은 글이 자기 규칙에 걸리지 않게 한다.
+        for g in visa.guard.iter().filter(|_| path != VISA_PATH) {
             if let Some(p) = &g.path {
                 if !glob::matches(p, path) {
                     continue;
