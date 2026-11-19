@@ -4,7 +4,3 @@
 [[declare]]
 what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
-
-[[declare]]
-what = "고침"
-where = ".border/declare.toml"
