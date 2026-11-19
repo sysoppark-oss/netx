@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-plan-set"
+description = "Enables the collect_plan_set command without any pre-configured scope."
+commands.allow = ["collect_plan_set"]
+
+[[permission]]
+identifier = "deny-collect-plan-set"
+description = "Denies the collect_plan_set command without any pre-configured scope."
+commands.deny = ["collect_plan_set"]

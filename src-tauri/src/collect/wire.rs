@@ -33,6 +33,93 @@ pub struct Finished {
     pub started: u64,
     pub ended: u64,
     pub steps: Vec<Step>,
+    /// 예약 수집의 자료(시스템 상세, 설치된 프로그램). 진단 결과에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Data>,
+}
+
+/// 예약 수집 한 건의 자료. 정해진 칸만 있다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Data {
+    System(System),
+    Software(Software),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct System {
+    /// 운영체제 이름과 판(예: Windows 11 Pro 23H2)
+    pub os: String,
+    pub build: String,
+    /// PC 이름. 가리기를 켜면 비운다.
+    pub host: String,
+    pub cpu: String,
+    pub cores: u32,
+    pub mem_total: u64,
+    pub mem_used: u64,
+    pub disks: Vec<Disk>,
+    pub uptime_secs: u64,
+    pub netx: String,
+    pub tailnet: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Disk {
+    pub name: String,
+    pub total: u64,
+    pub free: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Software {
+    pub programs: Vec<Program>,
+    /// 상한을 넘어 뒤를 잘랐다
+    pub cut: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Program {
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
+    /// 설치한 날(YYYYMMDD, 없을 수 있다)
+    pub installed: String,
+}
+
+pub const MAX_PROGRAMS: usize = 600;
+pub const MAX_DISKS: usize = 16;
+
+fn tidy_data(d: Data) -> Data {
+    match d {
+        Data::System(s) => Data::System(System {
+            os: text(&s.os, 80),
+            build: text(&s.build, 40),
+            host: text(&s.host, 63),
+            cpu: text(&s.cpu, 80),
+            cores: s.cores.min(4096),
+            mem_total: s.mem_total,
+            mem_used: s.mem_used.min(s.mem_total),
+            disks: s.disks.into_iter().take(MAX_DISKS).map(|d| Disk { name: text(&d.name, 40), total: d.total, free: d.free.min(d.total) }).collect(),
+            uptime_secs: s.uptime_secs,
+            netx: text(&s.netx, 24),
+            tailnet: s.tailnet.parse::<std::net::Ipv4Addr>().map(|a| a.to_string()).unwrap_or_default(),
+        }),
+        Data::Software(s) => {
+            let cut = s.cut || s.programs.len() > MAX_PROGRAMS;
+            let programs = s
+                .programs
+                .into_iter()
+                .take(MAX_PROGRAMS)
+                .map(|p| Program { name: text(&p.name, 80), version: text(&p.version, 32), publisher: text(&p.publisher, 48), installed: p.installed.chars().filter(char::is_ascii_digit).take(8).collect() })
+                .filter(|p| !p.name.is_empty())
+                .collect();
+            Data::Software(Software { programs, cut })
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -106,6 +193,7 @@ pub fn tidy(f: Finished) -> Finished {
                 notes: s.notes.iter().take(MAX_NOTES).map(|n| text(n, 600)).filter(|n| !n.is_empty()).collect(),
             })
             .collect(),
+        data: f.data.map(tidy_data),
     }
 }
 
@@ -236,6 +324,11 @@ impl Mask {
             started: f.started,
             ended: f.ended,
             steps: f.steps.into_iter().map(|s| Step { title: t(&s.title), command: t(&s.command), notes: s.notes.iter().map(|n| t(n)).collect(), ..s }).collect(),
+            // PC 이름은 비운다. 프로그램 이름은 가리지 않는다(가리면 쓸모가 없다 — 동의 화면에 적혀 있다).
+            data: f.data.map(|d| match d {
+                Data::System(sys) => Data::System(System { host: String::new(), ..sys }),
+                other => other,
+            }),
         }
     }
 }
@@ -269,7 +362,7 @@ pub fn to_ocsf(f: &Finished, pc: &str, seq: u64, masked: bool, product_version: 
         },
         "device": {"uid": pc},
         "scan": {"name": f.title, "uid": f.kind, "type_id": 99, "type": "network diagnosis"},
-        "unmapped": {"netx": {"v": VERSION, "kind": f.kind, "target": f.target, "verdict": f.verdict, "masked": masked, "summary": f.summary, "steps": f.steps}},
+        "unmapped": {"netx": {"v": VERSION, "kind": f.kind, "target": f.target, "verdict": f.verdict, "masked": masked, "summary": f.summary, "steps": f.steps, "data": f.data}},
     })
 }
 
@@ -322,6 +415,8 @@ pub fn from_ocsf(body: &Value) -> Option<Parsed> {
         started: body.get("start_time").and_then(Value::as_u64).unwrap_or(ended),
         ended,
         steps,
+        // 정해진 칸만 읽는다. 모양이 아니면 자료 없이 받는다.
+        data: netx.get("data").filter(|d| d.is_object()).and_then(|d| serde_json::from_value::<Data>(d.clone()).ok()),
     });
     Some(Parsed { at: ended, masked: netx.get("masked").and_then(Value::as_bool).unwrap_or(false), item })
 }
@@ -334,7 +429,18 @@ pub fn encode(f: &Finished, pc: &str, seq: u64, masked: bool, product_version: &
         if line.len() <= MAX_ITEM_BYTES - 512 {
             return Some(line);
         }
-        f.steps.pop()?;
+        if f.steps.pop().is_some() {
+            continue;
+        }
+        // 단계가 없는 수집 자료: 프로그램 목록의 뒤를 잘라 맞춘다.
+        match &mut f.data {
+            Some(Data::Software(sw)) if !sw.programs.is_empty() => {
+                let keep = sw.programs.len().saturating_sub(50);
+                sw.programs.truncate(keep);
+                sw.cut = true;
+            }
+            _ => return None,
+        }
     }
 }
 
@@ -352,6 +458,7 @@ mod tests {
             started: 1_763_000_000_000,
             ended: 1_763_000_004_000,
             steps: vec![Step { order: 1, title: "경로 추적".into(), tool: "tracert".into(), command: "tracert -d 192.168.123.1".into(), state: "ok".into(), exit: Some(0), secs: Some(3.2), verdict: "caution".into(), notes: vec!["MYPC에서 aa:bb:cc:dd:ee:ff 로".into()] }],
+            data: None,
         }
     }
 
@@ -419,5 +526,40 @@ mod tests {
         assert!(line.len() <= MAX_ITEM_BYTES);
         let back = from_ocsf(&serde_json::from_str(&line).unwrap()).unwrap();
         assert!(back.item.steps.len() < MAX_STEPS && !back.item.steps.is_empty());
+    }
+
+    #[test]
+    fn inventory_data_round_trips_is_cleaned_and_fits_the_line() {
+        let sys = Finished {
+            kind: "inventory.system".into(),
+            title: "시스템 상세".into(),
+            started: 5,
+            ended: 5,
+            data: Some(Data::System(System { os: "Windows 11\u{202E}".into(), host: "MYPC".into(), cores: 8, mem_total: 16, mem_used: 99, disks: vec![Disk { name: "C:".into(), total: 100, free: 500 }], tailnet: "100.64.0.9".into(), ..System::default() })),
+            ..Finished::default()
+        };
+        let clean = tidy(sys);
+        let Some(Data::System(s)) = &clean.data else { panic!() };
+        assert_eq!((s.os.as_str(), s.mem_used, s.disks[0].free), ("Windows 11", 16, 100));
+        let back = from_ocsf(&serde_json::from_str(&encode(&clean, "pc", 1, false, "t").unwrap()).unwrap()).unwrap();
+        assert_eq!(back.item, clean);
+        // 가리면 PC 이름이 빠진다
+        let masked = Mask::new(true, b"k", "MYPC", "me", None).apply(clean.clone());
+        assert!(matches!(&masked.data, Some(Data::System(s)) if s.host.is_empty()));
+
+        // 프로그램이 아주 많으면 뒤를 자르고 잘랐다고 적는다
+        let many = (0..5000).map(|i| Program { name: format!("프로그램 {i} {}", "가".repeat(70)), version: "1.0".into(), publisher: "만든 곳".repeat(10), installed: "2026-11-19".into() }).collect();
+        let sw = tidy(Finished { kind: "inventory.software".into(), ended: 5, data: Some(Data::Software(Software { programs: many, cut: false })), ..Finished::default() });
+        let line = encode(&sw, "pc", 2, false, "t").unwrap();
+        assert!(line.len() <= MAX_ITEM_BYTES);
+        let back = from_ocsf(&serde_json::from_str(&line).unwrap()).unwrap();
+        let Some(Data::Software(got)) = back.item.data else { panic!() };
+        assert!(got.cut && !got.programs.is_empty() && got.programs.len() <= MAX_PROGRAMS);
+        assert_eq!(got.programs[0].installed, "20261119");
+
+        // 모양이 아닌 자료는 버리고 건은 받는다
+        let mut v: Value = serde_json::from_str(&line).unwrap();
+        v["unmapped"]["netx"]["data"] = json!({"shell": "rm -rf"});
+        assert_eq!(from_ocsf(&v).unwrap().item.data, None);
     }
 }

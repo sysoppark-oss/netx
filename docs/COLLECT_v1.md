@@ -95,3 +95,14 @@ OCSF **Scan Activity**(category_uid 6, class_uid 6007, activity_id 2 = Completed
 
 PC 한 대로: [📥 모음함] → "이 PC를 모음함으로" 켜기 → 듣는 주소가 100.x로 뜨는지 → 진단 하나 실행 → "받은 결과"에 이 PC의 건이 보이는지 → 5분 뒤 "종합 분석" → 보고서의 "모음함" 구역.
 PC 두 대로(둘 다 이 판, 같은 테일스케일): 모음함 PC에서 [새 PC 짝 맺기] → 보내는 PC에서 주소·코드 → 두 화면의 확인 숫자 → [짝 맺기 승인] → 보내는 PC에서 [보내기 켜기] → 진단 → 모음함에 도착.
+
+## 7. 거점 관제로 이름 바꿈, 예약 수집 (2026-11-19)
+
+- 화면에서는 "모음함"을 **거점 관제**, 받는 PC를 **관제 PC**, 보내는 PC를 **거점**이라 부른다. 이 문서의 "모음함"은 같은 것이다. 규약·포트·DB·명령 이름은 그대로다.
+- 근거: 통합프로젝트 「변경 제안 — 거점 관제: 예약 수집과 거점 관리 대시보드 (2판, 확정)」.
+- **접속 내역**: 관제 PC의 `conns` 표(끝난 까닭은 정해진 낱말). 명령 `collect_site`.
+- **수집 자료**: 종류 `inventory.system`, `inventory.software`. 봉투는 진단 결과와 같고 `unmapped.netx.data`에 `{"system":{os, build, host, cpu, cores, mem_total, mem_used, disks:[{name,total,free}], uptime_secs, netx, tailnet}}` 또는 `{"software":{"programs":[{name, version, publisher, installed}], "cut":bool}}`. 가리기를 켜면 `host`는 비운다. 모양이 아닌 `data`는 버리고 건은 받는다.
+- **거점의 동의**: 설정 `inventory`(항목 → `{on, every}`), 기본 비어 있음. 켠 항목만, 보내기나 받기가 켜져 있을 때만 읽는다. 명령을 실행하지 않는다(운영체제 값과 Windows "프로그램 제거" 등록부를 읽기만 한다).
+- **수집 예약표**: 관제 PC의 `hi` 답에 `"plan":true`. 그때만 거점이 `{"t":"plan?","have":판,"on":[승인한 항목]}`을 묻고, 관제 PC는 `{"t":"plan","rev":판,"items":[{"what","every"}]}` 또는 `{"t":"ok"}`로 답한다. 관제 PC는 먼저 보내지 않는다. 거점은 정해진 항목 이름과 한도 안의 주기만 남기고, 사람이 켠 항목에만 그 주기를 쓴다. 짝을 끊으면 예약표를 버린다.
+- 한도: 시스템 15분, 프로그램 6시간, 가장 뜸하게 7일, 프로그램 600개, 예약표 항목 16개.
+- **바로 수집**: 거점 PC의 [지금 수집](명령 `collect_inventory_run`, 켠 항목만). 관제 PC의 [바로 수집](명령 `collect_plan_now`)은 예약표 답에 `"now":[{"what","at"}]`를 실어, 거점이 사람이 켠 항목만 표시 하나에 한 번(1분에 한 번까지) 바로 수집하게 한다. 거점은 20초마다 예약표를 묻는다(`PLAN_EVERY`).

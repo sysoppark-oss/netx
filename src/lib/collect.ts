@@ -301,3 +301,107 @@ export function dayBound(day: string, end: boolean): number {
   const t = new Date(`${day}T${end ? "23:59:59.999" : "00:00:00"}`).getTime();
   return Number.isFinite(t) ? t : 0;
 }
+
+// ---- 예약 수집과 거점 관리 대시보드 ----
+
+export interface InvItem {
+  what: string;
+  title: string;
+  /** 가장 잦은 주기(분) */
+  floor: number;
+  on: boolean;
+  every: number;
+  last: number;
+  /** 관제 PC가 예약표에서 정한 주기(분). 없으면 요청하지 않은 것 */
+  asked: number | null;
+}
+
+export interface PlanCell {
+  what: string;
+  title: string;
+  floor: number;
+  every: number | null;
+  approved: boolean;
+  /** 이 항목을 마지막으로 받은 때(없으면 0) */
+  last: number;
+  /** [바로 수집]을 마지막으로 누른 때(없으면 0) */
+  now: number;
+}
+
+export interface PlanRow {
+  pc: Pc;
+  asked: number;
+  delivered: boolean;
+  cells: PlanCell[];
+}
+
+export const collectPlan = () => invoke<PlanRow[]>("collect_plan");
+export const collectPlanNow = (id: string, what: string) => invoke<void>("collect_plan_now", { id, what });
+export const collectInventoryRun = (what: string) => invoke<InvItem[]>("collect_inventory_run", { what });
+export const collectPlanSet = (id: string, what: string, every: number | null) => invoke<void>("collect_plan_set", { id, what, every });
+
+export interface Disk {
+  name: string;
+  total: number;
+  free: number;
+}
+
+export interface SystemInfo {
+  os: string;
+  build: string;
+  host: string;
+  cpu: string;
+  cores: number;
+  mem_total: number;
+  mem_used: number;
+  disks: Disk[];
+  uptime_secs: number;
+  netx: string;
+  tailnet: string;
+}
+
+export interface Program {
+  name: string;
+  version: string;
+  publisher: string;
+  installed: string;
+}
+
+export interface FleetSite {
+  pc: Pc;
+  system_at: number;
+  system: SystemInfo | null;
+  software_at: number;
+  programs: Program[];
+  cut: boolean;
+  prev_at: number;
+  added: Program[];
+  removed: Program[];
+  changed: [string, string, string][];
+}
+
+/** 미리 보기: 지금 나갈 모양 그대로 */
+export interface InvPreview {
+  title: string;
+  summary: string[];
+  data?: { system?: SystemInfo; software?: { programs: Program[]; cut: boolean } };
+}
+
+export const collectInventory = () => invoke<InvItem[]>("collect_inventory");
+export const collectInventorySet = (what: string, on: boolean, every: number) => invoke<InvItem[]>("collect_inventory_set", { what, on, every });
+export const collectInventoryPreview = (what: string) => invoke<InvPreview>("collect_inventory_preview", { what });
+export const collectFleet = () => invoke<FleetSite[]>("collect_fleet");
+
+export const EVERY_CHOICES: { minutes: number; label: string }[] = [
+  { minutes: 15, label: "15분마다" },
+  { minutes: 60, label: "1시간마다" },
+  { minutes: 360, label: "6시간마다" },
+  { minutes: 720, label: "12시간마다" },
+  { minutes: 1440, label: "하루 한 번" },
+  { minutes: 10080, label: "일주일에 한 번" },
+];
+
+export function gbText(bytes: number): string {
+  const gb = bytes / 1024 / 1024 / 1024;
+  return gb >= 100 ? `${Math.round(gb)}GB` : `${gb.toFixed(1)}GB`;
+}

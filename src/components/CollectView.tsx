@@ -33,9 +33,10 @@ import {
   type SentRow,
   type Verdict,
 } from "../lib/collect";
+import { FleetDashboard, InventoryConsent } from "./FleetView";
 import { SiteDetail } from "./SiteDetail";
 
-type Tab = "inbox" | "analysis" | "send" | "receive";
+type Tab = "dashboard" | "inbox" | "analysis" | "send" | "receive";
 
 const TONE: Record<Verdict, string> = { ok: "text-safe", caution: "text-caution", danger: "text-danger", unknown: "text-dim" };
 const BTN = "rounded border border-line px-2.5 py-1 text-xs hover:bg-raised disabled:opacity-50";
@@ -519,7 +520,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           </div>
         ) : (
           <div className="space-y-1.5 text-xs">
-            <p className="text-dim">관제 PC PC의 NetX에서 [새 PC 짝 맺기]를 누르면 그 화면에 주소와 일회용 코드가 뜹니다(2분 동안). 그것을 여기에 적습니다.</p>
+            <p className="text-dim">관제 PC의 NetX에서 [새 PC 짝 맺기]를 누르면 그 화면에 주소와 일회용 코드가 뜹니다(2분 동안). 그것을 여기에 적습니다.</p>
             <div className="flex flex-wrap items-center gap-2">
               <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="관제 PC의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
               <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="일회용 코드" maxLength={24} autoComplete="off" spellCheck={false} className={`${FIELD} w-40 font-mono uppercase`} />
@@ -539,7 +540,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           <div className="rounded border border-line px-3 py-2 text-xs">
             <p className="mb-1">
               켜면 이 PC에서 끝난 진단마다 아래 항목이{" "}
-              <b>{c.collector ? `${c.collector.name || "관제 PC"} (${c.collector.addr})` : "짝 맺은 관제 PC"}</b>(으)로 나갑니다. 지금은 <b>꺼져 있습니다.</b>
+              <b>{c.collector ? `${c.collector.name || "관제 PC"} (${c.collector.addr})` : "짝 맺은 관제 PC"}</b>로 나갑니다. 지금은 <b>꺼져 있습니다.</b>
             </p>
             <ul className="list-disc pl-5">
               {SENT_FIELDS.map((f) => (
@@ -581,6 +582,8 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           </span>
         </label>
       </section>
+
+      <InventoryConsent ready={(c.send && !!c.collector) || c.receive} onError={onError} />
 
       <section>
         <h2 className="mb-1 text-xs font-semibold text-dim">나간 건의 목록 (최근 200건)</h2>
@@ -709,8 +712,8 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
   );
 }
 
-export function CollectView({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("inbox");
+export function CollectView({ onClose, initial = "dashboard" }: { onClose: () => void; initial?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initial);
   const [ov, setOv] = useState<Overview | null>(null);
   const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [], strangers: [] });
   const [error, setError] = useState<string | null>(null);
@@ -732,6 +735,7 @@ export function CollectView({ onClose }: { onClose: () => void }) {
   }, [reload, fast]);
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: "dashboard", label: "대시보드" },
     { id: "inbox", label: "받은 결과" },
     { id: "analysis", label: "종합 분석" },
     { id: "send", label: `보내기${ov?.config.send ? " ●" : ""}` },
@@ -760,6 +764,14 @@ export function CollectView({ onClose }: { onClose: () => void }) {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {!ov ? (
             <p className="text-sm text-dim">읽는 중…</p>
+          ) : tab === "dashboard" ? (
+            !ov.config.receive && board.pcs.length === 0 ? (
+              <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">
+                이 PC는 관제 PC로 쓰고 있지 않습니다. 거점을 여기서 관리하려면 "이 PC를 관제 PC로" 탭에서 켜세요. 이 PC가 거점이면 "보내기" 탭을 쓰세요.
+              </p>
+            ) : (
+              <FleetDashboard onError={setError} />
+            )
           ) : tab === "inbox" ? (
             !ov.config.receive && board.pcs.length === 0 ? (
               <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">

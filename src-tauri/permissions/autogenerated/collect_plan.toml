@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-plan"
+description = "Enables the collect_plan command without any pre-configured scope."
+commands.allow = ["collect_plan"]
+
+[[permission]]
+identifier = "deny-collect-plan"
+description = "Denies the collect_plan command without any pre-configured scope."
+commands.deny = ["collect_plan"]

@@ -88,6 +88,9 @@ CREATE TABLE IF NOT EXISTS conns(
   stored INTEGER NOT NULL, again INTEGER NOT NULL, refused INTEGER NOT NULL, bytes INTEGER NOT NULL, first_seq INTEGER NOT NULL, last_seq INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS conns_at ON conns(at);
 CREATE INDEX IF NOT EXISTS conns_pc ON conns(pc, id);
+CREATE TABLE IF NOT EXISTS plans(pc TEXT NOT NULL, what TEXT NOT NULL, every INTEGER NOT NULL, PRIMARY KEY(pc, what));
+CREATE TABLE IF NOT EXISTS plan_now(pc TEXT NOT NULL, what TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(pc, what));
+CREATE TABLE IF NOT EXISTS plan_state(pc TEXT PRIMARY KEY, rev INTEGER NOT NULL DEFAULT 0, asked INTEGER NOT NULL DEFAULT 0, have INTEGER NOT NULL DEFAULT 0, approved TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS sum_hour(hour INTEGER PRIMARY KEY, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL, unknown INTEGER NOT NULL);
 ";
 
@@ -488,7 +491,7 @@ impl Inbox {
                FROM items WHERE target != '' GROUP BY target, pc;
              INSERT INTO sum_hour(hour, ok, caution, danger, unknown)
                SELECT at / 3600000, SUM(verdict = 'ok'), SUM(verdict = 'caution'), SUM(verdict = 'danger'), SUM(verdict NOT IN ('ok', 'caution', 'danger'))
-               FROM items GROUP BY at / 3600000;",
+               FROM items WHERE kind NOT LIKE 'inventory.%' GROUP BY at / 3600000;",
         )
         .map_err(e)?;
         tx.execute("INSERT INTO meta(k, v) VALUES('summed', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1", params![now as i64]).map_err(e)?;
@@ -642,6 +645,73 @@ impl Inbox {
     pub fn item(&self, pc: &str, seq: u64) -> Option<wire::Finished> {
         let body: String = self.db().query_row("SELECT body FROM items WHERE pc = ?1 AND seq = ?2", params![pc, seq as i64], |r| r.get(0)).optional().ok()??;
         wire::from_ocsf(&serde_json::from_str(&body).ok()?).map(|p| p.item)
+    }
+
+    // ---- 수집 예약표(관제 PC가 거점별로 정한 항목과 주기) ----
+
+    /// 거점의 예약표에서 한 항목의 주기를 정하거나(분) 뺀다. 바뀌면 판 번호가 오른다.
+    pub fn plan_set(&self, pc: &str, what: &str, every: Option<u32>) -> Result<(), String> {
+        let mut db = self.db();
+        let tx = db.transaction().map_err(e)?;
+        match every {
+            Some(m) => tx.execute("INSERT INTO plans(pc, what, every) VALUES(?1, ?2, ?3) ON CONFLICT(pc, what) DO UPDATE SET every = ?3", params![pc, what, m]),
+            None => tx.execute("DELETE FROM plans WHERE pc = ?1 AND what = ?2", params![pc, what]),
+        }
+        .map_err(e)?;
+        tx.execute("INSERT INTO plan_state(pc, rev) VALUES(?1, 1) ON CONFLICT(pc) DO UPDATE SET rev = rev + 1", params![pc]).map_err(e)?;
+        tx.commit().map_err(e)
+    }
+
+    /// [바로 수집]: 거점이 다음에 예약표를 물을 때 "이 항목을 한 번 바로 수집해 달라"는 표시를 함께 받아 가게 한다.
+    pub fn plan_now(&self, pc: &str, what: &str, now: u64) -> Result<(), String> {
+        let mut db = self.db();
+        let tx = db.transaction().map_err(e)?;
+        tx.execute("INSERT INTO plan_now(pc, what, at) VALUES(?1, ?2, ?3) ON CONFLICT(pc, what) DO UPDATE SET at = ?3", params![pc, what, now as i64]).map_err(e)?;
+        tx.execute("INSERT INTO plan_state(pc, rev) VALUES(?1, 1) ON CONFLICT(pc) DO UPDATE SET rev = rev + 1", params![pc]).map_err(e)?;
+        tx.commit().map_err(e)
+    }
+
+    /// 거점별 바로 수집 표시: [(항목, 누른 때)]
+    pub fn plan_nows(&self, pc: &str) -> Vec<(String, u64)> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT what, at FROM plan_now WHERE pc = ?1 ORDER BY what") else { return Vec::new() };
+        st.query_map(params![pc], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64))).map(|r| r.flatten().collect()).unwrap_or_default()
+    }
+
+    /// 거점의 예약표: (판 번호, [(항목, 주기)])
+    pub fn plan(&self, pc: &str) -> (u64, Vec<(String, u32)>) {
+        let db = self.db();
+        let rev: i64 = db.query_row("SELECT rev FROM plan_state WHERE pc = ?1", params![pc], |r| r.get(0)).optional().unwrap_or(None).unwrap_or(0);
+        let Ok(mut st) = db.prepare("SELECT what, every FROM plans WHERE pc = ?1 ORDER BY what") else { return (rev as u64, Vec::new()) };
+        let items = st.query_map(params![pc], |r| Ok((r.get(0)?, r.get(1)?))).map(|r| r.flatten().collect()).unwrap_or_default();
+        (rev as u64, items)
+    }
+
+    /// 거점이 예약표를 물어 온 것을 적는다: 언제, 거점이 가진 판, 거점에서 사람이 승인한 항목(쉼표로 이은 정해진 이름).
+    pub fn plan_asked(&self, pc: &str, now: u64, have: u64, approved: &str) {
+        let _ = self.db().execute(
+            "INSERT INTO plan_state(pc, asked, have, approved) VALUES(?1, ?2, ?3, ?4) ON CONFLICT(pc) DO UPDATE SET asked = ?2, have = ?3, approved = ?4",
+            params![pc, now as i64, have.min(i64::MAX as u64) as i64, approved],
+        );
+    }
+
+    /// (마지막으로 물어 온 때, 거점이 가진 판, 승인한 항목들)
+    pub fn plan_seen(&self, pc: &str) -> (u64, u64, Vec<String>) {
+        self.db()
+            .query_row("SELECT asked, have, approved FROM plan_state WHERE pc = ?1", params![pc], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, String>(2)?)))
+            .optional()
+            .unwrap_or(None)
+            .map(|(a, h, s)| (a, h, s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()))
+            .unwrap_or_default()
+    }
+
+    /// 한 PC의 한 종류에서 가장 최근 것부터 `n`건(진단 시각, 내용)
+    pub fn latest(&self, pc: &str, kind: &str, n: u32) -> Vec<(u64, wire::Finished)> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT at, body FROM items WHERE pc = ?1 AND kind = ?2 ORDER BY seq DESC LIMIT ?3") else { return Vec::new() };
+        st.query_map(params![pc, kind, n.min(10)], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)))
+            .map(|rows| rows.flatten().filter_map(|(at, body)| Some((at, wire::from_ocsf(&serde_json::from_str(&body).ok()?)?.item))).collect())
+            .unwrap_or_default()
     }
 
     pub fn kinds(&self) -> Vec<String> {

@@ -9,11 +9,13 @@
 //! - 다른 PC로의 조회 의뢰(2단계)의 통로는 여기에 없다.
 
 pub mod app;
+pub mod inventory;
 pub mod key;
 pub mod net;
 pub mod store;
 pub mod wire;
 
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -85,11 +87,48 @@ pub struct Config {
     pub keep_days: u32,
     #[serde(default = "port_default")]
     pub port: u16,
+    /// 예약 수집: 이 PC에서 사람이 켠 항목과 주기. 기본은 비어 있다(아무것도 수집하지 않는다).
+    #[serde(default)]
+    pub inventory: BTreeMap<String, Inv>,
+    /// 관제 PC에서 받아 온 수집 예약표. 여기 있다고 도는 것이 아니다 — `inventory`에서 사람이 켠 항목의 주기만 정한다.
+    #[serde(default)]
+    pub plan: Plan,
+}
+
+/// 관제 PC가 정한 수집 예약표(정해진 항목 이름 → 주기(분))
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Plan {
+    #[serde(default)]
+    pub rev: u64,
+    #[serde(default)]
+    pub items: BTreeMap<String, u32>,
+    /// 관제 PC에서 [바로 수집]을 누른 때(항목 이름 → 시각). 사람이 켠 항목만, 표시 하나에 한 번 돈다.
+    #[serde(default)]
+    pub now: BTreeMap<String, u64>,
+}
+
+/// 바로 수집 사이의 가장 짧은 간격
+pub const NOW_GAP: u64 = 60_000;
+
+/// 예약표 한 장에 실을 수 있는 항목 수
+pub const PLAN_MAX: usize = 16;
+
+fn clean_plan(items: impl Iterator<Item = (String, u64)>) -> BTreeMap<String, u32> {
+    items.take(PLAN_MAX).filter_map(|(w, e)| inventory::known(&w).map(|(name, _, floor, _)| (name.to_string(), (e.min(u64::from(inventory::EVERY_MAX)) as u32).clamp(floor, inventory::EVERY_MAX)))).collect()
+}
+
+/// 예약 수집 한 항목의 설정
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Inv {
+    /// 이 PC에서 사람이 승인했다
+    pub on: bool,
+    /// 주기(분)
+    pub every: u32,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { send: false, mask: true, receive: false, name: String::new(), collector: None, keep_days: store::KEEP_DAYS_DEFAULT, port: PORT_DEFAULT }
+        Config { send: false, mask: true, receive: false, name: String::new(), collector: None, keep_days: store::KEEP_DAYS_DEFAULT, port: PORT_DEFAULT, inventory: BTreeMap::new(), plan: Plan::default() }
     }
 }
 
@@ -102,6 +141,10 @@ fn load_config(dir: &Path) -> Config {
         c.port = PORT_DEFAULT;
     }
     c.name = wire::text(&c.name, 40);
+    // 손으로 고친 설정 파일이라도 정해진 항목만, 한도 안의 주기로만 돈다.
+    c.plan.now.retain(|k, _| inventory::known(k).is_some());
+    c.plan.items = clean_plan(std::mem::take(&mut c.plan.items).into_iter().map(|(w, e)| (w, u64::from(e))));
+    c.inventory = c.inventory.into_iter().filter_map(|(k, v)| inventory::known(&k).map(|(_, _, floor, _)| (k, Inv { on: v.on, every: v.every.clamp(floor, inventory::EVERY_MAX) }))).collect();
     // 손으로 고친 설정 파일이라도 테일스케일 밖 주소로는 보내지 않는다.
     c.collector = c.collector.filter(|k| key::is_fingerprint(&k.id) && k.addr.parse::<Ipv4Addr>().is_ok_and(tailnet) && k.port >= 1024);
     c
@@ -181,7 +224,11 @@ pub struct Hub {
     pub status: Mutex<Status>,
     /// 보낼 것이 생겼거나 설정이 바뀌었다.
     pub wake: Notify,
+    /// 예약 수집 항목별로 마지막에 돌린 때
+    inv_last: Mutex<BTreeMap<String, u64>>,
 }
+
+const INV_FILE: &str = "inventory.json";
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -209,6 +256,7 @@ impl Hub {
             join: Mutex::new(Join::Idle),
             status: Mutex::new(Status::default()),
             wake: Notify::new(),
+            inv_last: Mutex::new(std::fs::read_to_string(dir.join(INV_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()),
         };
         if hub.config().receive {
             hub.inbox.pair(&hub.me.id(), &hub.config().name, "", true, now_ms())?;
@@ -250,10 +298,102 @@ impl Hub {
         Ok(c)
     }
 
+    /// 예약 수집 한 항목을 켜거나 끄고 주기를 정한다(이 PC에서 사람이 한다).
+    pub fn set_inventory(&self, what: &str, on: bool, every: u32) -> Result<Config, String> {
+        let (name, _, floor, _) = inventory::known(what).ok_or("모르는 수집 항목입니다")?;
+        let mut c = self.config();
+        c.inventory.insert(name.to_string(), Inv { on, every: every.clamp(floor, inventory::EVERY_MAX) });
+        self.save(&c)?;
+        Ok(c)
+    }
+
+    /// 관제 PC가 답한 예약표를 받아 둔다. 정해진 항목 이름과 한도 안의 주기만 남기고 나머지 칸은 읽지 않는다.
+    pub fn accept_plan(&self, answer: &serde_json::Value) {
+        use serde_json::Value;
+        let Some(rev) = answer.get("rev").and_then(Value::as_u64) else { return };
+        let items = answer.get("items").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let mut c = self.config();
+        let nows = answer.get("now").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let now = nows.iter().take(PLAN_MAX).filter_map(|i| Some((inventory::known(i.get("what")?.as_str()?)?.0.to_string(), i.get("at")?.as_u64()?))).collect();
+        c.plan = Plan { rev, items: clean_plan(items.iter().filter_map(|i| Some((i.get("what")?.as_str()?.to_string(), i.get("every")?.as_u64()?)))), now };
+        let _ = self.save(&c);
+    }
+
+    /// 항목별로 마지막에 돌린 때
+    pub fn inventory_last(&self) -> BTreeMap<String, u64> {
+        lock(&self.inv_last).clone()
+    }
+
+    /// 지금 내보낼 모양 그대로(가리기 설정까지 적용한) 수집 한 건. 화면의 미리 보기와 실제 수집이 같은 길을 쓴다.
+    pub fn inventory_now(&self, what: &str) -> Option<wire::Finished> {
+        let f = wire::tidy(inventory::collect(what, &self.version, &self.host, now_ms())?);
+        Some(wire::Mask::new(self.config().mask, &self.secret, &self.host, &self.user, None).apply(f))
+    }
+
+    /// 거점 PC 앞의 사람이 [지금 수집]을 눌렀다. 켜 둔 항목만 돈다.
+    pub fn inventory_run(&self, what: &str, now: u64) -> Result<(), String> {
+        let (name, _, _, _) = inventory::known(what).ok_or("모르는 수집 항목입니다")?;
+        let c = self.config();
+        if !c.inventory.get(name).is_some_and(|v| v.on) {
+            return Err("먼저 이 항목을 켜야 합니다".into());
+        }
+        if !(c.send && c.collector.is_some()) && !c.receive {
+            return Err("보내기가 꺼져 있어 수집하지 않습니다".into());
+        }
+        let last = lock(&self.inv_last).get(name).copied().unwrap_or(0);
+        if now < last.saturating_add(10_000) {
+            return Err("방금 수집했습니다. 잠시 뒤에 다시 눌러 주세요".into());
+        }
+        let f = inventory::collect(name, &self.version, &self.host, now).ok_or("수집하지 못했습니다")?;
+        self.submit(f, None)?;
+        lock(&self.inv_last).insert(name.to_string(), now);
+        if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
+            let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
+        }
+        Ok(())
+    }
+
+    /// 켜 둔 항목 가운데 때가 된 것을 한 번씩 돌려 보낼 함에 넣는다. 돌린 항목 이름을 돌려준다.
+    /// 보내기도 받기도 꺼져 있으면 아무것도 읽지 않는다. 꺼져 있던 동안 밀린 것은 한 번만 돈다.
+    pub fn inventory_due(&self, now: u64) -> Vec<String> {
+        let c = self.config();
+        if !(c.send && c.collector.is_some()) && !c.receive {
+            return Vec::new();
+        }
+        let mut ran = Vec::new();
+        for (what, inv) in c.inventory.iter().filter(|(_, v)| v.on) {
+            let last = lock(&self.inv_last).get(what).copied().unwrap_or(0);
+            // 주기: 관제 PC의 예약표에 있으면 그것, 없으면 이 PC에서 정한 것.
+            let every = c.plan.items.get(what).copied().unwrap_or(inv.every);
+            // 관제 PC의 [바로 수집] 표시: 아직 치르지 않은 표시가 있으면 주기를 기다리지 않는다(표시 하나에 한 번, 1분에 한 번까지).
+            let mark = c.plan.now.get(what).copied().unwrap_or(0);
+            let key = format!("now.{what}");
+            let fresh = mark > lock(&self.inv_last).get(&key).copied().unwrap_or(0) && now >= last.saturating_add(NOW_GAP);
+            if !fresh && now < last.saturating_add(u64::from(every) * 60_000) {
+                continue;
+            }
+            if mark > 0 {
+                lock(&self.inv_last).insert(key, mark);
+            }
+            let Some(f) = inventory::collect(what, &self.version, &self.host, now) else { continue };
+            if self.submit(f, None).is_ok() {
+                lock(&self.inv_last).insert(what.clone(), now);
+                ran.push(what.clone());
+            }
+        }
+        if !ran.is_empty() {
+            if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
+                let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
+            }
+        }
+        ran
+    }
+
     /// 보내는 쪽: 관제 PC와의 짝을 끊는다. 보내기도 꺼지고 기다리던 것은 비운다.
     pub fn forget_collector(&self) -> Result<(), String> {
         let mut c = self.config();
         c.collector = None;
+        c.plan = Plan::default();
         c.send = false;
         self.outbox.clear_queue();
         *lock(&self.join) = Join::Idle;
@@ -487,5 +627,25 @@ mod tests {
         hub.decide(false).unwrap();
         assert!(!rx.blocking_recv().unwrap());
         assert!(hub.inbox.admitted(&other).is_err());
+    }
+
+    #[test]
+    fn inventory_runs_only_what_a_person_turned_on_and_only_when_due() {
+        let hub = test_hub("거점");
+        assert!(hub.set_inventory("processes", true, 60).is_err(), "정해진 항목만");
+        hub.set_inventory("system", true, 1).unwrap();
+        assert_eq!(hub.config().inventory["system"].every, 15, "한도보다 잦게 돌지 않는다");
+        let now = now_ms();
+        assert!(hub.inventory_due(now).is_empty(), "보내기도 받기도 꺼져 있으면 읽지 않는다");
+        hub.set(false, true, true, "거점", 90).unwrap();
+        assert_eq!(hub.inventory_due(now), ["system"]);
+        assert!(hub.inventory_due(now + 14 * 60_000).is_empty());
+        assert_eq!(hub.inventory_due(now + 15 * 60_000), ["system"]);
+        hub.set_inventory("system", false, 15).unwrap();
+        assert!(hub.inventory_due(now + 99 * 60_000).is_empty(), "끄면 멈춘다");
+        let (rows, total) = hub.inbox.list(&store::Filter::default());
+        assert_eq!((total, rows[0].kind.as_str()), (2, "inventory.system"));
+        // 가리기를 켠 미리 보기에는 PC 이름이 없다
+        assert!(matches!(hub.inventory_now("system").unwrap().data, Some(wire::Data::System(s)) if s.host.is_empty()));
     }
 }
