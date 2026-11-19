@@ -1,7 +1,7 @@
 //! PC 사이 통로: 테일스케일 주소에서만 듣고, TLS 1.3 상호 인증 뒤에 한 줄 JSON을 주고받는다.
 //!
-//! 보내는 쪽 → 모음함:  pair / hi / alive / dropped / put      모음함 → 보내는 쪽:  답(pair.wait, pair.ok, pair.no, ok, ack, no)뿐.
-//! 모음함이 먼저 보내는 줄은 없다. 상호 인증이 끝나고 지문이 짝으로 확인되기 전에는 어떤 자료도 처리하지 않는다.
+//! 보내는 쪽 → 관제 PC:  pair / hi / alive / dropped / put      관제 PC → 보내는 쪽:  답(pair.wait, pair.ok, pair.no, ok, ack, no)뿐.
+//! 관제 PC가 먼저 보내는 줄은 없다. 상호 인증이 끝나고 지문이 짝으로 확인되기 전에는 어떤 자료도 처리하지 않는다.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use tokio_rustls::rustls::server::danger::{ClientCertVerified, ClientCertVerifie
 use tokio_rustls::rustls::{self, ClientConfig, DigitallySignedStruct, DistinguishedName, ServerConfig, SignatureScheme};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
-use super::store::{Taken, Why};
+use super::store::{Conn, Taken, Why};
 use super::{Collector, Hub, Join, PAIR_WINDOW, key, lock, now_ms, tailnet, wire};
 
 /// 동시에 받는 접속 수
@@ -60,7 +60,7 @@ impl ClientCertVerifier for AnyPeer {
     }
 }
 
-/// 저장된 지문과 같은 모음함만 받아들인다. 짝 맺는 중(`expect` 없음)에는 서명만 확인하고, 누구인지는 코드 증명과 확인 숫자로 가린다.
+/// 저장된 지문과 같은 관제 PC만 받아들인다. 짝 맺는 중(`expect` 없음)에는 서명만 확인하고, 누구인지는 코드 증명과 확인 숫자로 가린다.
 #[derive(Debug)]
 struct Pinned {
     expect: Option<String>,
@@ -71,7 +71,7 @@ impl ServerCertVerifier for Pinned {
     fn verify_server_cert(&self, end: &CertificateDer<'_>, _chain: &[CertificateDer<'_>], _name: &ServerName<'_>, _ocsp: &[u8], _now: UnixTime) -> Result<ServerCertVerified, rustls::Error> {
         let got = key::fingerprint(end.as_ref()).ok_or_else(|| rustls::Error::General("인증서가 아닙니다".into()))?;
         match &self.expect {
-            Some(want) if !key::same(want, &got) => Err(rustls::Error::General("모음함의 지문이 저장된 것과 다릅니다".into())),
+            Some(want) if !key::same(want, &got) => Err(rustls::Error::General("관제 PC의 지문이 저장된 것과 다릅니다".into())),
             _ => Ok(ServerCertVerified::assertion()),
         }
     }
@@ -183,10 +183,10 @@ fn kind(v: &Value) -> &str {
     v.get("t").and_then(Value::as_str).unwrap_or("")
 }
 
-// ================= 모음함(받는 쪽) =================
+// ================= 관제 PC(받는 쪽) =================
 
 /// 테일스케일 주소에 묶어 듣는다. 주소가 없거나 묶지 못하면 듣지 않는다(다른 주소로 대신 듣지 않는다).
-/// 주소가 바뀌거나 "모음함으로 쓰기"가 꺼지면 닫고, 다시 맞는 주소가 생기면 묶는다.
+/// 주소가 바뀌거나 "관제 PC로 쓰기"가 꺼지면 닫고, 다시 맞는 주소가 생기면 묶는다.
 pub async fn run_listener(hub: Arc<Hub>) {
     let mut last_purge = 0u64;
     loop {
@@ -257,27 +257,52 @@ pub async fn serve_on(hub: Arc<Hub>, listener: TcpListener) {
             tokio::time::sleep(Duration::from_millis(200)).await;
             continue;
         };
+        let addr = peer.ip().to_string();
         if !allowed_peer(peer.ip()) {
+            note(&hub, "", &addr, "outside");
             continue;
         }
-        let Ok(slot) = slots.clone().try_acquire_owned() else { continue };
+        let Ok(slot) = slots.clone().try_acquire_owned() else {
+            note(&hub, "", &addr, "busy");
+            continue;
+        };
         let (hub, acceptor) = (hub.clone(), acceptor.clone());
         tokio::spawn(async move {
             let _slot = slot;
-            let Ok(Ok(tls)) = timeout(HANDSHAKE, acceptor.accept(tcp)).await else { return };
-            let Some(id) = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| key::fingerprint(c.as_ref())) else { return };
+            let Ok(Ok(tls)) = timeout(HANDSHAKE, acceptor.accept(tcp)).await else {
+                note(&hub, "", &addr, "tls");
+                return;
+            };
+            let Some(id) = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| key::fingerprint(c.as_ref())) else {
+                note(&hub, "", &addr, "tls");
+                return;
+            };
             let (r, mut w) = tokio::io::split(tls);
-            session(&hub, &id, &peer.ip().to_string(), BufReader::new(r), &mut w).await;
+            session(&hub, &id, &addr, BufReader::new(r), &mut w).await;
             let _ = w.shutdown().await;
         });
     }
 }
 
-/// 인증이 끝난 한 접속. `id`는 상대 공개 키의 지문이다.
-async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &str, addr: &str, mut reader: BufReader<R>, writer: &mut W) {
-    let Some(first) = read_line(&mut reader, HANDSHAKE).await else { return };
+/// 말을 나누기 전에 끝난 접속을 적는다.
+fn note(hub: &Hub, id: &str, addr: &str, outcome: &str) {
+    hub.inbox.log_conn(&Conn { at: now_ms(), pc: id.to_string(), addr: addr.to_string(), outcome: outcome.to_string(), ..Conn::default() });
+}
+
+/// 인증이 끝난 한 접속을 치르고, 어떻게 끝났는지 접속 내역에 적는다.
+async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &str, addr: &str, reader: BufReader<R>, writer: &mut W) {
+    let mut talk = Conn { at: now_ms(), pc: id.to_string(), addr: addr.to_string(), ..Conn::default() };
+    let outcome = converse(hub, id, addr, reader, writer, &mut talk).await;
+    talk.outcome = outcome.to_string();
+    talk.ms = now_ms().saturating_sub(talk.at);
+    hub.inbox.log_conn(&talk);
+}
+
+/// 인증이 끝난 한 접속. `id`는 상대 공개 키의 지문이다. 돌려주는 것은 끝난 까닭(정해진 낱말)이다.
+async fn converse<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &str, addr: &str, mut reader: BufReader<R>, writer: &mut W, talk: &mut Conn) -> &'static str {
+    let Some(first) = read_line(&mut reader, HANDSHAKE).await else { return "strange" };
     if first.get("v").and_then(Value::as_u64) != Some(u64::from(wire::VERSION)) {
-        return;
+        return "version";
     }
     match kind(&first) {
         "pair" => {
@@ -285,31 +310,32 @@ async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &st
             let proof = first.get("proof").and_then(Value::as_str).unwrap_or("");
             let Some((reply, _number, decision)) = hub.try_pair(id, name, addr, proof) else {
                 let _ = write_line(writer, &json!({"t": "pair.no"})).await;
-                return;
+                return "pair_no";
             };
             if !write_line(writer, &json!({"t": "pair.wait", "proof": reply, "name": hub.config().name, "port": hub.config().port})).await {
                 hub.close_window();
-                return;
+                return "pair_no";
             }
             // 사람이 [짝 맺기 승인]을 누르기를 기다린다. 창이 닫히거나 시간이 지나면 거절이다.
             let approved = timeout(PAIR_WINDOW, decision).await.ok().and_then(Result::ok).unwrap_or(false);
             let _ = write_line(writer, &json!({"t": if approved { "pair.ok" } else { "pair.no" }})).await;
+            if approved { "pair_ok" } else { "pair_no" }
         }
         "hi" => {
             if let Err(why) = hub.inbox.admitted(id) {
                 let _ = write_line(writer, &json!({"t": "no", "why": why.code()})).await;
-                return;
+                return if why == Why::Stopped { "stopped" } else { "unknown" };
             }
             hub.inbox.seen(id, addr, now_ms());
             if !write_line(writer, &json!({"t": "hi", "v": wire::VERSION})).await {
-                return;
+                return "closed";
             }
             while let Some(msg) = read_line(&mut reader, IDLE).await {
                 let now = now_ms();
                 let answer = match kind(&msg) {
                     "alive" => {
                         if hub.inbox.admitted(id).is_err() {
-                            return;
+                            return "stopped";
                         }
                         hub.inbox.seen(id, addr, now);
                         json!({"t": "ok"})
@@ -322,7 +348,20 @@ async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &st
                     "put" => {
                         let seq = msg.get("seq").and_then(Value::as_u64).unwrap_or(0);
                         let body = msg.get("body").and_then(Value::as_str).unwrap_or("");
-                        match hub.inbox.take(id, seq, body, now) {
+                        let taken = hub.inbox.take(id, seq, body, now);
+                        match &taken {
+                            Ok(Taken::Stored) => {
+                                talk.stored += 1;
+                                talk.bytes += body.len() as u64;
+                                if talk.first_seq == 0 {
+                                    talk.first_seq = seq;
+                                }
+                                talk.last_seq = seq;
+                            }
+                            Ok(Taken::Again) => talk.again += 1,
+                            _ => talk.refused += 1,
+                        }
+                        match taken {
                             Ok(Taken::Stored | Taken::Again) => json!({"t": "ack", "seq": seq}),
                             Ok(Taken::Refused(why)) => {
                                 let _ = write_line(writer, &json!({"t": "no", "seq": seq, "why": why.code()})).await;
@@ -330,20 +369,21 @@ async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &st
                                 if why == Why::Old {
                                     continue;
                                 }
-                                return;
+                                return "refused";
                             }
-                            Err(_) => return,
+                            Err(_) => return "refused",
                         }
                     }
                     // 모르는 줄(2단계의 의뢰 포함)은 받지 않는다.
-                    _ => return,
+                    _ => return "strange",
                 };
                 if !write_line(writer, &answer).await {
-                    return;
+                    return "closed";
                 }
             }
+            "ok"
         }
-        _ => {}
+        _ => "strange",
     }
 }
 
@@ -351,23 +391,23 @@ async fn session<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &st
 
 async fn connect(hub: &Hub, addr: Ipv4Addr, port: u16, expect: Option<String>) -> Result<tokio_rustls::client::TlsStream<TcpStream>, String> {
     if !allowed_peer(IpAddr::V4(addr)) {
-        return Err("모음함 주소가 테일스케일 주소(100.64.0.0/10)가 아닙니다".into());
+        return Err("관제 PC 주소가 테일스케일 주소(100.64.0.0/10)가 아닙니다".into());
     }
     let config = client_config(&hub.me, expect)?;
-    let tcp = timeout(HANDSHAKE, TcpStream::connect((addr, port))).await.map_err(|_| "모음함에 닿지 않습니다(시간 초과)".to_string())?.map_err(|e| format!("모음함에 닿지 않습니다: {e}"))?;
+    let tcp = timeout(HANDSHAKE, TcpStream::connect((addr, port))).await.map_err(|_| "관제 PC에 닿지 않습니다(시간 초과)".to_string())?.map_err(|e| format!("관제 PC에 닿지 않습니다: {e}"))?;
     let name = ServerName::try_from("netx-collect").map_err(|e| e.to_string())?;
-    timeout(HANDSHAKE, TlsConnector::from(Arc::new(config)).connect(name, tcp)).await.map_err(|_| "모음함과의 인증이 끝나지 않았습니다".to_string())?.map_err(|e| format!("모음함과 인증하지 못했습니다: {e}"))
+    timeout(HANDSHAKE, TlsConnector::from(Arc::new(config)).connect(name, tcp)).await.map_err(|_| "관제 PC와의 인증이 끝나지 않았습니다".to_string())?.map_err(|e| format!("관제 PC와 인증하지 못했습니다: {e}"))
 }
 
-/// 보내는 쪽 짝 맺기: 모음함 화면의 코드를 넣는다. 코드가 맞으면 확인 숫자를 돌려주고, 모음함의 승인은 뒤에서 기다린다(`hub.join`에 적힌다).
+/// 보내는 쪽 짝 맺기: 관제 PC 화면의 코드를 넣는다. 코드가 맞으면 확인 숫자를 돌려주고, 관제 PC의 승인은 뒤에서 기다린다(`hub.join`에 적힌다).
 pub async fn join(hub: Arc<Hub>, addr: &str, port: u16, code: &str) -> Result<Join, String> {
-    let ip: Ipv4Addr = addr.trim().parse().map_err(|_| "모음함의 테일스케일 주소(100.x.y.z)를 적어 주세요".to_string())?;
+    let ip: Ipv4Addr = addr.trim().parse().map_err(|_| "관제 PC의 테일스케일 주소(100.x.y.z)를 적어 주세요".to_string())?;
     let code = key::normal_code(code);
     if code.len() < 8 || code.len() > 32 {
-        return Err("모음함 화면에 뜬 코드를 그대로 적어 주세요".into());
+        return Err("관제 PC 화면에 뜬 코드를 그대로 적어 주세요".into());
     }
     let tls = connect(&hub, ip, port, None).await?;
-    let collector_id = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| key::fingerprint(c.as_ref())).ok_or("모음함의 인증서를 읽지 못했습니다")?;
+    let collector_id = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| key::fingerprint(c.as_ref())).ok_or("관제 PC의 인증서를 읽지 못했습니다")?;
     let mine = hub.me.id();
     let (r, mut w) = tokio::io::split(tls);
     let mut reader = BufReader::new(r);
@@ -376,11 +416,11 @@ pub async fn join(hub: Arc<Hub>, addr: &str, port: u16, code: &str) -> Result<Jo
         tokio::task::spawn_blocking(move || key::pair_key(&code, &mine, &theirs)).await.map_err(|e| e.to_string())?
     };
     if !write_line(&mut w, &json!({"t": "pair", "v": wire::VERSION, "name": hub.config().name, "proof": key::proof(&k, "sender")})).await {
-        return Err("모음함에 보내지 못했습니다".into());
+        return Err("관제 PC에 보내지 못했습니다".into());
     }
-    let refused = "모음함이 받지 않았습니다. 모음함에서 [새 PC 짝 맺기]를 눌렀는지, 코드가 맞는지 확인하세요.";
+    let refused = "관제 PC가 받지 않았습니다. 관제 PC에서 [새 PC 짝 맺기]를 눌렀는지, 코드가 맞는지 확인하세요.";
     let answer = read_line(&mut reader, ANSWER).await.ok_or(refused)?;
-    // 모음함도 코드를 안다는 증명을 내야 한다(코드를 모르는 가짜 모음함을 가린다).
+    // 관제 PC도 코드를 안다는 증명을 내야 한다(코드를 모르는 가짜 관제 PC를 가린다).
     if kind(&answer) != "pair.wait" || !key::same(answer.get("proof").and_then(Value::as_str).unwrap_or(""), &key::proof(&k, "collector")) {
         return Err(refused.into());
     }
@@ -399,7 +439,7 @@ pub async fn join(hub: Arc<Hub>, addr: &str, port: u16, code: &str) -> Result<Jo
                 Ok(()) => Join::Done { name },
                 Err(why) => Join::Failed { why },
             },
-            _ => Join::Failed { why: "모음함에서 승인하지 않았습니다".into() },
+            _ => Join::Failed { why: "관제 PC에서 승인하지 않았습니다".into() },
         };
         *lock(&hub.join) = result;
     });
@@ -436,20 +476,20 @@ fn set_link(hub: &Hub, linked: bool, error: Option<String>) {
 
 /// 한 번 접속해, 쌓인 것을 순번대로 보내고 접속을 붙든 채 새 것을 기다린다. 설정이 바뀌거나 끊기면 돌아온다.
 async fn send_all(hub: &Hub, k: &Collector) -> Result<(), String> {
-    let ip: Ipv4Addr = k.addr.parse().map_err(|_| "모음함 주소가 잘못 저장돼 있습니다".to_string())?;
+    let ip: Ipv4Addr = k.addr.parse().map_err(|_| "관제 PC 주소가 잘못 저장돼 있습니다".to_string())?;
     let tls = connect(hub, ip, k.port, Some(k.id.clone())).await?;
     let (r, mut w) = tokio::io::split(tls);
     let mut reader = BufReader::new(r);
-    let gone = || "모음함과의 연결이 끊겼습니다".to_string();
+    let gone = || "관제 PC와의 연결이 끊겼습니다".to_string();
     if !write_line(&mut w, &json!({"t": "hi", "v": wire::VERSION, "name": hub.config().name})).await {
         return Err(gone());
     }
     let hello = read_line(&mut reader, ANSWER).await.ok_or_else(gone)?;
     if kind(&hello) != "hi" {
         return Err(match hello.get("why").and_then(Value::as_str) {
-            Some("stopped") => "모음함에서 이 PC의 짝을 멈췄습니다. 모음함에서 다시 켜야 합니다.".into(),
-            Some("unknown") => "모음함이 이 PC를 짝으로 알지 못합니다. 짝을 다시 맺어야 합니다.".into(),
-            _ => "모음함이 받지 않았습니다".to_string(),
+            Some("stopped") => "관제 PC에서 이 PC의 짝을 멈췄습니다. 관제 PC에서 다시 켜야 합니다.".into(),
+            Some("unknown") => "관제 PC가 이 PC를 짝으로 알지 못합니다. 짝을 다시 맺어야 합니다.".into(),
+            _ => "관제 PC가 받지 않았습니다".to_string(),
         });
     }
     set_link(hub, true, None);
@@ -478,13 +518,13 @@ async fn send_all(hub: &Hub, k: &Collector) -> Result<(), String> {
                     "old" | "conflict" | "shape" | "too_big" => {
                         hub.outbox.give_up(seq);
                         if answer.get("why").and_then(Value::as_str) != Some("old") {
-                            return Err("모음함이 한 건을 받지 않았습니다(모양 또는 크기)".into());
+                            return Err("관제 PC가 한 건을 받지 않았습니다(모양 또는 크기)".into());
                         }
                     }
-                    "too_fast" => return Err("모음함이 받는 양의 상한에 닿았습니다. 잠시 뒤 다시 보냅니다.".into()),
-                    "full" => return Err("모음함에서 이 PC가 쓸 수 있는 저장 공간이 찼습니다.".into()),
-                    "stopped" => return Err("모음함에서 이 PC의 짝을 멈췄습니다. 모음함에서 다시 켜야 합니다.".into()),
-                    _ => return Err("모음함이 받지 않았습니다".into()),
+                    "too_fast" => return Err("관제 PC가 받는 양의 상한에 닿았습니다. 잠시 뒤 다시 보냅니다.".into()),
+                    "full" => return Err("관제 PC에서 이 PC가 쓸 수 있는 저장 공간이 찼습니다.".into()),
+                    "stopped" => return Err("관제 PC에서 이 PC의 짝을 멈췄습니다. 관제 PC에서 다시 켜야 합니다.".into()),
+                    _ => return Err("관제 PC가 받지 않았습니다".into()),
                 },
                 _ => return Err(gone()),
             }
@@ -520,7 +560,7 @@ mod tests {
         wire::Finished { kind: "route_latency".into(), title: "라우팅 지연".into(), target: target.into(), verdict: "caution".into(), started: now_ms(), ended: now_ms(), ..Default::default() }
     }
 
-    /// 모음함을 이 PC 안의 주소에 띄운다(시험에서만 허용된다).
+    /// 관제 PC를 이 PC 안의 주소에 띄운다(시험에서만 허용된다).
     async fn collector(name: &str) -> (Arc<Hub>, u16) {
         let hub = test_hub(name);
         hub.set(false, true, true, name, 90).unwrap();
@@ -565,7 +605,7 @@ mod tests {
         until("두 건 도착", || home.inbox.list(&Filter::default()).1 == 2).await;
         until("보낼 함 비움", || sender.outbox.waiting() == 0).await;
         let (rows, _) = home.inbox.list(&Filter::default());
-        // 모음함에 보이는 이름은 승인할 때의 이름이다(나중에 보낸 쪽이 바꿔 말해도 바뀌지 않는다).
+        // 관제 PC에 보이는 이름은 승인할 때의 이름이다(나중에 보낸 쪽이 바꿔 말해도 바뀌지 않는다).
         assert!(rows.iter().all(|r| r.pc == sender.me.id() && r.pc_name == "용인-PC" && r.masked));
         assert!(rows.iter().any(|r| r.target == "example.com"));
         assert!(rows.iter().any(|r| r.target.starts_with("내부-")), "내부 주소는 가려서 나간다");
@@ -575,12 +615,18 @@ mod tests {
         // 붙어 있는 동안 새 건도 간다
         sender.submit(item("1.1.1.1"), None).unwrap();
         until("세 번째 건", || home.inbox.list(&Filter::default()).1 == 3).await;
-        // 모음함이 짝을 멈추면 더 받지 않고, 보내는 쪽은 쌓아 둔다
+        // 관제 PC가 짝을 멈추면 더 받지 않고, 보내는 쪽은 쌓아 둔다
         home.set_pc(&sender.me.id(), "stopped").unwrap();
         sender.submit(item("9.9.9.9"), None).unwrap();
         until("멈춤 알림", || lock(&sender.status).send_error.as_deref().is_some_and(|e| e.contains("멈췄"))).await;
         assert_eq!(home.inbox.list(&Filter::default()).1, 3);
         assert_eq!(sender.outbox.waiting(), 1);
+        // 접속 내역: 짝 맺기, 받은 건수, 멈춘 뒤의 거절이 남는다
+        until("접속 내역", || home.inbox.conns(Some(&sender.me.id()), 50).iter().any(|c| c.outcome == "stopped")).await;
+        let conns = home.inbox.conns(Some(&sender.me.id()), 50);
+        assert!(conns.iter().any(|c| c.outcome == "pair_ok"));
+        assert_eq!(conns.iter().map(|c| c.stored).sum::<u64>(), 3);
+        assert!(conns.iter().all(|c| c.addr == "127.0.0.1" || c.addr.starts_with("100.")));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -623,7 +669,7 @@ mod tests {
         assert_eq!(home.inbox.list(&Filter::default()).1, 0);
         assert_eq!(stranger.outbox.waiting(), 1);
 
-        // 모음함 주소에 다른 키를 가진 가짜가 앉아 있으면 보내지 않는다(자료가 새지 않는다)
+        // 관제 PC 주소에 다른 키를 가진 가짜가 앉아 있으면 보내지 않는다(자료가 새지 않는다)
         let (fake, fake_port) = collector("가짜").await;
         fake.inbox.pair(&sender.me.id(), "용인", "127.0.0.1", false, now_ms()).unwrap();
         let mut k = sender.config().collector.unwrap();
@@ -636,7 +682,7 @@ mod tests {
         assert_eq!(sender.outbox.waiting(), 1);
     }
 
-    /// 인증된 짝이 보내는 이상한 줄들: 죽지 않고, 저장하지 않고, 모음함이 먼저 말하지 않는다.
+    /// 인증된 짝이 보내는 이상한 줄들: 죽지 않고, 저장하지 않고, 관제 PC가 먼저 말하지 않는다.
     #[tokio::test]
     async fn session_survives_garbage_and_never_speaks_first() {
         let home = test_hub("평창");
@@ -659,13 +705,13 @@ mod tests {
         for (i, lines) in cases.into_iter().enumerate() {
             let (mut near, far) = tokio::io::duplex(MAX_LINE * 8);
             let (r, mut w) = tokio::io::split(far);
-            // 아무것도 보내기 전에는 모음함이 먼저 쓰지 않는다
+            // 아무것도 보내기 전에는 관제 PC가 먼저 쓰지 않는다
             let mut peek = [0u8; 1];
             let quiet = timeout(Duration::from_millis(30), tokio::io::AsyncReadExt::read(&mut near, &mut peek));
             {
                 let run = session(&home, &id, "100.64.0.2", BufReader::new(r), &mut w);
                 tokio::pin!(run);
-                tokio::select! { _ = &mut run => panic!("첫 줄 전에 끝났다"), q = quiet => assert!(q.is_err(), "모음함이 먼저 말했다") }
+                tokio::select! { _ = &mut run => panic!("첫 줄 전에 끝났다"), q = quiet => assert!(q.is_err(), "관제 PC가 먼저 말했다") }
                 for line in &lines {
                     near.write_all(line.as_bytes()).await.unwrap();
                     near.write_all(b"\n").await.unwrap();

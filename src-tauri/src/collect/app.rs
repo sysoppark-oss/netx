@@ -1,4 +1,4 @@
-//! NetX(Tauri)와 모음함 모듈이 만나는 단 하나의 자리.
+//! NetX(Tauri)와 관제 PC 모듈이 만나는 단 하나의 자리.
 //! 여기서만 NetX의 것(자료 폴더, 감사 로그, 공인 주소, [최근 진단] 기록의 모양)을 쓴다. 관제로 뗄 때 이 파일만 바꾼다.
 
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
-use super::store::{Alert, Filter, Gap, Pc, Row, Sent};
+use super::store::{Alert, Conn, Filter, Gap, Hour, Pc, Row, Sent, Transfer};
 use super::wire::{Finished, Step, text};
 use super::{Config, Hub, Join, Status, WindowView, lock, net, store};
 
@@ -190,7 +190,7 @@ pub fn collect_set(app: AppHandle, shared: State<'_, Shared>, send: bool, mask: 
     let after = hub.set(send, mask, receive, &name, keep_days)?;
     let onoff = |b: bool| if b { "켬" } else { "끔" };
     if (before.send, before.mask, before.receive) != (after.send, after.mask, after.receive) {
-        audit(&app, "settings", &[format!("보내기 {}", onoff(after.send)), format!("가리기 {}", onoff(after.mask)), format!("모음함으로 쓰기 {}", onoff(after.receive))]);
+        audit(&app, "settings", &[format!("보내기 {}", onoff(after.send)), format!("가리기 {}", onoff(after.mask)), format!("관제 PC로 쓰기 {}", onoff(after.receive))]);
     }
     Ok(after)
 }
@@ -226,7 +226,7 @@ pub fn collect_join_cancel(shared: State<'_, Shared>) -> Result<(), String> {
     Ok(())
 }
 
-/// 모음함과의 짝을 끊는다. 보내기도 꺼진다.
+/// 관제 PC와의 짝을 끊는다. 보내기도 꺼진다.
 #[tauri::command(async)]
 pub fn collect_forget(app: AppHandle, shared: State<'_, Shared>) -> Result<(), String> {
     hub(&shared)?.forget_collector()?;
@@ -240,7 +240,7 @@ pub fn collect_sent(shared: State<'_, Shared>) -> Result<Vec<Sent>, String> {
     Ok(hub(&shared)?.outbox.log())
 }
 
-// ---- 모음함 쪽 ----
+// ---- 관제 PC 쪽 ----
 
 #[tauri::command(async)]
 pub fn collect_pair_open(app: AppHandle, shared: State<'_, Shared>) -> Result<WindowView, String> {
@@ -279,12 +279,44 @@ pub struct Board {
     pub alerts: Vec<Alert>,
     /// 받지 않던 구간(시작, 끝)
     pub downtime: Vec<(u64, u64)>,
+    /// 짝이 아닌 곳에서 온 접속(최근 것부터)
+    pub strangers: Vec<Conn>,
+}
+
+/// 거점 하나의 상세: 접속 내역, 전송 내역, 7일 시간표, 이 거점의 빠진 구간과 경고
+#[derive(Serialize)]
+pub struct Site {
+    pub pc: Pc,
+    pub conns: Vec<Conn>,
+    pub transfers: Vec<Transfer>,
+    pub timeline: Vec<Hour>,
+    pub gaps: Vec<Gap>,
+    pub alerts: Vec<Alert>,
+}
+
+/// 거점 상세. `id`는 공개 키 지문(16진수)이어야 한다.
+#[tauri::command(async)]
+pub fn collect_site(shared: State<'_, Shared>, id: String) -> Result<Site, String> {
+    if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("거점을 알 수 없습니다.".into());
+    }
+    let hub = hub(&shared)?;
+    let now = super::now_ms();
+    let pc = hub.inbox.pcs(now).into_iter().find(|p| p.id == id).ok_or("거점을 알 수 없습니다.")?;
+    Ok(Site {
+        conns: hub.inbox.conns(Some(&id), 300),
+        transfers: hub.inbox.transfers(&id, 300),
+        timeline: hub.inbox.timeline(&id, now),
+        gaps: hub.inbox.gaps().into_iter().filter(|g| g.pc == id).collect(),
+        alerts: hub.inbox.alerts().into_iter().filter(|a| a.pc == id).collect(),
+        pc,
+    })
 }
 
 #[tauri::command(async)]
 pub fn collect_board(shared: State<'_, Shared>) -> Result<Board, String> {
     let hub = hub(&shared)?;
-    Ok(Board { pcs: hub.inbox.pcs(super::now_ms()), kinds: hub.inbox.kinds(), gaps: hub.inbox.gaps(), alerts: hub.inbox.alerts(), downtime: hub.inbox.downtime() })
+    Ok(Board { pcs: hub.inbox.pcs(super::now_ms()), kinds: hub.inbox.kinds(), gaps: hub.inbox.gaps(), alerts: hub.inbox.alerts(), downtime: hub.inbox.downtime(), strangers: hub.inbox.conns(None, 50) })
 }
 
 #[derive(Serialize)]
@@ -310,7 +342,7 @@ pub fn collect_analysis(shared: State<'_, Shared>) -> Result<store::Analysis, St
     Ok(hub(&shared)?.inbox.analysis(super::now_ms()))
 }
 
-/// 상세 보고서의 "모음함" 구역에 실을 것: 기간 안의 건(최근 것부터)과 전체 건수. 모듈을 열지 못했으면 빈 목록.
+/// 상세 보고서의 "관제 PC" 구역에 실을 것: 기간 안의 건(최근 것부터)과 전체 건수. 모듈을 열지 못했으면 빈 목록.
 pub fn report_rows(app: &AppHandle, from: u64, to: u64, max: usize) -> (Vec<crate::report::Collected>, usize) {
     let Some(hub) = app.try_state::<Shared>().and_then(|s| s.0.clone().ok()) else { return (Vec::new(), 0) };
     let (rows, total) = hub.inbox.report(from, to, max);

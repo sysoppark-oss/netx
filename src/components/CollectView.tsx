@@ -1,7 +1,8 @@
-// 모음함 화면: 받은 결과(목록·필터), 이 PC의 결과 보내기, 이 PC를 모음함으로 쓰기.
+// 거점 관제 화면: 받은 결과(목록·필터), 이 PC의 결과 보내기, 이 PC를 관제 PC로 쓰기.
 // 받은 글자(대상, 제목, 해석 문장)는 다른 PC가 보낸 자료다. 글자로만 그리고 링크나 서식으로 만들지 않는다.
 import { useCallback, useEffect, useState } from "react";
 import {
+  CONN_LABEL,
   NOT_SENT,
   SENT_FIELDS,
   STEP_STATE_LABEL,
@@ -32,6 +33,7 @@ import {
   type SentRow,
   type Verdict,
 } from "../lib/collect";
+import { SiteDetail } from "./SiteDetail";
 
 type Tab = "inbox" | "analysis" | "send" | "receive";
 
@@ -40,7 +42,7 @@ const BTN = "rounded border border-line px-2.5 py-1 text-xs hover:bg-raised disa
 const BTN_MAIN = "rounded border border-accent/60 px-2.5 py-1 text-xs text-accent hover:bg-raised disabled:opacity-50";
 const FIELD = "rounded border border-line bg-void px-2 py-1 text-xs";
 
-const SENT_STATE: Record<SentRow["state"], string> = { queued: "보낼 함에서 기다림", sent: "보냄", dropped: "버림(보내지 않음)", local: "이 PC의 모음함에만" };
+const SENT_STATE: Record<SentRow["state"], string> = { queued: "보낼 함에서 기다림", sent: "보냄", dropped: "버림(보내지 않음)", local: "이 PC의 거점 관제에만" };
 
 /** 글자를 클립보드에 넣는 단추. 넣었으면 잠깐 "복사됨"으로 바뀐다. */
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -119,7 +121,7 @@ function Detail({ row, onClose }: { row: Row; onClose: () => void }) {
               </li>
             ))}
           </ol>
-          <p className="mt-2 text-dim">원본 출력은 보낸 PC에만 있습니다(모음함으로 오지 않습니다).</p>
+          <p className="mt-2 text-dim">원본 출력은 보낸 PC에만 있습니다(관제 PC로 오지 않습니다).</p>
         </>
       )}
     </div>
@@ -136,6 +138,7 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<{ rows: Row[]; total: number; page: number }>({ rows: [], total: 0, page: 200 });
   const [open, setOpen] = useState<string | null>(null);
+  const [site, setSite] = useState<string | null>(null);
 
   const load = useCallback(() => {
     void collectList({ pc, from: dayBound(from, false), to: dayBound(to, true), target, kind, verdict, offset })
@@ -158,8 +161,8 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
   return (
     <div className="space-y-3">
       <section>
-        <h2 className="mb-1 text-xs font-semibold text-dim">보내는 PC</h2>
-        {board.pcs.length === 0 && <p className="text-xs text-dim">아직 짝 맺은 PC가 없습니다. "이 PC를 모음함으로" 탭에서 [새 PC 짝 맺기]를 누르세요.</p>}
+        <h2 className="mb-1 text-xs font-semibold text-dim">거점</h2>
+        {board.pcs.length === 0 && <p className="text-xs text-dim">아직 짝 맺은 거점이 없습니다. "이 PC를 관제 PC로" 탭에서 [새 PC 짝 맺기]를 누르세요.</p>}
         <ul className="space-y-1">
           {board.pcs.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center gap-2 rounded border border-line px-2 py-1.5 text-xs">
@@ -180,6 +183,9 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
               <span className="font-mono text-[11px] text-dim" title={`공개 키 지문: ${p.id}`}>
                 {p.id.slice(0, 12)}…
               </span>
+              <button onClick={() => setSite(p.id)} className={BTN_MAIN} title="이 거점의 접속 내역, 전송 내역, 최근 7일을 봅니다.">
+                상세
+              </button>
               {!p.own && p.state === "active" && (
                 <button onClick={() => pcState(p, "stopped")} className={BTN}>
                   받기 멈춤
@@ -198,7 +204,22 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
             </li>
           ))}
         </ul>
+        {site && <SiteDetail id={site} onClose={() => setSite(null)} />}
       </section>
+
+      {board.strangers.length > 0 && (
+        <details className="rounded border border-line px-2 py-1.5 text-xs">
+          <summary className="cursor-pointer">짝이 아닌 곳에서 온 접속 {board.strangers.length}건 (모두 받지 않았습니다)</summary>
+          <ul className="mt-1.5 space-y-0.5">
+            {board.strangers.map((c, i) => (
+              <li key={i}>
+                <span className="text-dim">{timeText(c.at)}</span> <span className="font-mono">{c.addr}</span> · {CONN_LABEL[c.outcome] ?? "알 수 없음"}
+                {c.pc && <span className="font-mono text-dim"> · {c.pc.slice(0, 12)}…</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {(board.alerts.length > 0 || board.gaps.length > 0 || board.downtime.length > 0) && (
         <details className="rounded border border-line px-2 py-1.5 text-xs">
@@ -219,7 +240,7 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
             ))}
             {board.downtime.map(([a, b], i) => (
               <li key={`d${i}`} className="text-dim">
-                받지 않던 구간: {timeText(a)} ~ {timeText(b)} (모음함이 꺼져 있었습니다)
+                받지 않던 구간: {timeText(a)} ~ {timeText(b)} (관제 PC가 꺼져 있었습니다)
               </li>
             ))}
           </ul>
@@ -328,7 +349,7 @@ function AnalysisTab({ onError }: { onError: (m: string) => void }) {
     return () => clearInterval(t);
   }, [onError]);
   if (!a) return <p className="text-sm text-dim">읽는 중…</p>;
-  if (!a.made) return <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">요약을 아직 만들지 않았습니다. 모음함으로 쓰는 동안 5분마다 만듭니다.</p>;
+  if (!a.made) return <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">요약을 아직 만들지 않았습니다. 관제 PC로 쓰는 동안 5분마다 만듭니다.</p>;
   const { days, byHour } = trend(a.hours);
   const top = Math.max(1, ...days.map((d) => d.ok + d.caution + d.danger + d.unknown));
   const topHour = Math.max(1, ...byHour);
@@ -455,10 +476,10 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
   return (
     <div className="space-y-4 text-sm">
       <section className="space-y-2">
-        <h2 className="text-xs font-semibold text-dim">모음함과 짝 맺기</h2>
+        <h2 className="text-xs font-semibold text-dim">관제 PC와 짝 맺기</h2>
         {c.collector ? (
           <div className="flex flex-wrap items-center gap-2 rounded border border-line px-2 py-1.5 text-xs">
-            <span className="font-semibold">{c.collector.name || "모음함"}</span>
+            <span className="font-semibold">{c.collector.name || "관제 PC"}</span>
             <span className="font-mono text-dim">
               {c.collector.addr}:{c.collector.port}
             </span>
@@ -473,7 +494,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
                   .catch((e) => onError(String(e)))
               }
               className={BTN}
-              title="이 모음함으로 더 보내지 않습니다. 보내기가 꺼지고 보낼 함에서 기다리던 것은 버립니다."
+              title="이 관제 PC로 더 보내지 않습니다. 보내기가 꺼지고 보낼 함에서 기다리던 것은 버립니다."
             >
               짝 끊기
             </button>
@@ -481,7 +502,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
         ) : ov.join.state === "waiting" ? (
           <div className="rounded border border-accent/60 px-3 py-2 text-xs">
             <p>
-              코드가 맞았습니다. 모음함 <b>{ov.join.name || ov.join.addr}</b> 화면에 아래와 <b>같은 확인 숫자</b>가 떠 있는지 보고, 같으면 모음함에서 [짝 맺기 승인]을 누르세요.
+              코드가 맞았습니다. 관제 PC <b>{ov.join.name || ov.join.addr}</b> 화면에 아래와 <b>같은 확인 숫자</b>가 떠 있는지 보고, 같으면 관제 PC에서 [짝 맺기 승인]을 누르세요.
             </p>
             <p className="my-2 text-center font-mono text-2xl tracking-widest">{ov.join.number}</p>
             <p className="text-dim">숫자가 다르면 중간에 다른 기기가 끼어 있는 것입니다. 승인하지 말고 아래 단추로 그만두세요.</p>
@@ -498,9 +519,9 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           </div>
         ) : (
           <div className="space-y-1.5 text-xs">
-            <p className="text-dim">모음함 PC의 NetX에서 [새 PC 짝 맺기]를 누르면 그 화면에 주소와 일회용 코드가 뜹니다(2분 동안). 그것을 여기에 적습니다.</p>
+            <p className="text-dim">관제 PC PC의 NetX에서 [새 PC 짝 맺기]를 누르면 그 화면에 주소와 일회용 코드가 뜹니다(2분 동안). 그것을 여기에 적습니다.</p>
             <div className="flex flex-wrap items-center gap-2">
-              <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="모음함의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
+              <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="관제 PC의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
               <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="일회용 코드" maxLength={24} autoComplete="off" spellCheck={false} className={`${FIELD} w-40 font-mono uppercase`} />
               <button disabled={busy || !addr.trim() || code.replace(/\s+/g, "").length < 8} onClick={join} className={BTN_MAIN}>
                 {busy ? "확인 중…" : "짝 맺기"}
@@ -518,7 +539,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           <div className="rounded border border-line px-3 py-2 text-xs">
             <p className="mb-1">
               켜면 이 PC에서 끝난 진단마다 아래 항목이{" "}
-              <b>{c.collector ? `${c.collector.name || "모음함"} (${c.collector.addr})` : "짝 맺은 모음함"}</b>(으)로 나갑니다. 지금은 <b>꺼져 있습니다.</b>
+              <b>{c.collector ? `${c.collector.name || "관제 PC"} (${c.collector.addr})` : "짝 맺은 관제 PC"}</b>(으)로 나갑니다. 지금은 <b>꺼져 있습니다.</b>
             </p>
             <ul className="list-disc pl-5">
               {SENT_FIELDS.map((f) => (
@@ -533,17 +554,17 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
             <button disabled={!c.collector || !agree} onClick={() => (setAgree(false), save({ send: true }))} className={`${BTN_MAIN} mt-2`}>
               보내기 켜기
             </button>
-            {!c.collector && <span className="ml-2 text-dim">먼저 모음함과 짝을 맺어야 합니다.</span>}
+            {!c.collector && <span className="ml-2 text-dim">먼저 관제 PC와 짝을 맺어야 합니다.</span>}
           </div>
         ) : (
           <div className="rounded border border-safe/40 px-3 py-2 text-xs">
             <p>
-              <b>보내는 중</b> → {c.collector?.name || "모음함"} ({c.collector?.addr}) ·{" "}
-              {ov.status.linked ? <span className="text-safe">모음함에 닿아 있음</span> : <span className="text-caution">닿지 않음 — 쌓아 두었다가 보냅니다</span>} · 기다리는 것 {ov.waiting}건
+              <b>보내는 중</b> → {c.collector?.name || "관제 PC"} ({c.collector?.addr}) ·{" "}
+              {ov.status.linked ? <span className="text-safe">관제 PC에 닿아 있음</span> : <span className="text-caution">닿지 않음 — 쌓아 두었다가 보냅니다</span>} · 기다리는 것 {ov.waiting}건
             </p>
             {ov.status.send_error && <p className="mt-1 text-caution">{ov.status.send_error}</p>}
             <p className="mt-1 text-dim">
-              보낼 함은 {ov.limits.out_queue}건, {ov.limits.out_keep_days}일까지 쌓습니다. 넘으면 오래된 것부터 버리고, 버렸다는 사실을 모음함에 알립니다.
+              보낼 함은 {ov.limits.out_queue}건, {ov.limits.out_keep_days}일까지 쌓습니다. 넘으면 오래된 것부터 버리고, 버렸다는 사실을 관제 PC에 알립니다.
             </p>
             <button onClick={() => save({ send: false })} className={`${BTN} mt-2`} title="끄면 보낼 함에서 기다리던 것도 나가지 않습니다.">
               보내기 끄기
@@ -555,7 +576,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           <span>
             내부 주소·PC 이름 가리기 (기본 켬)
             <span className="block text-dim">
-              내부 주소는 "내부-ab12cd" 같은 가명으로 바뀝니다. 같은 주소는 이 PC에서 언제나 같은 가명이 되므로 모음함에서 이 PC 안의 같은 대상끼리는 묶입니다. 다만 다른 PC가 본 같은 내부 주소와는 묶이지 않고, 모음함에서 원래 주소를 알 수 없습니다.
+              내부 주소는 "내부-ab12cd" 같은 가명으로 바뀝니다. 같은 주소는 이 PC에서 언제나 같은 가명이 되므로 관제 PC에서 이 PC 안의 같은 대상끼리는 묶입니다. 다만 다른 PC가 본 같은 내부 주소와는 묶이지 않고, 관제 PC에서 원래 주소를 알 수 없습니다.
             </span>
           </span>
         </label>
@@ -608,13 +629,13 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
       </section>
 
       <section className="space-y-2 text-xs">
-        <h2 className="font-semibold text-dim">이 PC를 모음함으로 쓰기</h2>
+        <h2 className="font-semibold text-dim">이 PC를 관제 PC로 쓰기</h2>
         <label className="flex items-start gap-2">
           <input type="checkbox" className="mt-0.5" checked={c.receive} onChange={(e) => save({ receive: e.target.checked })} />
           <span>
             다른 PC의 NetX가 보내는 진단 결과를 이 PC에 모읍니다 (기본 꺼짐)
             <span className="block text-dim">
-              켜면 이 PC의 테일스케일 주소에서만 듣습니다(포트 {c.port}). 테일스케일 주소가 없으면 듣지 않습니다. 모음함은 받기만 하며, 보낸 PC로 명령이나 요청을 보내는 길이 없습니다. NetX를 닫으면 받지 못하고, 그동안은 "받지 않던 구간"으로 표시됩니다. 이 PC에서 한 진단도 모음함에 함께 들어갑니다.
+              켜면 이 PC의 테일스케일 주소에서만 듣습니다(포트 {c.port}). 테일스케일 주소가 없으면 듣지 않습니다. 관제 PC는 받기만 하며, 보낸 PC로 명령이나 요청을 보내는 길이 없습니다. NetX를 닫으면 받지 못하고, 그동안은 "받지 않던 구간"으로 표시됩니다. 이 PC에서 한 진단도 관제 PC에 함께 들어갑니다.
             </span>
           </span>
         </label>
@@ -662,7 +683,7 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
             </div>
           ) : (
             <div className="rounded border border-line px-3 py-2">
-              <p>보내는 PC의 NetX에서 "보내기" 탭에 아래 주소와 코드를 적으세요. 코드는 한 번만 쓰이고 {w.secs_left}초 뒤에 사라집니다.</p>
+              <p>거점 PC의 NetX에서 "보내기" 탭에 아래 주소와 코드를 적으세요. 코드는 한 번만 쓰이고 {w.secs_left}초 뒤에 사라집니다.</p>
               <div className="my-2 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
                 <span className="flex items-center gap-2">
                   <span className="select-all font-mono text-base">{ov.tailnet ?? "테일스케일 주소 없음"}</span>
@@ -691,7 +712,7 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
 export function CollectView({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("inbox");
   const [ov, setOv] = useState<Overview | null>(null);
-  const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [] });
+  const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [], strangers: [] });
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
@@ -714,15 +735,15 @@ export function CollectView({ onClose }: { onClose: () => void }) {
     { id: "inbox", label: "받은 결과" },
     { id: "analysis", label: "종합 분석" },
     { id: "send", label: `보내기${ov?.config.send ? " ●" : ""}` },
-    { id: "receive", label: `이 PC를 모음함으로${ov?.config.receive ? " ●" : ""}` },
+    { id: "receive", label: `이 PC를 관제 PC로${ov?.config.receive ? " ●" : ""}` },
   ];
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div className="flex h-full max-h-full w-full max-w-5xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-line px-4 py-3">
-          <h1 className="text-base font-semibold">📥 모음함</h1>
-          <span className="text-xs text-dim">테일스케일 안에서, 보내는 PC가 거는 연결로만 주고받습니다.</span>
+          <h1 className="text-base font-semibold">📡 거점 관제</h1>
+          <span className="text-xs text-dim">테일스케일 안에서, 거점이 거는 연결로만 주고받습니다.</span>
           <span className="flex-1" />
           <button onClick={onClose} className="rounded border border-line px-3 py-1 text-xs hover:bg-raised">
             닫기
@@ -742,7 +763,7 @@ export function CollectView({ onClose }: { onClose: () => void }) {
           ) : tab === "inbox" ? (
             !ov.config.receive && board.pcs.length === 0 ? (
               <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">
-                이 PC는 모음함으로 쓰고 있지 않습니다. 다른 PC의 결과를 여기로 모으려면 "이 PC를 모음함으로" 탭에서 켜세요.
+                이 PC는 관제 PC로 쓰고 있지 않습니다. 다른 PC의 결과를 여기로 모으려면 "이 PC를 관제 PC로" 탭에서 켜세요.
               </p>
             ) : (
               <Inbox board={board} onError={setError} reload={reload} />

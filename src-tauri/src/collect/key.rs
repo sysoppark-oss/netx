@@ -111,7 +111,7 @@ fn save_key(dir: &Path, key: &[u8]) -> Result<(), String> {
 
 /// 이 PC의 기기 키. 없거나 짝이 맞지 않으면 새로 만든다(새로 만들면 이전의 짝은 모두 무효다).
 pub fn load_or_create(dir: &Path) -> Result<Identity, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("모음함 폴더를 만들지 못했습니다: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("거점 관제 폴더를 만들지 못했습니다: {e}"))?;
     if let (Ok(cert), Some(key)) = (std::fs::read(dir.join(CERT_FILE)), load_key(dir)) {
         if fingerprint(&cert).is_some() && !key.is_empty() {
             return Ok(Identity { cert, key });

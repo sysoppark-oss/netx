@@ -103,7 +103,7 @@ pub fn run() {
             // 다른 프로그램(스토리방화벽 등)이 진단 대상을 넘길 수 있는 입구를 연다.
             #[cfg(target_os = "windows")]
             bridge::pipe::start(app.handle().clone());
-            // 모음함: 보내기도 받기도 기본은 꺼져 있다. 켜기 전에는 듣지도 보내지도 않는다.
+            // 관제 PC: 보내기도 받기도 기본은 꺼져 있다. 켜기 전에는 듣지도 보내지도 않는다.
             collect::app::start(app.handle());
             fit_to_screen(app.handle());
             Ok(())
@@ -166,6 +166,7 @@ pub fn run() {
             collect::app::collect_pair_close,
             collect::app::collect_pair_decide,
             collect::app::collect_pc_set,
+            collect::app::collect_site,
             collect::app::collect_board,
             collect::app::collect_list,
             collect::app::collect_item,

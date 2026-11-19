@@ -50,6 +50,7 @@
     "allow-collect-pair-close",
     "allow-collect-pair-decide",
     "allow-collect-pc-set",
+    "allow-collect-site",
     "allow-collect-board",
     "allow-collect-list",
     "allow-collect-item",

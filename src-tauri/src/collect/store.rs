@@ -1,4 +1,4 @@
-//! 모음함 DB(받은 쪽)와 보낼 함 DB(보내는 쪽). 둘 다 SQLite WAL, 값은 매개변수로만 넣는다.
+//! 관제 PC DB(받은 쪽)와 보낼 함 DB(보내는 쪽). 둘 다 SQLite WAL, 값은 매개변수로만 넣는다.
 //!
 //! 조회 함수는 읽기만 한다. 쓰는 것은 받기(`take`), 짝 관리, 주기 작업(`purge`, `mark_listening`)뿐이다.
 
@@ -15,13 +15,13 @@ use super::wire::{self, MAX_ITEM_BYTES};
 const HOUR: u64 = 3_600_000;
 const DAY: u64 = 24 * HOUR;
 
-/// 모음함의 보관 기한 기본값(받은 시각 기준)
+/// 관제 PC의 보관 기한 기본값(받은 시각 기준)
 pub const KEEP_DAYS_DEFAULT: u32 = 90;
 pub const KEEP_DAYS_MAX: u32 = 730;
 /// 한 PC가 한 시간에 보낼 수 있는 건수와 바이트
 pub const HOUR_MAX_ITEMS: u64 = 600;
 pub const HOUR_MAX_BYTES: u64 = 16 * 1024 * 1024;
-/// 한 PC가 모음함에 차지할 수 있는 건수와 바이트
+/// 한 PC가 관제 PC에 차지할 수 있는 건수와 바이트
 pub const PC_MAX_ITEMS: u64 = 20_000;
 pub const PC_MAX_BYTES: u64 = 200 * 1024 * 1024;
 /// 하루 안에 이만큼 상한을 넘으면 그 PC의 짝을 멈춘다. 사람이 다시 켜야 받는다.
@@ -62,7 +62,7 @@ fn hash(line: &str) -> String {
     Sha256::digest(line.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-// ================= 모음함 =================
+// ================= 관제 PC =================
 
 const INBOX_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS pcs(
@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sum_target(
   target TEXT NOT NULL, pc TEXT NOT NULL, n INTEGER NOT NULL, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL,
   first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, last_verdict TEXT NOT NULL, PRIMARY KEY(target, pc));
+CREATE TABLE IF NOT EXISTS conns(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, pc TEXT NOT NULL, addr TEXT NOT NULL, outcome TEXT NOT NULL, ms INTEGER NOT NULL,
+  stored INTEGER NOT NULL, again INTEGER NOT NULL, refused INTEGER NOT NULL, bytes INTEGER NOT NULL, first_seq INTEGER NOT NULL, last_seq INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS conns_at ON conns(at);
+CREATE INDEX IF NOT EXISTS conns_pc ON conns(pc, id);
 CREATE TABLE IF NOT EXISTS sum_hour(hour INTEGER PRIMARY KEY, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL, unknown INTEGER NOT NULL);
 ";
 
@@ -257,6 +262,55 @@ pub struct Analysis {
 }
 
 /// 종합 분석에 보이는 대상 수
+/// 접속 내역에 남기는 줄 수의 상한
+pub const CONN_KEEP: i64 = 5_000;
+/// 짝이 아닌 접속은 1분에 이만큼만 적는다(두드리기로 내역이 밀려나지 않게).
+pub const CONN_STRANGER_PER_MIN: i64 = 60;
+/// 거점 상세의 시간표 칸 수(7일, 1시간 칸)
+pub const TIMELINE_HOURS: usize = 168;
+
+/// 접속 한 번의 기록. 글자는 정해진 낱말과 숫자뿐이다(상대가 보낸 글자를 싣지 않는다).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Conn {
+    pub at: u64,
+    /// 상대 공개 키의 지문. 인증 전에 끊긴 접속은 빈 글자.
+    pub pc: String,
+    pub addr: String,
+    /// ok, closed, pair_ok, pair_no, unknown, stopped, refused, strange, version, tls, busy, outside
+    pub outcome: String,
+    pub ms: u64,
+    pub stored: u64,
+    pub again: u64,
+    pub refused: u64,
+    pub bytes: u64,
+    pub first_seq: u64,
+    pub last_seq: u64,
+}
+
+/// 전송 한 건(본문 없이)
+#[derive(Debug, Clone, Serialize)]
+pub struct Transfer {
+    pub seq: u64,
+    pub at: u64,
+    pub got: u64,
+    pub kind: String,
+    pub title: String,
+    pub verdict: String,
+    pub size: u64,
+    pub skew: i64,
+    pub stale: bool,
+}
+
+/// 한 시간 칸: 받은 건수, 그중 위험, 접속 수, 실패한 접속 수
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Hour {
+    pub at: u64,
+    pub items: u64,
+    pub danger: u64,
+    pub conns: u64,
+    pub failed: u64,
+}
+
 pub const ANALYSIS_TARGETS: usize = 100;
 /// 요약 표를 다시 만드는 간격
 pub const SUMMARY_EVERY: u64 = 5 * 60_000;
@@ -419,6 +473,7 @@ impl Inbox {
         let _ = db.execute("DELETE FROM gaps WHERE got < ?1", params![cut]);
         let _ = db.execute("DELETE FROM alerts WHERE at < ?1", params![cut]);
         let _ = db.execute("DELETE FROM downtime WHERE last < ?1", params![cut]);
+        let _ = db.execute("DELETE FROM conns WHERE at < ?1", params![cut]);
         n
     }
 
@@ -607,6 +662,91 @@ impl Inbox {
         st.query_map([], |r| Ok(Alert { pc: r.get(0)?, at: r.get::<_, i64>(1)? as u64, kind: r.get(2)?, note: r.get(3)? })).map(|r| r.flatten().collect()).unwrap_or_default()
     }
 
+    /// 접속 한 번을 적는다. 짝이 아닌 접속은 분당 상한이 있고, 전체는 최근 것만 남긴다.
+    pub fn log_conn(&self, c: &Conn) {
+        let db = self.db();
+        let known: bool = !c.pc.is_empty() && db.query_row("SELECT 1 FROM pcs WHERE id = ?1", params![c.pc], |_| Ok(())).optional().unwrap_or(None).is_some();
+        if !known {
+            let recent: i64 = db
+                .query_row("SELECT COUNT(*) FROM conns c WHERE c.at > ?1 AND NOT EXISTS(SELECT 1 FROM pcs p WHERE p.id = c.pc)", params![c.at.saturating_sub(60_000) as i64], |r| r.get(0))
+                .unwrap_or(0);
+            if recent >= CONN_STRANGER_PER_MIN {
+                return;
+            }
+        }
+        let n = |v: u64| v.min(i64::MAX as u64) as i64;
+        let _ = db.execute(
+            "INSERT INTO conns(at, pc, addr, outcome, ms, stored, again, refused, bytes, first_seq, last_seq) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![n(c.at), c.pc, c.addr, c.outcome, n(c.ms), n(c.stored), n(c.again), n(c.refused), n(c.bytes), n(c.first_seq), n(c.last_seq)],
+        );
+        let _ = db.execute("DELETE FROM conns WHERE id <= (SELECT MAX(id) FROM conns) - ?1", params![CONN_KEEP]);
+    }
+
+    /// 접속 내역(최근 것부터). `pc`가 없으면 짝이 아닌 접속만.
+    pub fn conns(&self, pc: Option<&str>, max: u32) -> Vec<Conn> {
+        let db = self.db();
+        let sql = match pc {
+            Some(_) => "SELECT at, pc, addr, outcome, ms, stored, again, refused, bytes, first_seq, last_seq FROM conns WHERE pc = ?1 ORDER BY id DESC LIMIT ?2",
+            None => "SELECT at, pc, addr, outcome, ms, stored, again, refused, bytes, first_seq, last_seq FROM conns c WHERE ?1 = '' AND NOT EXISTS(SELECT 1 FROM pcs p WHERE p.id = c.pc) ORDER BY id DESC LIMIT ?2",
+        };
+        let Ok(mut st) = db.prepare(sql) else { return Vec::new() };
+        let u = |r: &rusqlite::Row<'_>, i: usize| r.get::<_, i64>(i).map(|v| v.max(0) as u64);
+        st.query_map(params![pc.unwrap_or(""), max.min(PAGE * 5)], |r| {
+            Ok(Conn { at: u(r, 0)?, pc: r.get(1)?, addr: r.get(2)?, outcome: r.get(3)?, ms: u(r, 4)?, stored: u(r, 5)?, again: u(r, 6)?, refused: u(r, 7)?, bytes: u(r, 8)?, first_seq: u(r, 9)?, last_seq: u(r, 10)? })
+        })
+        .map(|r| r.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// 전송 내역(받은 순서의 최근 것부터, 본문 없이)
+    pub fn transfers(&self, pc: &str, max: u32) -> Vec<Transfer> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT seq, at, got, kind, title, verdict, size, skew, stale FROM items WHERE pc = ?1 ORDER BY seq DESC LIMIT ?2") else { return Vec::new() };
+        st.query_map(params![pc, max.min(PAGE * 5)], |r| {
+            Ok(Transfer {
+                seq: r.get::<_, i64>(0)? as u64,
+                at: r.get::<_, i64>(1)? as u64,
+                got: r.get::<_, i64>(2)? as u64,
+                kind: r.get(3)?,
+                title: r.get(4)?,
+                verdict: r.get(5)?,
+                size: r.get::<_, i64>(6)? as u64,
+                skew: r.get(7)?,
+                stale: r.get(8)?,
+            })
+        })
+        .map(|r| r.flatten().collect())
+        .unwrap_or_default()
+    }
+
+    /// 최근 7일을 한 시간 칸으로 나눈 시간표(오래된 칸부터)
+    pub fn timeline(&self, pc: &str, now: u64) -> Vec<Hour> {
+        let end = now / HOUR + 1;
+        let start = end.saturating_sub(TIMELINE_HOURS as u64);
+        let mut hours: Vec<Hour> = (start..end).map(|h| Hour { at: h * HOUR, ..Hour::default() }).collect();
+        let db = self.db();
+        let from = (start * HOUR) as i64;
+        if let Ok(mut st) = db.prepare("SELECT got / 3600000, COUNT(*), SUM(verdict = 'danger') FROM items WHERE pc = ?1 AND got >= ?2 GROUP BY 1") {
+            let rows = st.query_map(params![pc, from], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)));
+            for (h, n, d) in rows.map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+                if let Some(slot) = h.checked_sub(start).and_then(|i| hours.get_mut(i as usize)) {
+                    slot.items = n;
+                    slot.danger = d;
+                }
+            }
+        }
+        if let Ok(mut st) = db.prepare("SELECT at / 3600000, COUNT(*), SUM(outcome NOT IN ('ok', 'closed', 'pair_ok')) FROM conns WHERE pc = ?1 AND at >= ?2 GROUP BY 1") {
+            let rows = st.query_map(params![pc, from], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)));
+            for (h, n, f) in rows.map(|r| r.flatten().collect::<Vec<_>>()).unwrap_or_default() {
+                if let Some(slot) = h.checked_sub(start).and_then(|i| hours.get_mut(i as usize)) {
+                    slot.conns = n;
+                    slot.failed = f;
+                }
+            }
+        }
+        hours
+    }
+
     /// 받지 않던 구간(시작, 끝)
     pub fn downtime(&self) -> Vec<(u64, u64)> {
         let db = self.db();
@@ -659,7 +799,7 @@ impl Outbox {
         db.execute("INSERT INTO meta(k, v) VALUES(?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2", params![k, v as i64]).map(|_| ())
     }
 
-    /// 이 PC의 다음 순번을 받아, 그 순번으로 만든 한 줄을 넣는다. `queue`가 거짓이면 보내지 않고 기록만 남긴다(이 PC의 모음함에만 넣을 때).
+    /// 이 PC의 다음 순번을 받아, 그 순번으로 만든 한 줄을 넣는다. `queue`가 거짓이면 보내지 않고 기록만 남긴다(이 PC의 거점 관제에만 넣을 때).
     /// 돌려주는 것: (순번, 한 줄). 한 줄을 만들지 못하면(너무 큼) 순번을 쓰지 않는다.
     pub fn push(&self, f: &wire::Finished, queue: bool, now: u64, make: impl FnOnce(u64) -> Option<String>) -> Result<Option<(u64, String)>, String> {
         let mut db = self.db();
@@ -707,19 +847,19 @@ impl Outbox {
         let _ = self.db().execute("UPDATE log SET state = 'sent', sent = ?2, line = NULL WHERE seq = ?1 AND state = 'queued'", params![seq as i64, now as i64]);
     }
 
-    /// 모음함이 받지 않겠다고 한 건(지나간 순번 등). 다시 보내지 않는다.
+    /// 관제 PC가 받지 않겠다고 한 건(지나간 순번 등). 다시 보내지 않는다.
     pub fn give_up(&self, seq: u64) {
         let _ = self.db().execute("UPDATE log SET state = 'dropped', line = NULL WHERE seq = ?1 AND state = 'queued'", params![seq as i64]);
     }
 
-    /// 버렸지만 아직 모음함에 알리지 못한 구간
+    /// 버렸지만 아직 관제 PC에 알리지 못한 구간
     pub fn dropped(&self) -> Option<(u64, u64)> {
         let db = self.db();
         let (first, last) = (Self::meta(&db, "drop_first"), Self::meta(&db, "drop_last"));
         (first > 0 && last >= first).then_some((first, last))
     }
 
-    /// 버린 구간을 모음함에 알렸다.
+    /// 버린 구간을 관제 PC에 알렸다.
     pub fn dropped_told(&self) {
         let db = self.db();
         let _ = Self::set_meta(&db, "drop_first", 0);
@@ -730,7 +870,7 @@ impl Outbox {
         self.db().query_row("SELECT COUNT(*) FROM log WHERE state = 'queued'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64
     }
 
-    /// 보내기를 끄거나 짝을 끊을 때: 기다리던 것을 비운다(다른 모음함으로 새지 않게).
+    /// 보내기를 끄거나 짝을 끊을 때: 기다리던 것을 비운다(다른 관제 PC로 새지 않게).
     pub fn clear_queue(&self) {
         let _ = self.db().execute("UPDATE log SET state = 'dropped', line = NULL WHERE state = 'queued'", []);
     }
@@ -766,6 +906,37 @@ mod tests {
 
     fn line(pc: &str, seq: u64, target: &str, at: u64) -> String {
         encode(&item(target, at), pc, seq, false, "t").unwrap()
+    }
+
+    #[test]
+    fn connection_log_is_bounded_and_feeds_the_site_timeline() {
+        let inbox = Inbox::open(&tmp("conns")).unwrap();
+        inbox.pair("pcA", "용인", "100.64.0.2", false, NOW).unwrap();
+        assert_eq!(inbox.take("pcA", 1, &line("pcA", 1, "a", NOW), NOW).unwrap(), Taken::Stored);
+        let conn = |pc: &str, outcome: &str, at: u64| Conn { at, pc: pc.into(), addr: "100.64.0.2".into(), outcome: outcome.into(), stored: 1, first_seq: 1, last_seq: 1, ..Conn::default() };
+        inbox.log_conn(&conn("pcA", "ok", NOW));
+        inbox.log_conn(&conn("pcA", "refused", NOW + 1));
+        // 짝이 아닌 접속은 1분에 정해진 수만 남고, 짝의 내역을 밀어내지 않는다
+        for i in 0..200 {
+            inbox.log_conn(&conn("", "tls", NOW + 2 + i));
+        }
+        assert_eq!(inbox.conns(None, 1000).len(), CONN_STRANGER_PER_MIN as usize);
+        let mine = inbox.conns(Some("pcA"), 10);
+        assert_eq!(mine.iter().map(|c| c.outcome.as_str()).collect::<Vec<_>>(), ["refused", "ok"]);
+        inbox.log_conn(&conn("pcA", "ok", NOW + 500));
+        assert_eq!(inbox.conns(Some("pcA"), 10).len(), 3, "짝의 접속은 상한에 걸리지 않는다");
+
+        let hours = inbox.timeline("pcA", NOW);
+        assert_eq!(hours.len(), TIMELINE_HOURS);
+        let last = hours.last().unwrap();
+        assert_eq!((last.items, last.danger, last.conns, last.failed), (1, 0, 3, 1));
+        assert!(hours[..TIMELINE_HOURS - 1].iter().all(|h| h.items == 0 && h.conns == 0));
+
+        let moved = inbox.transfers("pcA", 10);
+        assert_eq!((moved.len(), moved[0].seq, moved[0].kind.as_str()), (1, 1, "route_latency"));
+        // 보관 기한이 지나면 접속 내역도 지운다
+        inbox.purge(NOW + 91 * DAY, 90);
+        assert!(inbox.conns(Some("pcA"), 10).is_empty());
     }
 
     #[test]

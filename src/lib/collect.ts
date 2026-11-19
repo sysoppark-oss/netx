@@ -1,5 +1,5 @@
-// 모음함: 이 PC의 진단 결과를 다른 PC의 NetX로 보내거나, 다른 PC가 보낸 결과를 이 PC에 모은다.
-// 근거: 통합프로젝트 「모음함 변경 제안 (2판)」 1단계. 보내기와 받기는 기본 꺼짐이고 이 PC에서 사람이 켠다.
+// 관제 PC: 이 PC의 진단 결과를 다른 PC의 NetX로 보내거나, 다른 PC가 보낸 결과를 이 PC에 모은다.
+// 근거: 통합프로젝트 「관제 PC 변경 제안 (2판)」 1단계. 보내기와 받기는 기본 꺼짐이고 이 PC에서 사람이 켠다.
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export interface Collector {
@@ -81,6 +81,75 @@ export interface Board {
   gaps: { pc: string; first: number; last: number; got: number; dropped: boolean }[];
   alerts: { pc: string; at: number; kind: string; note: string }[];
   downtime: [number, number][];
+  /** 짝이 아닌 곳에서 온 접속(최근 것부터) */
+  strangers: Conn[];
+}
+
+/** 접속 한 번의 기록 */
+export interface Conn {
+  at: number;
+  pc: string;
+  addr: string;
+  outcome: string;
+  ms: number;
+  stored: number;
+  again: number;
+  refused: number;
+  bytes: number;
+  first_seq: number;
+  last_seq: number;
+}
+
+export interface Transfer {
+  seq: number;
+  at: number;
+  got: number;
+  kind: string;
+  title: string;
+  verdict: string;
+  size: number;
+  skew: number;
+  stale: boolean;
+}
+
+export interface Hour {
+  at: number;
+  items: number;
+  danger: number;
+  conns: number;
+  failed: number;
+}
+
+/** 거점 하나의 상세 */
+export interface Site {
+  pc: Pc;
+  conns: Conn[];
+  transfers: Transfer[];
+  timeline: Hour[];
+  gaps: Board["gaps"];
+  alerts: Board["alerts"];
+}
+
+/** 접속이 끝난 까닭(백엔드가 정해진 낱말로 준다) */
+export const CONN_LABEL: Record<string, string> = {
+  ok: "정상으로 끝남",
+  closed: "연결이 끊김",
+  pair_ok: "짝 맺기 승인",
+  pair_no: "짝 맺기 거절",
+  unknown: "짝이 아님",
+  stopped: "받기 멈춤이라 거절",
+  refused: "결과를 거절하고 끊음",
+  strange: "모르는 말을 해서 끊음",
+  version: "판이 달라 끊음",
+  tls: "인증 실패",
+  busy: "접속이 너무 많아 받지 않음",
+  outside: "테일스케일 밖에서 옴",
+};
+
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
 export interface Filter {
@@ -194,6 +263,7 @@ export const collectPairOpen = () => invoke<PairWindow>("collect_pair_open");
 export const collectPairClose = () => invoke<void>("collect_pair_close");
 export const collectPairDecide = (approve: boolean) => invoke<void>("collect_pair_decide", { approve });
 export const collectPcSet = (id: string, state: Pc["state"]) => invoke<void>("collect_pc_set", { id, state });
+export const collectSite = (id: string) => invoke<Site>("collect_site", { id });
 export const collectBoard = () => invoke<Board>("collect_board");
 export const collectList = (filter: Filter) => invoke<{ rows: Row[]; total: number; page: number }>("collect_list", { filter });
 export const collectItem = (pc: string, seq: number) => invoke<Finished | null>("collect_item", { pc, seq });

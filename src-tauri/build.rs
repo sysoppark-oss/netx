@@ -73,6 +73,7 @@ fn main() {
                 "collect_pair_close",
                 "collect_pair_decide",
                 "collect_pc_set",
+                "collect_site",
                 "collect_board",
                 "collect_list",
                 "collect_item",

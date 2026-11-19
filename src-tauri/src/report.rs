@@ -21,7 +21,7 @@ pub const MAX_ROWS: usize = 2000;
 pub const MAX_AUDIT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 만들 수 있는 구역 (id, 제목). 순서는 메뉴와 같다.
-pub const SECTIONS: [(&str, &str); 8] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("terminal", "터미널"), ("collect", "모음함"), ("audit", "감사 로그")];
+pub const SECTIONS: [(&str, &str); 8] = [("mynet", "내 네트워크"), ("history", "최근 진단"), ("topology", "구성도"), ("capture", "캡처 분석"), ("manual", "직접 명령"), ("terminal", "터미널"), ("collect", "거점 관제"), ("audit", "감사 로그")];
 /// 한 보고서에 분석해 싣는 캡처 파일 수
 pub const MAX_CAPTURES: usize = 10;
 
@@ -73,12 +73,12 @@ pub struct Sources {
     pub captures_total: usize,
     /// 직접 명령 기록 파일(`manual.jsonl`)의 내용
     pub manual: String,
-    /// 모음함에 모인 결과 가운데 기간 안의 것(최근 것부터)과 그 전체 건수
+    /// 거점 관제에 모인 결과 가운데 기간 안의 것(최근 것부터)과 그 전체 건수
     pub collected: Vec<Collected>,
     pub collected_total: usize,
 }
 
-/// 모음함의 한 건. 글자는 다른 PC가 보낸 자료다(글자로만 싣는다).
+/// 관제 PC의 한 건. 글자는 다른 PC가 보낸 자료다(글자로만 싣는다).
 #[derive(Debug, Clone, Default)]
 pub struct Collected {
     /// 진단 시각, 받은 시각 (밀리초)
@@ -781,7 +781,7 @@ fn zone_manual(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> 
     Zone { id: "manual", title: "직접 명령", count, shown, body, timeless: false, items }
 }
 
-/// 모음함: 다른 PC(와 이 PC)의 NetX가 진단해 이 PC에 모은 결과. 받은 글자는 모두 바꿔 쓴다.
+/// 관제 PC: 다른 PC(와 이 PC)의 NetX가 진단해 이 PC에 모은 결과. 받은 글자는 모두 바꿔 쓴다.
 fn zone_collect(rows: &[Collected], total: usize, offset: i32, m: &Masker) -> Zone {
     let mut items = Vec::new();
     let mut lines = Vec::new();
@@ -808,16 +808,16 @@ fn zone_collect(rows: &[Collected], total: usize, offset: i32, m: &Masker) -> Zo
     }
     let shown = lines.len();
     let body = if lines.is_empty() {
-        "<p class=\"m\">이 기간에 모음함에 모인 결과가 없습니다.</p>".to_string()
+        "<p class=\"m\">이 기간에 거점 관제에 모인 결과가 없습니다.</p>".to_string()
     } else {
         format!(
-            "<p class=\"m\">다른 PC(와 이 PC)의 NetX가 진단해 이 PC의 모음함에 모은 결과를 진단 시각의 최근 것부터 적었습니다. 내용은 보낸 PC가 알려 온 것이며, 원본 출력은 보낸 PC에만 있습니다.{}</p>\
+            "<p class=\"m\">다른 PC(와 이 PC)의 NetX가 진단해 이 PC의 거점 관제에 모은 결과를 진단 시각의 최근 것부터 적었습니다. 내용은 보낸 PC가 알려 온 것이며, 원본 출력은 보낸 PC에만 있습니다.{}</p>\
 <table class=\"w\"><tr><th>진단 시각</th><th>보낸 PC</th><th>진단</th><th>대상</th><th>판정</th><th>요약</th></tr>{}</table>",
             if total > shown { format!(" 전체 {total}건 중 최근 {shown}건입니다.") } else { String::new() },
             lines.concat()
         )
     };
-    Zone { id: "collect", title: "모음함", count: total.max(shown), shown, body, timeless: false, items }
+    Zone { id: "collect", title: "거점 관제", count: total.max(shown), shown, body, timeless: false, items }
 }
 
 fn zone_audit(log: &str, from_ms: u64, to_ms: u64, offset: i32, m: &Masker) -> Zone {
@@ -1086,7 +1086,7 @@ mod tests {
         assert!(data.to_string().contains("example.com") && !data.to_string().contains("192.168.0.10"));
         // 비어 있을 때
         let empty = build(&req(&["collect"], true), &Sources::default(), NOW, &no_stop()).unwrap();
-        assert!(empty.html.contains("모음함에 모인 결과가 없습니다"));
+        assert!(empty.html.contains("거점 관제에 모인 결과가 없습니다"));
     }
 
     /// 구성도를 조사한 진단 기록
