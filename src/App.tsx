@@ -269,7 +269,7 @@ export default function App() {
       topo_svg,
     };
     void historySave(entry).catch(() => {});
-    // 모음함: 보내기나 받기를 켠 PC에서만 백엔드가 받아 넣는다(기본은 둘 다 꺼짐 — 아무것도 나가지 않는다).
+    // 관제 PC: 보내기나 받기를 켠 PC에서만 백엔드가 받아 넣는다(기본은 둘 다 꺼짐 — 아무것도 나가지 않는다).
     void collectSubmit(reportEntry(entry)).catch(() => {});
     // 다른 프로그램이 넘긴 대상을 진단한 것이면 결과를 보낸 쪽에 돌려준다(대상을 고쳐 실행한 것은 보내지 않는다).
     const asked = lastHandoff.current;
@@ -741,11 +741,11 @@ export default function App() {
               </button>
               <button
                 onClick={() => setCollectOpen(true)}
-                title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 모음함으로 보냅니다. 둘 다 기본은 꺼져 있습니다."
+                title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 관제 PC로 보냅니다. 둘 다 기본은 꺼져 있습니다."
                 className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
               >
-                <span className="text-base">📥</span>
-                <span className="flex-1">모음함</span>
+                <span className="text-base">📡</span>
+                <span className="flex-1">거점 관제</span>
               </button>
               <button
                 onClick={() => setCapture("")}

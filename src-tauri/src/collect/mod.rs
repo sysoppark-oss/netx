@@ -1,11 +1,11 @@
-//! 모음함: 한 PC의 NetX가 진단한 결과를 다른 PC의 NetX로 모은다(통합프로젝트 「모음함 변경 제안 (2판)」 1단계).
+//! 관제 PC: 한 PC의 NetX가 진단한 결과를 다른 PC의 NetX로 모은다(통합프로젝트 「관제 PC 변경 제안 (2판)」 1단계).
 //!
 //! NetX의 화면·실행 엔진·검증기를 부르지 않는 독립 모듈이다(나중에 관제로 뗀다). NetX가 넘겨주는 것은
 //! 끝난 진단 한 건([`wire::Finished`])뿐이고, Tauri에 닿는 곳은 `app.rs` 하나다.
 //!
 //! - 통로: 테일스케일 주소(100.64.0.0/10)에만 묶어 듣고, 그 대역에서 온 접속만 받는다. TLS 1.3 상호 인증.
 //!   인증 기관 없이, 짝 맺을 때 저장한 공개 키 지문만 받아들인다.
-//! - 방향: 보내는 PC가 나가는 연결만 쓴다. 모음함은 받은 줄에 답만 한다. 모음함이 먼저 보내는 요청은 없다.
+//! - 방향: 보내는 PC가 나가는 연결만 쓴다. 관제 PC는 받은 줄에 답만 한다. 관제 PC가 먼저 보내는 요청은 없다.
 //! - 다른 PC로의 조회 의뢰(2단계)의 통로는 여기에 없다.
 
 pub mod app;
@@ -25,7 +25,7 @@ use tokio::sync::{Notify, oneshot};
 use key::Identity;
 use store::{Inbox, Outbox, Taken};
 
-/// 모음함이 듣는 TCP 포트(기본값). IANA의 동적 포트 범위(49152~65535) 안이다.
+/// 관제 PC가 듣는 TCP 포트(기본값). IANA의 동적 포트 범위(49152~65535) 안이다.
 pub const PORT_DEFAULT: u16 = 49317;
 /// 짝 맺기 창이 열려 있는 시간
 pub const PAIR_WINDOW: Duration = Duration::from_secs(120);
@@ -54,7 +54,7 @@ fn port_default() -> u16 {
     PORT_DEFAULT
 }
 
-/// 짝 맺은 모음함
+/// 짝 맺은 관제 PC
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Collector {
     /// 공개 키 지문. 이 지문이 아니면 보내지 않는다.
@@ -67,13 +67,13 @@ pub struct Collector {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
-    /// 이 PC의 진단 결과를 모음함으로 보낸다. 기본 꺼짐 — 이 PC에서 사람이 켠다.
+    /// 이 PC의 진단 결과를 관제 PC로 보낸다. 기본 꺼짐 — 이 PC에서 사람이 켠다.
     #[serde(default)]
     pub send: bool,
     /// 보낼 때 내부 주소·PC 이름을 가린다. 기본 켬.
     #[serde(default = "yes")]
     pub mask: bool,
-    /// 이 PC를 모음함으로 쓴다(테일스케일 주소에서 듣는다). 기본 꺼짐.
+    /// 이 PC를 관제 PC로 쓴다(테일스케일 주소에서 듣는다). 기본 꺼짐.
     #[serde(default)]
     pub receive: bool,
     /// 다른 PC의 화면에 보일 이 PC의 이름
@@ -107,7 +107,7 @@ fn load_config(dir: &Path) -> Config {
     c
 }
 
-/// 모음함 쪽 짝 맺기 창
+/// 관제 PC 쪽 짝 맺기 창
 struct Window {
     code: String,
     until: Instant,
@@ -148,7 +148,7 @@ pub struct PendingView {
 pub enum Join {
     #[default]
     Idle,
-    /// 코드가 맞았다. 두 화면의 확인 숫자를 견주고 모음함에서 승인하기를 기다린다.
+    /// 코드가 맞았다. 두 화면의 확인 숫자를 견주고 관제 PC에서 승인하기를 기다린다.
     Waiting { number: String, name: String, addr: String },
     Done { name: String },
     Failed { why: String },
@@ -160,7 +160,7 @@ pub struct Status {
     pub listening: Option<String>,
     /// 듣지 못하는 까닭
     pub listen_error: Option<String>,
-    /// 모음함에 닿아 있는지
+    /// 관제 PC에 닿아 있는지
     pub linked: bool,
     pub send_error: Option<String>,
     pub last_sent: u64,
@@ -189,7 +189,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl Hub {
     pub fn open(dir: &Path, version: &str, host: &str, user: &str) -> Result<Hub, String> {
-        std::fs::create_dir_all(dir).map_err(|e| format!("모음함 폴더를 만들지 못했습니다: {e}"))?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("거점 관제 폴더를 만들지 못했습니다: {e}"))?;
         let me = key::load_or_create(dir)?;
         let mut config = load_config(dir);
         if config.name.is_empty() {
@@ -236,7 +236,7 @@ impl Hub {
             return Err("이 PC의 이름을 적어 주세요".into());
         }
         if send && c.collector.is_none() {
-            return Err("먼저 모음함과 짝을 맺어야 보낼 수 있습니다".into());
+            return Err("먼저 관제 PC와 짝을 맺어야 보낼 수 있습니다".into());
         }
         if c.send && !send {
             // 끈 뒤에는 기다리던 것도 나가지 않는다.
@@ -250,7 +250,7 @@ impl Hub {
         Ok(c)
     }
 
-    /// 보내는 쪽: 모음함과의 짝을 끊는다. 보내기도 꺼지고 기다리던 것은 비운다.
+    /// 보내는 쪽: 관제 PC와의 짝을 끊는다. 보내기도 꺼지고 기다리던 것은 비운다.
     pub fn forget_collector(&self) -> Result<(), String> {
         let mut c = self.config();
         c.collector = None;
@@ -266,7 +266,7 @@ impl Hub {
         self.save(&c)
     }
 
-    /// 끝난 진단 한 건을 받는다. 보내기가 켜져 있으면 가려서 보낼 함에 넣고, 이 PC가 모음함이면 자기 모음함에도 넣는다(가리지 않고, 네트워크를 거치지 않는다).
+    /// 끝난 진단 한 건을 받는다. 보내기가 켜져 있으면 가려서 보낼 함에 넣고, 이 PC가 관제 PC가면 자기 관제 PC에도 넣는다(가리지 않고, 네트워크를 거치지 않는다).
     /// 돌려주는 것: 쓴 순번(아무 데도 넣지 않았으면 없음).
     pub fn submit(&self, f: wire::Finished, public_ip: Option<&str>) -> Result<Option<u64>, String> {
         let c = self.config();
@@ -280,12 +280,12 @@ impl Hub {
         let mask = wire::Mask::new(c.mask, &self.secret, &self.host, &self.user, public_ip);
         let out = mask.apply(f.clone());
         let Some((seq, _)) = self.outbox.push(&out, sending, now, |seq| wire::encode(&out, &me, seq, c.mask, &self.version))? else {
-            return Err("결과가 너무 커서 모음함에 넣지 못했습니다".into());
+            return Err("결과가 너무 커서 거점 관제에 넣지 못했습니다".into());
         };
         if c.receive {
-            let line = wire::encode(&f, &me, seq, false, &self.version).ok_or("결과가 너무 커서 모음함에 넣지 못했습니다")?;
+            let line = wire::encode(&f, &me, seq, false, &self.version).ok_or("결과가 너무 커서 거점 관제에 넣지 못했습니다")?;
             if let Taken::Refused(why) = self.inbox.take(&me, seq, &line, now)? {
-                return Err(format!("이 PC의 모음함이 받지 않았습니다: {}", why.code()));
+                return Err(format!("이 PC의 거점 관제가 받지 않았습니다: {}", why.code()));
             }
         }
         if sending {
@@ -294,12 +294,12 @@ impl Hub {
         Ok(Some(seq))
     }
 
-    // ---- 모음함 쪽 짝 맺기 창 ----
+    // ---- 관제 PC 쪽 짝 맺기 창 ----
 
     /// [새 PC 짝 맺기]: 창을 열고 일회용 코드를 띄운다. 이미 열려 있으면 새 코드로 바꾼다.
     pub fn open_window(&self) -> Result<WindowView, String> {
         if !self.config().receive {
-            return Err("먼저 \"이 PC를 모음함으로 쓰기\"를 켜야 합니다".into());
+            return Err("먼저 \"이 PC를 관제 PC로 쓰기\"를 켜야 합니다".into());
         }
         *lock(&self.window) = Some(Window { code: key::new_code()?, until: Instant::now() + PAIR_WINDOW, wrong: 0, pending: None });
         Ok(self.window_view())
@@ -327,7 +327,7 @@ impl Hub {
         }
     }
 
-    /// 접속해 온 상대가 낸 증명을 본다. 맞으면 (모음함의 증명, 확인 숫자, 사람의 결정을 기다리는 통로).
+    /// 접속해 온 상대가 낸 증명을 본다. 맞으면 (관제 PC의 증명, 확인 숫자, 사람의 결정을 기다리는 통로).
     /// 코드는 한 번만 쓰인다: 맞은 뒤에는 다른 상대가 같은 코드로 들어오지 못한다.
     pub(crate) fn try_pair(&self, sender_id: &str, name: &str, addr: &str, proof: &str) -> Option<(String, String, oneshot::Receiver<bool>)> {
         // 코드에서 키를 만드는 계산이 느리므로 잠금 밖에서 한다.
@@ -370,7 +370,7 @@ impl Hub {
         Ok(())
     }
 
-    /// 모음함 쪽: 그 PC의 짝을 끊거나(removed), 멈추거나(stopped), 다시 켠다(active).
+    /// 관제 PC 쪽: 그 PC의 짝을 끊거나(removed), 멈추거나(stopped), 다시 켠다(active).
     pub fn set_pc(&self, id: &str, state: &str) -> Result<(), String> {
         if self.inbox.set_state(id, state)? { Ok(()) } else { Err("그런 PC가 없습니다".into()) }
     }
@@ -410,14 +410,14 @@ mod tests {
         assert!(hub.outbox.log().is_empty());
         // 짝이 없으면 보내기를 켤 수 없다
         assert!(hub.set(true, true, false, "용인", 90).is_err());
-        assert!(hub.open_window().is_err(), "모음함으로 쓰지 않는 PC는 짝 맺기 창을 열 수 없다");
+        assert!(hub.open_window().is_err(), "관제 PC로 쓰지 않는 PC는 짝 맺기 창을 열 수 없다");
     }
 
     #[test]
     fn own_results_go_to_own_inbox_unmasked_and_sent_copy_is_masked() {
         let hub = test_hub("both");
         hub.set(false, true, true, "평창", 90).unwrap();
-        hub.remember_collector(Collector { id: "a".repeat(64), name: "다른 모음함".into(), addr: "100.64.0.9".into(), port: PORT_DEFAULT }).unwrap();
+        hub.remember_collector(Collector { id: "a".repeat(64), name: "다른 관제 PC".into(), addr: "100.64.0.9".into(), port: PORT_DEFAULT }).unwrap();
         hub.set(true, true, true, "평창", 90).unwrap();
         let seq = hub.submit(item("192.168.0.9"), None).unwrap().unwrap();
         assert_eq!(hub.inbox.item(&hub.me.id(), seq).unwrap().target, "192.168.0.9");
