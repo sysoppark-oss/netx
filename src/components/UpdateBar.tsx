@@ -29,9 +29,10 @@ export function UpdateBar() {
         {status.state === "error" ? `업데이트하지 못했습니다: ${status.message}` : status.message}
         {status.commit && <span className="ml-2 font-mono text-dim">{status.commit}</span>}
       </span>
-      {status.state === "available" && (
+      {(status.state === "available" || status.state === "error") && (
+        // 승인 창에서 [예]를 누르지 않았거나 내려받기가 끊겨 실패했어도 다시 시도할 수 있게 단추를 남긴다.
         <button type="button" onClick={apply} disabled={busy} className="rounded border border-accent px-2 py-0.5 disabled:opacity-50">
-          지금 업데이트
+          {status.state === "error" ? "다시 시도" : "지금 업데이트"}
         </button>
       )}
       {(status.state === "available" || status.state === "notice" || status.state === "error") && (
