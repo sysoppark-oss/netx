@@ -104,6 +104,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [collectOpen, setCollectOpen] = useState(false);
+  const [collectTab, setCollectTab] = useState<"dashboard" | "send">("dashboard");
   // 메뉴별로 마지막에 보던 화면(입력, 계획, 실행 번호)
   const kept = useRef<Record<string, { inputs: Record<string, string>; plan: ValidatedPlan | null; planRunId: number | null; extras: string[]; custom: Record<string, boolean> }>>({});
   // 기록으로 이미 남긴 실행 번호
@@ -690,7 +691,12 @@ export default function App() {
           </button>
         </div>
       )}
-      <NetBar />
+      <NetBar
+        onCollect={(tab) => {
+          setCollectTab(tab);
+          setCollectOpen(true);
+        }}
+      />
 
       <div className="flex min-h-0 flex-1">
         {/* 좌측 패널 */}
@@ -740,7 +746,10 @@ export default function App() {
                 <span className="flex-1">보고서 만들기</span>
               </button>
               <button
-                onClick={() => setCollectOpen(true)}
+                onClick={() => {
+                  setCollectTab("dashboard");
+                  setCollectOpen(true);
+                }}
                 title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 관제 PC로 보냅니다. 둘 다 기본은 꺼져 있습니다."
                 className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
               >
@@ -1086,7 +1095,7 @@ export default function App() {
         />
       )}
       {reportOpen && <ReportView onClose={() => setReportOpen(false)} />}
-      {collectOpen && <CollectView onClose={() => setCollectOpen(false)} />}
+      {collectOpen && <CollectView initial={collectTab} onClose={() => setCollectOpen(false)} />}
       {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );

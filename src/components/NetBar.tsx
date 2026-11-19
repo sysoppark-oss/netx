@@ -1,3 +1,4 @@
+import { LinkPill, type CollectTab } from "./LinkPill";
 import { useEffect, useRef, useState } from "react";
 import { networkInfo } from "../lib/backend";
 import type { NetInfo } from "../lib/types";
@@ -20,7 +21,7 @@ function size(bytes: number): string {
 }
 
 /** 늘 보이는 내 네트워크 정보: 어댑터, 내 주소, 게이트웨이, DNS, 공인 IP, 지금 속도와 누적 사용량. */
-export function NetBar() {
+export function NetBar({ onCollect }: { onCollect: (tab: CollectTab) => void }) {
   const [info, setInfo] = useState<NetInfo | null>(null);
   const [speed, setSpeed] = useState<{ down: number; up: number } | null>(null);
   const first = useRef<NetInfo | null>(null);
@@ -99,6 +100,7 @@ export function NetBar() {
           </span>
         </span>
       )}
+      <LinkPill onOpen={onCollect} />
     </div>
   );
 }

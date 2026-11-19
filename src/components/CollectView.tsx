@@ -712,8 +712,8 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
   );
 }
 
-export function CollectView({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("dashboard");
+export function CollectView({ onClose, initial = "dashboard" }: { onClose: () => void; initial?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initial);
   const [ov, setOv] = useState<Overview | null>(null);
   const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [], strangers: [] });
   const [error, setError] = useState<string | null>(null);
