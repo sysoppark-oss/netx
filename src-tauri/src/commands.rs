@@ -412,6 +412,7 @@ fn update_status(app: &AppHandle, state: &'static str, commit: &str, message: im
 }
 
 const UPDATE_DEFERRED: &str = "실행 중인 작업이 있어 설치를 미뤘습니다. 작업이 끝난 뒤 [지금 업데이트]를 누르거나 NetX를 다시 켜면 설치됩니다.";
+const UPDATE_OFFER_ADMIN: &str = "새 버전이 있습니다. [지금 업데이트]를 누르면 Windows 승인 창이 뜹니다. 2분 안에 [예]를 눌러 주세요.";
 const UPDATE_NOTICE: &str = "새 버전이 있습니다. 이 빌드는 스스로 설치하지 않습니다. GitHub의 sysoppark-oss/netx에서 설치 파일을 받아 직접 설치하세요.";
 
 /// 새 버전을 내려받아 확인하고 설치 프로그램을 실행한 뒤 NetX를 끝낸다.
@@ -461,7 +462,10 @@ pub fn watch_updates(app: AppHandle) {
                 let manual = data_dir(&app).map(|d| settings::load(&d).manual_update).unwrap_or(true) || crate::updater::needs_admin();
                 match crate::updater::decide(crate::updater::CHANNEL, first, manual, busy()) {
                     Action::Notice => update_status(&app, "notice", &m.commit, UPDATE_NOTICE),
-                    Action::Offer => update_status(&app, "available", &m.commit, "새 버전이 있습니다."),
+                    Action::Offer => {
+                        let text = if crate::updater::needs_admin() { UPDATE_OFFER_ADMIN } else { "새 버전이 있습니다." };
+                        update_status(&app, "available", &m.commit, text)
+                    }
                     Action::Defer => update_status(&app, "available", &m.commit, UPDATE_DEFERRED),
                     Action::Install => {
                         if let Err(e) = install_update(&app, &m).await {

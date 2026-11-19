@@ -42,6 +42,25 @@ const FIELD = "rounded border border-line bg-void px-2 py-1 text-xs";
 
 const SENT_STATE: Record<SentRow["state"], string> = { queued: "보낼 함에서 기다림", sent: "보냄", dropped: "버림(보내지 않음)", local: "이 PC의 모음함에만" };
 
+/** 글자를 클립보드에 넣는 단추. 넣었으면 잠깐 "복사됨"으로 바뀐다. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  function copy() {
+    const settle = (next: "done" | "failed") => {
+      setState(next);
+      setTimeout(() => setState("idle"), 1500);
+    };
+    const writer = navigator.clipboard?.writeText(text);
+    if (!writer) return settle("failed");
+    void writer.then(() => settle("done")).catch(() => settle("failed"));
+  }
+  return (
+    <button type="button" onClick={copy} className={BTN}>
+      {state === "done" ? "복사됨" : state === "failed" ? "복사 못 함" : label}
+    </button>
+  );
+}
+
 function Badge({ children, tone = "text-dim" }: { children: React.ReactNode; tone?: string }) {
   return <span className={`ml-1 rounded border border-line px-1 text-[11px] ${tone}`}>{children}</span>;
 }
@@ -426,7 +445,8 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
       .catch((e) => onError(String(e)));
   const join = () => {
     setBusy(true);
-    void collectJoin(addr.trim(), null, code)
+    // 붙여 넣은 코드에 빈칸이 끼었거나 소문자로 적었어도 받는다. 코드는 숫자와 대문자뿐이다.
+    void collectJoin(addr.trim(), null, code.replace(/\s+/g, "").toUpperCase())
       .then(reload)
       .catch((e) => onError(String(e)))
       .finally(() => setBusy(false));
@@ -482,7 +502,7 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
             <div className="flex flex-wrap items-center gap-2">
               <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="모음함의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
               <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="일회용 코드" maxLength={24} autoComplete="off" spellCheck={false} className={`${FIELD} w-40 font-mono uppercase`} />
-              <button disabled={busy || !addr.trim() || code.trim().length < 8} onClick={join} className={BTN_MAIN}>
+              <button disabled={busy || !addr.trim() || code.replace(/\s+/g, "").length < 8} onClick={join} className={BTN_MAIN}>
                 {busy ? "확인 중…" : "짝 맺기"}
               </button>
             </div>
@@ -643,12 +663,18 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
           ) : (
             <div className="rounded border border-line px-3 py-2">
               <p>보내는 PC의 NetX에서 "보내기" 탭에 아래 주소와 코드를 적으세요. 코드는 한 번만 쓰이고 {w.secs_left}초 뒤에 사라집니다.</p>
-              <p className="my-2 text-center">
-                <span className="mr-4 font-mono text-base">{ov.tailnet ?? "테일스케일 주소 없음"}</span>
-                <span className="font-mono text-2xl tracking-widest">
-                  {w.code.slice(0, 5)} {w.code.slice(5)}
+              <div className="my-2 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+                <span className="flex items-center gap-2">
+                  <span className="select-all font-mono text-base">{ov.tailnet ?? "테일스케일 주소 없음"}</span>
+                  {ov.tailnet && <CopyButton text={ov.tailnet} label="주소 복사" />}
                 </span>
-              </p>
+                <span className="flex items-center gap-2">
+                  <span className="font-mono text-2xl tracking-widest">
+                    {w.code.slice(0, 5)} {w.code.slice(5)}
+                  </span>
+                  <CopyButton text={w.code} label="코드 복사" />
+                </span>
+              </div>
               {w.wrong > 0 && <p className="text-caution">틀린 코드가 {w.wrong}번 들어왔습니다. 5번이 되면 이 코드를 버립니다.</p>}
               <button onClick={() => act(collectPairClose())} className={BTN}>
                 닫기

@@ -6,6 +6,7 @@ import type { Light, Proc, Risk, RunState, StepResult, StepStatus, Target, UserL
 import { ChartView } from "./Charts";
 import { captureNameOf, openCapture } from "../lib/capture";
 import { TopologyView } from "./Topology";
+import { METER_TOTAL, meterLit } from "../lib/meter";
 
 const RISK_LABEL: Record<Risk, string> = { safe: "안전", caution: "주의", danger: "위험", forbidden: "금지" };
 const RISK_STYLE: Record<Risk, string> = {
@@ -295,30 +296,46 @@ function StatusChip({ status, exitCode, elapsedMs }: { status: StepStatus; exitC
 
 const LIMIT_SECS = 120;
 
-/** 실행 중 진행 표시. 예상 시간을 알면 그에 맞춰 차오르고, 모르면 경과 시간과 제한 시간을 보여 준다. */
+const METER_COLOR = "var(--color-safe)";
+
+/**
+ * 실행 중 진행 표시. 음향 장비의 레벨 미터처럼 초록 칸이 하나씩 켜진다.
+ * 예상 시간까지 절반쯤 차고, 그 뒤로는 자동 중단 시간까지 천천히 찬다.
+ */
 function Progress({ startedAt, estimateSecs }: { startedAt: number; estimateSecs: number | null }) {
   const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
-  const known = estimateSecs !== null;
-  const ratio = known ? Math.min(0.97, elapsed / estimateSecs) : Math.min(1, elapsed / LIMIT_SECS);
-  const over = known && elapsed > estimateSecs + 3;
+  const lit = meterLit(elapsed, estimateSecs, LIMIT_SECS);
   return (
     <div className="mt-3">
-      <div className="h-1.5 overflow-hidden rounded-full bg-raised">
-        <div
-          className={`h-full rounded-full transition-[width] duration-500 ${known ? "bg-accent" : "animate-pulse bg-accent/60"}`}
-          style={{ width: `${Math.max(2, ratio * 100)}%` }}
-        />
+      <div
+        className="rounded-md border border-line bg-black/50 p-2"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={LIMIT_SECS}
+        aria-valuenow={Math.min(LIMIT_SECS, Math.round(elapsed))}
+        aria-label="실행 진행"
+      >
+        <div className="flex gap-[3px]">
+          {Array.from({ length: METER_TOTAL }, (_, i) => {
+            const color = METER_COLOR;
+            const on = i < lit;
+            const head = i === lit - 1;
+            return (
+              <span
+                key={i}
+                className={`h-3.5 flex-1 rounded-[2px] transition-opacity duration-300 ${head ? "animate-pulse" : ""}`}
+                style={{
+                  background: color,
+                  opacity: on ? 1 : 0.16,
+                  boxShadow: on ? `0 0 ${head ? 10 : 5}px ${color}` : "none",
+                  filter: head ? "brightness(1.35)" : "none",
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
-      <p className="mt-1 flex justify-between text-xs text-dim">
-        <span>
-          {elapsed.toFixed(0)}초 경과
-          {known && !over && ` · 약 ${Math.max(0, Math.ceil(estimateSecs - elapsed))}초 남음`}
-          {over && " · 예상보다 오래 걸리고 있습니다(대상이 응답하지 않을 수 있습니다)"}
-        </span>
-        <span>
-          {known ? `예상 ${estimateSecs}초 · ` : "끝나는 시간을 알 수 없는 작업 · "}최대 {LIMIT_SECS}초에 자동 중단
-        </span>
-      </p>
+      <p className="mt-1 text-xs text-dim">{elapsed.toFixed(0)}초 경과</p>
     </div>
   );
 }
