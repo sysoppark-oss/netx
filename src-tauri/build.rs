@@ -80,6 +80,8 @@ fn main() {
                 "collect_fleet",
                 "collect_plan",
                 "collect_plan_set",
+                "collect_plan_now",
+                "collect_inventory_run",
                 "collect_board",
                 "collect_list",
                 "collect_item",

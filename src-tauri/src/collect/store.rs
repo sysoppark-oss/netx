@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS conns(
 CREATE INDEX IF NOT EXISTS conns_at ON conns(at);
 CREATE INDEX IF NOT EXISTS conns_pc ON conns(pc, id);
 CREATE TABLE IF NOT EXISTS plans(pc TEXT NOT NULL, what TEXT NOT NULL, every INTEGER NOT NULL, PRIMARY KEY(pc, what));
+CREATE TABLE IF NOT EXISTS plan_now(pc TEXT NOT NULL, what TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(pc, what));
 CREATE TABLE IF NOT EXISTS plan_state(pc TEXT PRIMARY KEY, rev INTEGER NOT NULL DEFAULT 0, asked INTEGER NOT NULL DEFAULT 0, have INTEGER NOT NULL DEFAULT 0, approved TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS sum_hour(hour INTEGER PRIMARY KEY, ok INTEGER NOT NULL, caution INTEGER NOT NULL, danger INTEGER NOT NULL, unknown INTEGER NOT NULL);
 ";
@@ -659,6 +660,22 @@ impl Inbox {
         .map_err(e)?;
         tx.execute("INSERT INTO plan_state(pc, rev) VALUES(?1, 1) ON CONFLICT(pc) DO UPDATE SET rev = rev + 1", params![pc]).map_err(e)?;
         tx.commit().map_err(e)
+    }
+
+    /// [바로 수집]: 거점이 다음에 예약표를 물을 때 "이 항목을 한 번 바로 수집해 달라"는 표시를 함께 받아 가게 한다.
+    pub fn plan_now(&self, pc: &str, what: &str, now: u64) -> Result<(), String> {
+        let mut db = self.db();
+        let tx = db.transaction().map_err(e)?;
+        tx.execute("INSERT INTO plan_now(pc, what, at) VALUES(?1, ?2, ?3) ON CONFLICT(pc, what) DO UPDATE SET at = ?3", params![pc, what, now as i64]).map_err(e)?;
+        tx.execute("INSERT INTO plan_state(pc, rev) VALUES(?1, 1) ON CONFLICT(pc) DO UPDATE SET rev = rev + 1", params![pc]).map_err(e)?;
+        tx.commit().map_err(e)
+    }
+
+    /// 거점별 바로 수집 표시: [(항목, 누른 때)]
+    pub fn plan_nows(&self, pc: &str) -> Vec<(String, u64)> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT what, at FROM plan_now WHERE pc = ?1 ORDER BY what") else { return Vec::new() };
+        st.query_map(params![pc], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64))).map(|r| r.flatten().collect()).unwrap_or_default()
     }
 
     /// 거점의 예약표: (판 번호, [(항목, 주기)])

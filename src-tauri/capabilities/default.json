@@ -57,6 +57,8 @@
     "allow-collect-fleet",
     "allow-collect-plan",
     "allow-collect-plan-set",
+    "allow-collect-plan-now",
+    "allow-collect-inventory-run",
     "allow-collect-board",
     "allow-collect-list",
     "allow-collect-item",

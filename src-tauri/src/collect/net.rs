@@ -30,6 +30,8 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(150);
 /// 보내는 쪽이 살아 있음을 알리는 간격
 const ALIVE_EVERY: Duration = Duration::from_secs(60);
+/// 거점이 수집 예약표를 다시 묻는 간격
+const PLAN_EVERY: Duration = Duration::from_secs(20);
 /// 한 줄의 상한(한 건의 상한 + 봉투)
 const MAX_LINE: usize = wire::MAX_ITEM_BYTES * 2 + 4096;
 const ANSWER: Duration = Duration::from_secs(20);
@@ -380,6 +382,8 @@ async fn converse<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &s
                         if hub.inbox.admitted(id).is_err() {
                             return "stopped";
                         }
+                        // 예약표를 묻는 것도 살아 있다는 표시다.
+                        hub.inbox.seen(id, addr, now);
                         let have = msg.get("have").and_then(Value::as_u64).unwrap_or(0);
                         let approved: Vec<&str> = msg
                             .get("on")
@@ -391,7 +395,10 @@ async fn converse<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &s
                         if rev == have {
                             json!({"t": "ok"})
                         } else {
-                            json!({"t": "plan", "rev": rev, "items": items.iter().map(|(w, e)| json!({"what": w, "every": e})).collect::<Vec<_>>()})
+                            let nows = hub.inbox.plan_nows(id);
+                            json!({"t": "plan", "rev": rev,
+                                "items": items.iter().map(|(w, e)| json!({"what": w, "every": e})).collect::<Vec<_>>(),
+                                "now": nows.iter().map(|(w, at)| json!({"what": w, "at": at})).collect::<Vec<_>>()})
                         }
                     }
                     // 모르는 줄(2단계의 의뢰 포함)은 받지 않는다.
@@ -566,6 +573,8 @@ async fn send_all(hub: &Hub, k: &Collector) -> Result<(), String> {
         }
         tokio::select! {
             _ = hub.wake.notified() => {}
+            // 예약표를 주는 관제 PC에게는 20초마다 예약표를 묻는다(그 줄이 살아 있다는 표시를 겸한다).
+            _ = tokio::time::sleep(PLAN_EVERY), if plans => {}
             _ = tokio::time::sleep(ALIVE_EVERY) => {
                 if !write_line(&mut w, &json!({"t": "alive"})).await || read_line(&mut reader, ANSWER).await.as_ref().map(kind) != Some("ok") {
                     return Err(gone());
@@ -687,6 +696,21 @@ mod tests {
         assert_eq!(site.inventory_due(now + 30 * 60_000), ["system"]);
         until("수집한 것이 도착", || home.inbox.latest(&site.me.id(), "inventory.system", 5).len() == 2).await;
         until("승인 상태가 관제 PC에 보임", || home.inbox.plan_seen(&site.me.id()).2 == ["system"]).await;
+        // [바로 수집]: 승인한 항목만, 주기를 기다리지 않고 한 번 돈다. 같은 표시로 두 번 돌지 않는다.
+        let later = now + 31 * 60_000;
+        home.inbox.plan_now(&site.me.id(), "system", later).unwrap();
+        home.inbox.plan_now(&site.me.id(), "software", later).unwrap();
+        // 거점은 살아 있다는 줄을 보낼 때(1분마다) 예약표도 묻는다. 시험에서는 기다리지 않고 깨운다.
+        until("바로 수집 표시 도착", || {
+            site.wake.notify_waiters();
+            site.config().plan.now.len() == 2
+        })
+        .await;
+        assert_eq!(site.inventory_due(later), ["system"], "승인하지 않은 프로그램 목록은 돌지 않는다");
+        assert!(site.inventory_due(later + 60_000).is_empty());
+        // 거점 PC 앞의 사람은 켠 항목을 바로 돌릴 수 있다
+        assert!(site.inventory_run("software", later).is_err());
+        assert!(site.inventory_run("system", later + 60_000).is_ok());
         // 짝을 끊으면 예약표를 버린다
         site.forget_collector().unwrap();
         assert!(site.config().plan.items.is_empty());

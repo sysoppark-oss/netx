@@ -102,7 +102,13 @@ pub struct Plan {
     pub rev: u64,
     #[serde(default)]
     pub items: BTreeMap<String, u32>,
+    /// 관제 PC에서 [바로 수집]을 누른 때(항목 이름 → 시각). 사람이 켠 항목만, 표시 하나에 한 번 돈다.
+    #[serde(default)]
+    pub now: BTreeMap<String, u64>,
 }
+
+/// 바로 수집 사이의 가장 짧은 간격
+pub const NOW_GAP: u64 = 60_000;
 
 /// 예약표 한 장에 실을 수 있는 항목 수
 pub const PLAN_MAX: usize = 16;
@@ -136,6 +142,7 @@ fn load_config(dir: &Path) -> Config {
     }
     c.name = wire::text(&c.name, 40);
     // 손으로 고친 설정 파일이라도 정해진 항목만, 한도 안의 주기로만 돈다.
+    c.plan.now.retain(|k, _| inventory::known(k).is_some());
     c.plan.items = clean_plan(std::mem::take(&mut c.plan.items).into_iter().map(|(w, e)| (w, u64::from(e))));
     c.inventory = c.inventory.into_iter().filter_map(|(k, v)| inventory::known(&k).map(|(_, _, floor, _)| (k, Inv { on: v.on, every: v.every.clamp(floor, inventory::EVERY_MAX) }))).collect();
     // 손으로 고친 설정 파일이라도 테일스케일 밖 주소로는 보내지 않는다.
@@ -306,7 +313,9 @@ impl Hub {
         let Some(rev) = answer.get("rev").and_then(Value::as_u64) else { return };
         let items = answer.get("items").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
         let mut c = self.config();
-        c.plan = Plan { rev, items: clean_plan(items.iter().filter_map(|i| Some((i.get("what")?.as_str()?.to_string(), i.get("every")?.as_u64()?)))) };
+        let nows = answer.get("now").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+        let now = nows.iter().take(PLAN_MAX).filter_map(|i| Some((inventory::known(i.get("what")?.as_str()?)?.0.to_string(), i.get("at")?.as_u64()?))).collect();
+        c.plan = Plan { rev, items: clean_plan(items.iter().filter_map(|i| Some((i.get("what")?.as_str()?.to_string(), i.get("every")?.as_u64()?)))), now };
         let _ = self.save(&c);
     }
 
@@ -321,6 +330,29 @@ impl Hub {
         Some(wire::Mask::new(self.config().mask, &self.secret, &self.host, &self.user, None).apply(f))
     }
 
+    /// 거점 PC 앞의 사람이 [지금 수집]을 눌렀다. 켜 둔 항목만 돈다.
+    pub fn inventory_run(&self, what: &str, now: u64) -> Result<(), String> {
+        let (name, _, _, _) = inventory::known(what).ok_or("모르는 수집 항목입니다")?;
+        let c = self.config();
+        if !c.inventory.get(name).is_some_and(|v| v.on) {
+            return Err("먼저 이 항목을 켜야 합니다".into());
+        }
+        if !(c.send && c.collector.is_some()) && !c.receive {
+            return Err("보내기가 꺼져 있어 수집하지 않습니다".into());
+        }
+        let last = lock(&self.inv_last).get(name).copied().unwrap_or(0);
+        if now < last.saturating_add(10_000) {
+            return Err("방금 수집했습니다. 잠시 뒤에 다시 눌러 주세요".into());
+        }
+        let f = inventory::collect(name, &self.version, &self.host, now).ok_or("수집하지 못했습니다")?;
+        self.submit(f, None)?;
+        lock(&self.inv_last).insert(name.to_string(), now);
+        if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
+            let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
+        }
+        Ok(())
+    }
+
     /// 켜 둔 항목 가운데 때가 된 것을 한 번씩 돌려 보낼 함에 넣는다. 돌린 항목 이름을 돌려준다.
     /// 보내기도 받기도 꺼져 있으면 아무것도 읽지 않는다. 꺼져 있던 동안 밀린 것은 한 번만 돈다.
     pub fn inventory_due(&self, now: u64) -> Vec<String> {
@@ -333,8 +365,15 @@ impl Hub {
             let last = lock(&self.inv_last).get(what).copied().unwrap_or(0);
             // 주기: 관제 PC의 예약표에 있으면 그것, 없으면 이 PC에서 정한 것.
             let every = c.plan.items.get(what).copied().unwrap_or(inv.every);
-            if now < last.saturating_add(u64::from(every) * 60_000) {
+            // 관제 PC의 [바로 수집] 표시: 아직 치르지 않은 표시가 있으면 주기를 기다리지 않는다(표시 하나에 한 번, 1분에 한 번까지).
+            let mark = c.plan.now.get(what).copied().unwrap_or(0);
+            let key = format!("now.{what}");
+            let fresh = mark > lock(&self.inv_last).get(&key).copied().unwrap_or(0) && now >= last.saturating_add(NOW_GAP);
+            if !fresh && now < last.saturating_add(u64::from(every) * 60_000) {
                 continue;
+            }
+            if mark > 0 {
+                lock(&self.inv_last).insert(key, mark);
             }
             let Some(f) = inventory::collect(what, &self.version, &self.host, now) else { continue };
             if self.submit(f, None).is_ok() {

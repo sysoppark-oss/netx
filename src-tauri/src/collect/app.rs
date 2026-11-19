@@ -41,13 +41,13 @@ pub fn start(app: &AppHandle) {
     app.manage(Shared(opened));
 }
 
-/// 예약 수집: 1분마다 때가 된 항목을 본다. 켜 둔 항목이 없으면 아무것도 읽지 않는다.
+/// 예약 수집: 15초마다 때가 된 항목을 본다. 켜 둔 항목이 없으면 아무것도 읽지 않는다.
 async fn run_inventory(hub: Arc<Hub>) {
     tokio::time::sleep(std::time::Duration::from_secs(45)).await;
     loop {
         let h = hub.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || h.inventory_due(super::now_ms())).await;
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
     }
 }
 
@@ -521,6 +521,10 @@ pub struct PlanCell {
     pub every: Option<u32>,
     /// 거점 PC에서 사람이 승인했다(거점이 마지막으로 알려 온 것)
     pub approved: bool,
+    /// 이 거점에서 이 항목을 마지막으로 받은 때(진단 시각, 없으면 0)
+    pub last: u64,
+    /// [바로 수집]을 마지막으로 누른 때(없으면 0)
+    pub now: u64,
 }
 
 #[derive(Serialize)]
@@ -544,9 +548,10 @@ pub fn collect_plan(shared: State<'_, Shared>) -> Result<Vec<PlanRow>, String> {
         .map(|pc| {
             let (rev, items) = hub.inbox.plan(&pc.id);
             let (asked, have, approved) = hub.inbox.plan_seen(&pc.id);
+            let nows = hub.inbox.plan_nows(&pc.id);
             let cells = super::inventory::ITEMS
                 .iter()
-                .map(|&(what, title, floor, _)| PlanCell { what, title, floor, every: items.iter().find(|i| i.0 == what).map(|i| i.1), approved: approved.iter().any(|a| a == what) })
+                .map(|&(what, title, floor, _)| PlanCell { what, title, floor, every: items.iter().find(|i| i.0 == what).map(|i| i.1), approved: approved.iter().any(|a| a == what), last: hub.inbox.latest(&pc.id, &format!("inventory.{what}"), 1).first().map_or(0, |l| l.0), now: nows.iter().find(|n| n.0 == what).map_or(0, |n| n.1) })
                 .collect();
             PlanRow { pc, asked, delivered: asked > 0 && have == rev, cells }
         })
@@ -569,4 +574,30 @@ pub fn collect_plan_set(app: AppHandle, shared: State<'_, Shared>, id: String, w
     hub.inbox.plan_set(&id, name, every)?;
     audit(&app, "plan.set", &[id.chars().take(16).collect(), name.to_string(), every.map_or("없음".into(), |m| m.to_string())]);
     Ok(())
+}
+
+/// 관제 PC의 [바로 수집]: 거점이 다음에 예약표를 물을 때 표시를 받아 가고, 거점에서 사람이 켠 항목이면 한 번 바로 수집한다.
+#[tauri::command(async)]
+pub fn collect_plan_now(app: AppHandle, shared: State<'_, Shared>, id: String, what: String) -> Result<(), String> {
+    if !super::key::is_fingerprint(&id) {
+        return Err("거점을 알 수 없습니다.".into());
+    }
+    let (name, _, _, _) = super::inventory::known(&what).ok_or("모르는 수집 항목입니다")?;
+    let hub = hub(&shared)?;
+    let now = super::now_ms();
+    if !hub.inbox.pcs(now).iter().any(|p| p.id == id && !p.own) {
+        return Err("거점을 알 수 없습니다.".into());
+    }
+    hub.inbox.plan_now(&id, name, now)?;
+    audit(&app, "plan.now", &[id.chars().take(16).collect(), name.to_string()]);
+    Ok(())
+}
+
+/// 거점 PC의 [지금 수집]: 이 PC에서 켜 둔 항목을 바로 한 번 수집한다.
+#[tauri::command(async)]
+pub fn collect_inventory_run(app: AppHandle, shared: State<'_, Shared>, what: String) -> Result<Vec<InvItem>, String> {
+    let hub = hub(&shared)?;
+    hub.inventory_run(&what, super::now_ms())?;
+    audit(&app, "inventory.run", &[what.chars().take(20).collect()]);
+    Ok(inv_items(&hub))
 }

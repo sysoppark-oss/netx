@@ -6,8 +6,10 @@ import {
   collectFleet,
   collectInventory,
   collectInventoryPreview,
+  collectInventoryRun,
   collectInventorySet,
   collectPlan,
+  collectPlanNow,
   collectPlanSet,
   gbText,
   timeText,
@@ -112,10 +114,14 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
     collectPlanSet(id, what, value === "" ? null : Number(value))
       .then(load)
       .catch((e) => onError(String(e)));
+  const runNow = (id: string, what: string) =>
+    collectPlanNow(id, what)
+      .then(load)
+      .catch((e) => onError(String(e)));
   return (
     <section>
       <h2 className="mb-1 text-xs font-semibold text-dim">수집 예약</h2>
-      <p className="mb-1.5 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
+      <p className="mb-1.5 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. [바로 수집]은 주기를 기다리지 않고 한 번 수집합니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
       <table className="w-full border-collapse rounded border border-line text-xs">
         <thead className="text-left text-dim">
           <tr>
@@ -143,6 +149,19 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
                     ))}
                   </select>{" "}
                   {c.approved ? <span className="text-safe">거점 승인됨</span> : c.every ? <span className="text-caution">거점 승인 기다림</span> : null}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => runNow(r.pc.id, c.what)}
+                      disabled={!c.approved}
+                      className={BTN}
+                      title={c.approved ? "거점이 다음에 접속할 때(보통 20초 안) 한 번 바로 수집합니다. 거점의 NetX가 켜져 있어야 합니다." : "거점 PC에서 이 항목을 켜야 수집할 수 있습니다."}
+                    >
+                      바로 수집
+                    </button>
+                    <span className="text-[11px] text-dim">
+                      {c.now > c.last ? `요청함 ${timeText(c.now)} — 거점을 기다리는 중` : c.last ? `마지막 수집 ${timeText(c.last)}` : "아직 받은 것 없음"}
+                    </span>
+                  </div>
                 </td>
               ))}
               <td className="px-2 py-1 text-dim">{r.asked === 0 ? "거점이 아직 물어 오지 않음" : r.delivered ? `받아 감 (${timeText(r.asked)})` : "다음 접속 때 받아 감"}</td>
@@ -304,6 +323,13 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
       .catch((e) => onError(String(e)))
       .finally(() => setBusy(false));
   };
+  const runNow = (it: InvItem) => {
+    setBusy(true);
+    collectInventoryRun(it.what)
+      .then(setItems)
+      .catch((e) => onError(String(e)))
+      .finally(() => setBusy(false));
+  };
   const show = (what: string) => {
     if (preview?.what === what) return setPreview(null);
     collectInventoryPreview(what)
@@ -341,6 +367,9 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
               )}
               <span className="text-dim">{it.last ? `마지막 수집 ${timeText(it.last)}` : "아직 수집한 적 없음"}</span>
               <span className="flex-1" />
+              <button onClick={() => runNow(it)} disabled={busy || !it.on || !ready} className={BTN} title={!it.on ? "먼저 이 항목을 켜야 합니다" : !ready ? "보내기가 꺼져 있습니다" : "주기를 기다리지 않고 지금 한 번 수집해 보냅니다"}>
+                지금 수집
+              </button>
               <button onClick={() => show(it.what)} className={BTN}>
                 {preview?.what === it.what ? "미리 보기 닫기" : "무엇이 나가는지 보기"}
               </button>

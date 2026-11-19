@@ -322,6 +322,10 @@ export interface PlanCell {
   floor: number;
   every: number | null;
   approved: boolean;
+  /** 이 항목을 마지막으로 받은 때(없으면 0) */
+  last: number;
+  /** [바로 수집]을 마지막으로 누른 때(없으면 0) */
+  now: number;
 }
 
 export interface PlanRow {
@@ -332,6 +336,8 @@ export interface PlanRow {
 }
 
 export const collectPlan = () => invoke<PlanRow[]>("collect_plan");
+export const collectPlanNow = (id: string, what: string) => invoke<void>("collect_plan_now", { id, what });
+export const collectInventoryRun = (what: string) => invoke<InvItem[]>("collect_inventory_run", { what });
 export const collectPlanSet = (id: string, what: string, every: number | null) => invoke<void>("collect_plan_set", { id, what, every });
 
 export interface Disk {
