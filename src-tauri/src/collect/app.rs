@@ -36,8 +36,19 @@ pub fn start(app: &AppHandle) {
     if let Ok(hub) = &opened {
         tauri::async_runtime::spawn(net::run_listener(hub.clone()));
         tauri::async_runtime::spawn(net::run_sender(hub.clone()));
+        tauri::async_runtime::spawn(run_inventory(hub.clone()));
     }
     app.manage(Shared(opened));
+}
+
+/// 예약 수집: 1분마다 때가 된 항목을 본다. 켜 둔 항목이 없으면 아무것도 읽지 않는다.
+async fn run_inventory(hub: Arc<Hub>) {
+    tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+    loop {
+        let h = hub.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || h.inventory_due(super::now_ms())).await;
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
 }
 
 /// 감사 로그에 한 줄: 누가 무엇을 바꿨는지(내용은 남기지 않는다).
@@ -140,6 +151,7 @@ pub fn finished_from_record(record: &Value, now: u64) -> Option<Finished> {
         started: started.unwrap_or(now).min(now),
         ended: now,
         steps,
+        data: None,
     })
 }
 
@@ -400,4 +412,161 @@ mod tests {
         bare["meta"]["light"] = json!("info");
         assert_eq!(finished_from_record(&bare, 1).unwrap().verdict, "caution");
     }
+}
+
+// ================= 예약 수집과 거점 관리 대시보드 =================
+
+/// 거점 PC의 동의 화면에 보이는 한 항목
+#[derive(Serialize)]
+pub struct InvItem {
+    pub what: &'static str,
+    pub title: &'static str,
+    /// 가장 잦은 주기(분)
+    pub floor: u32,
+    pub on: bool,
+    pub every: u32,
+    /// 마지막에 돌린 때(없으면 0)
+    pub last: u64,
+    /// 관제 PC가 예약표에서 정한 주기(분). 없으면 요청하지 않은 것.
+    pub asked: Option<u32>,
+}
+
+fn inv_items(hub: &Hub) -> Vec<InvItem> {
+    let (c, last) = (hub.config(), hub.inventory_last());
+    super::inventory::ITEMS
+        .iter()
+        .map(|&(what, title, floor, default)| {
+            let set = c.inventory.get(what);
+            InvItem { what, title, floor, on: set.is_some_and(|v| v.on), every: set.map_or(default, |v| v.every), last: last.get(what).copied().unwrap_or(0), asked: c.plan.items.get(what).copied() }
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
+pub fn collect_inventory(shared: State<'_, Shared>) -> Result<Vec<InvItem>, String> {
+    Ok(inv_items(&*hub(&shared)?))
+}
+
+#[tauri::command(async)]
+pub fn collect_inventory_set(app: AppHandle, shared: State<'_, Shared>, what: String, on: bool, every: u32) -> Result<Vec<InvItem>, String> {
+    let hub = hub(&shared)?;
+    let c = hub.set_inventory(&what, on, every)?;
+    let every = c.inventory.get(&what).map_or(0, |v| v.every);
+    audit(&app, "inventory.set", &[what.chars().take(20).collect(), on.to_string(), every.to_string()]);
+    Ok(inv_items(&hub))
+}
+
+/// 켜기 전에 보는 것: 지금 이 PC에서 나갈 모양 그대로.
+#[tauri::command(async)]
+pub fn collect_inventory_preview(shared: State<'_, Shared>, what: String) -> Result<Finished, String> {
+    hub(&shared)?.inventory_now(&what).ok_or_else(|| "모르는 수집 항목입니다".into())
+}
+
+/// 대시보드의 거점 한 곳
+#[derive(Serialize)]
+pub struct FleetSite {
+    pub pc: Pc,
+    pub system_at: u64,
+    pub system: Option<super::wire::System>,
+    pub software_at: u64,
+    pub programs: Vec<super::wire::Program>,
+    pub cut: bool,
+    /// 지난 수집과 견준 것. 지난 수집이 없으면 모두 비어 있다.
+    pub prev_at: u64,
+    pub added: Vec<super::wire::Program>,
+    pub removed: Vec<super::wire::Program>,
+    pub changed: Vec<(String, String, String)>,
+}
+
+/// 거점 관리 대시보드: 거점마다 가장 최근의 시스템 상세와 프로그램 목록, 그리고 지난 목록과의 차이.
+#[tauri::command(async)]
+pub fn collect_fleet(shared: State<'_, Shared>) -> Result<Vec<FleetSite>, String> {
+    use super::wire::Data;
+    let hub = hub(&shared)?;
+    let sites = hub
+        .inbox
+        .pcs(super::now_ms())
+        .into_iter()
+        .filter(|p| p.state != "removed")
+        .map(|pc| {
+            let (system_at, system) = match hub.inbox.latest(&pc.id, "inventory.system", 1).into_iter().next() {
+                Some((at, Finished { data: Some(Data::System(s)), .. })) => (at, Some(s)),
+                _ => (0, None),
+            };
+            let mut lists = hub.inbox.latest(&pc.id, "inventory.software", 2).into_iter().filter_map(|(at, f)| match f.data {
+                Some(Data::Software(s)) => Some((at, s)),
+                _ => None,
+            });
+            let (software_at, now) = lists.next().unwrap_or_default();
+            let (prev_at, added, removed, changed) = match lists.next() {
+                Some((at, old)) => {
+                    let (a, r, c) = super::inventory::diff(&old.programs, &now.programs);
+                    (at, a, r, c)
+                }
+                None => (0, Vec::new(), Vec::new(), Vec::new()),
+            };
+            FleetSite { pc, system_at, system, software_at, programs: now.programs, cut: now.cut, prev_at, added, removed, changed }
+        })
+        .collect();
+    Ok(sites)
+}
+
+/// 예약 화면의 한 칸: 거점 한 곳의 한 항목
+#[derive(Serialize)]
+pub struct PlanCell {
+    pub what: &'static str,
+    pub title: &'static str,
+    pub floor: u32,
+    /// 관제 PC가 정한 주기(분). 없으면 요청하지 않음.
+    pub every: Option<u32>,
+    /// 거점 PC에서 사람이 승인했다(거점이 마지막으로 알려 온 것)
+    pub approved: bool,
+}
+
+#[derive(Serialize)]
+pub struct PlanRow {
+    pub pc: Pc,
+    /// 거점이 예약표를 마지막으로 물어 온 때(0이면 아직 없음 — 옛 판이거나 접속한 적 없음)
+    pub asked: u64,
+    /// 거점이 최신 예약표를 받아 갔다
+    pub delivered: bool,
+    pub cells: Vec<PlanCell>,
+}
+
+#[tauri::command(async)]
+pub fn collect_plan(shared: State<'_, Shared>) -> Result<Vec<PlanRow>, String> {
+    let hub = hub(&shared)?;
+    let rows = hub
+        .inbox
+        .pcs(super::now_ms())
+        .into_iter()
+        .filter(|p| !p.own && p.state != "removed")
+        .map(|pc| {
+            let (rev, items) = hub.inbox.plan(&pc.id);
+            let (asked, have, approved) = hub.inbox.plan_seen(&pc.id);
+            let cells = super::inventory::ITEMS
+                .iter()
+                .map(|&(what, title, floor, _)| PlanCell { what, title, floor, every: items.iter().find(|i| i.0 == what).map(|i| i.1), approved: approved.iter().any(|a| a == what) })
+                .collect();
+            PlanRow { pc, asked, delivered: asked > 0 && have == rev, cells }
+        })
+        .collect();
+    Ok(rows)
+}
+
+/// 거점의 예약표에서 한 항목의 주기를 정하거나(분) 뺀다. 거점이 다음에 물어 올 때 받아 간다.
+#[tauri::command(async)]
+pub fn collect_plan_set(app: AppHandle, shared: State<'_, Shared>, id: String, what: String, every: Option<u32>) -> Result<(), String> {
+    if !super::key::is_fingerprint(&id) {
+        return Err("거점을 알 수 없습니다.".into());
+    }
+    let (name, _, floor, _) = super::inventory::known(&what).ok_or("모르는 수집 항목입니다")?;
+    let hub = hub(&shared)?;
+    if !hub.inbox.pcs(super::now_ms()).iter().any(|p| p.id == id && !p.own) {
+        return Err("거점을 알 수 없습니다.".into());
+    }
+    let every = every.map(|m| m.clamp(floor, super::inventory::EVERY_MAX));
+    hub.inbox.plan_set(&id, name, every)?;
+    audit(&app, "plan.set", &[id.chars().take(16).collect(), name.to_string(), every.map_or("없음".into(), |m| m.to_string())]);
+    Ok(())
 }

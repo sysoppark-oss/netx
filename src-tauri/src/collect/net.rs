@@ -20,7 +20,7 @@ use tokio_rustls::rustls::{self, ClientConfig, DigitallySignedStruct, Distinguis
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use super::store::{Conn, Taken, Why};
-use super::{Collector, Hub, Join, PAIR_WINDOW, key, lock, now_ms, tailnet, wire};
+use super::{Collector, Hub, Join, PAIR_WINDOW, PLAN_MAX, inventory, key, lock, now_ms, tailnet, wire};
 
 /// 동시에 받는 접속 수
 const MAX_CONN: usize = 8;
@@ -327,7 +327,8 @@ async fn converse<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &s
                 return if why == Why::Stopped { "stopped" } else { "unknown" };
             }
             hub.inbox.seen(id, addr, now_ms());
-            if !write_line(writer, &json!({"t": "hi", "v": wire::VERSION})).await {
+            // "plan": 이 관제 PC는 수집 예약표를 물으면 답한다(옛 판에는 이 칸이 없어 거점이 묻지 않는다).
+            if !write_line(writer, &json!({"t": "hi", "v": wire::VERSION, "plan": true})).await {
                 return "closed";
             }
             while let Some(msg) = read_line(&mut reader, IDLE).await {
@@ -372,6 +373,25 @@ async fn converse<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(hub: &Hub, id: &s
                                 return "refused";
                             }
                             Err(_) => return "refused",
+                        }
+                    }
+                    // 거점이 수집 예약표를 묻는다. 답은 정해진 항목 이름과 주기뿐이다. 관제 PC가 먼저 보내는 일은 없다.
+                    "plan?" => {
+                        if hub.inbox.admitted(id).is_err() {
+                            return "stopped";
+                        }
+                        let have = msg.get("have").and_then(Value::as_u64).unwrap_or(0);
+                        let approved: Vec<&str> = msg
+                            .get("on")
+                            .and_then(Value::as_array)
+                            .map(|a| a.iter().take(PLAN_MAX).filter_map(Value::as_str).filter_map(|w| inventory::known(w).map(|k| k.0)).collect())
+                            .unwrap_or_default();
+                        hub.inbox.plan_asked(id, now, have, &approved.join(","));
+                        let (rev, items) = hub.inbox.plan(id);
+                        if rev == have {
+                            json!({"t": "ok"})
+                        } else {
+                            json!({"t": "plan", "rev": rev, "items": items.iter().map(|(w, e)| json!({"what": w, "every": e})).collect::<Vec<_>>()})
                         }
                     }
                     // 모르는 줄(2단계의 의뢰 포함)은 받지 않는다.
@@ -493,9 +513,24 @@ async fn send_all(hub: &Hub, k: &Collector) -> Result<(), String> {
         });
     }
     set_link(hub, true, None);
+    // 예약표를 주는 관제 PC에게만 묻는다(옛 판은 모르는 줄에 접속을 끊는다).
+    let plans = hello.get("plan").and_then(Value::as_bool) == Some(true);
     loop {
         if hub.config().collector.as_ref() != Some(k) || !hub.config().send {
             return Ok(());
+        }
+        if plans {
+            let c = hub.config();
+            let on: Vec<&String> = c.inventory.iter().filter(|(_, v)| v.on).map(|(w, _)| w).collect();
+            if !write_line(&mut w, &json!({"t": "plan?", "have": c.plan.rev, "on": on})).await {
+                return Err(gone());
+            }
+            let answer = read_line(&mut reader, ANSWER).await.ok_or_else(gone)?;
+            match kind(&answer) {
+                "ok" => {}
+                "plan" => hub.accept_plan(&answer),
+                _ => return Err(gone()),
+            }
         }
         if let Some((first, last)) = hub.outbox.dropped() {
             if !write_line(&mut w, &json!({"t": "dropped", "first": first, "last": last})).await || read_line(&mut reader, ANSWER).await.as_ref().map(kind) != Some("ok") {
@@ -627,6 +662,34 @@ mod tests {
         assert!(conns.iter().any(|c| c.outcome == "pair_ok"));
         assert_eq!(conns.iter().map(|c| c.stored).sum::<u64>(), 3);
         assert!(conns.iter().all(|c| c.addr == "127.0.0.1" || c.addr.starts_with("100.")));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_site_fetches_its_plan_and_runs_only_what_a_person_approved() {
+        let (home, port) = collector("관제").await;
+        let site = test_hub("거점");
+        paired(&site, &home, port).await;
+        site.set(true, true, false, "거점", 90).unwrap();
+        // 관제 PC가 예약을 잡는다: 시스템 30분마다, 프로그램은 한도보다 잦게(1분)
+        home.inbox.plan_set(&site.me.id(), "system", Some(30)).unwrap();
+        home.inbox.plan_set(&site.me.id(), "software", Some(1)).unwrap();
+        tokio::spawn(run_sender(site.clone()));
+        until("예약표 도착", || site.config().plan.rev == 2).await;
+        let plan = site.config().plan;
+        assert_eq!((plan.items["system"], plan.items["software"]), (30, 360), "한도보다 잦은 주기는 한도로 맞춘다");
+        // 사람이 승인하지 않았으므로 아무것도 돌지 않는다
+        assert!(site.inventory_due(now_ms()).is_empty());
+        // 시스템만 승인하면 그것만, 관제 PC가 정한 주기로 돈다
+        site.set_inventory("system", true, 1440).unwrap();
+        let now = now_ms();
+        assert_eq!(site.inventory_due(now), ["system"]);
+        assert!(site.inventory_due(now + 29 * 60_000).is_empty());
+        assert_eq!(site.inventory_due(now + 30 * 60_000), ["system"]);
+        until("수집한 것이 도착", || home.inbox.latest(&site.me.id(), "inventory.system", 5).len() == 2).await;
+        until("승인 상태가 관제 PC에 보임", || home.inbox.plan_seen(&site.me.id()).2 == ["system"]).await;
+        // 짝을 끊으면 예약표를 버린다
+        site.forget_collector().unwrap();
+        assert!(site.config().plan.items.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

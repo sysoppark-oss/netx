@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-fleet"
+description = "Enables the collect_fleet command without any pre-configured scope."
+commands.allow = ["collect_fleet"]
+
+[[permission]]
+identifier = "deny-collect-fleet"
+description = "Denies the collect_fleet command without any pre-configured scope."
+commands.deny = ["collect_fleet"]
