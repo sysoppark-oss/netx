@@ -44,6 +44,24 @@ pub struct Finished {
 pub enum Data {
     System(System),
     Software(Software),
+    Speed(Speed),
+}
+
+/// 인터넷 속도 한 번 잰 것
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Speed {
+    pub down_mbps: f64,
+    pub up_mbps: f64,
+    pub latency_ms: f64,
+    /// 잰 상대(정해진 측정 주소의 이름)
+    pub server: String,
+    /// 재느라 주고받은 양
+    pub bytes: u64,
+}
+
+fn number(v: f64, max: f64) -> f64 {
+    if v.is_finite() { v.clamp(0.0, max) } else { 0.0 }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -108,6 +126,7 @@ fn tidy_data(d: Data) -> Data {
             netx: text(&s.netx, 24),
             tailnet: s.tailnet.parse::<std::net::Ipv4Addr>().map(|a| a.to_string()).unwrap_or_default(),
         }),
+        Data::Speed(s) => Data::Speed(Speed { down_mbps: number(s.down_mbps, 100_000.0), up_mbps: number(s.up_mbps, 100_000.0), latency_ms: number(s.latency_ms, 60_000.0), server: text(&s.server, 60), bytes: s.bytes }),
         Data::Software(s) => {
             let cut = s.cut || s.programs.len() > MAX_PROGRAMS;
             let programs = s

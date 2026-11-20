@@ -2,10 +2,15 @@
 //! 명령을 실행하지 않는다. 운영체제가 주는 값과 Windows의 "프로그램 제거" 목록(읽기 전용)만 읽는다.
 //! 싣지 않는 것: 제품 키, 사용자 계정, 실행 중인 프로세스, 파일 목록, 일련번호, MAC 주소.
 
-use super::wire::{Data, Disk, Finished, Program, Software, System};
+use super::wire::{Data, Disk, Finished, Program, Software, Speed, System};
 
 /// 수집 항목: (이름, 화면 이름, 가장 잦은 주기(분), 기본 주기(분))
-pub const ITEMS: [(&str, &str, u32, u32); 2] = [("system", "시스템 상세", 15, 360), ("software", "설치된 프로그램", 360, 1440)];
+pub const ITEMS: [(&str, &str, u32, u32); 3] = [("speed", "네트워크 속도", 60, 360), ("system", "시스템 상세", 15, 360), ("software", "설치된 프로그램", 360, 1440)];
+
+/// 재는 데 시간이 걸려 따로 도는 항목(네트워크를 쓴다)
+pub fn slow(what: &str) -> bool {
+    what == "speed"
+}
 /// 가장 뜸한 주기(7일)
 pub const EVERY_MAX: u32 = 7 * 24 * 60;
 
@@ -88,9 +93,30 @@ pub fn software() -> Software {
     Software { programs: arrange(installed()), cut: false }
 }
 
-/// 수집 한 건을 진단 결과와 같은 모양으로 만든다(같은 보낼 함, 같은 길로 간다).
+/// 잰 속도를 수집 한 건으로 만든다.
+pub fn speed_item(s: Speed, started: u64, now: u64) -> Finished {
+    let line = format!("내려받기 {} Mbps · 올리기 {} Mbps · 지연 {} ms", s.down_mbps, s.up_mbps, s.latency_ms);
+    Finished { kind: "inventory.speed".into(), title: "네트워크 속도".into(), target: String::new(), verdict: "unknown".into(), summary: vec![line], started, ended: now, steps: Vec::new(), data: Some(Data::Speed(s)) }
+}
+
+/// 켜기 전에 보여 주는 설명(속도는 미리 재지 않는다).
+pub fn speed_preview() -> Finished {
+    Finished {
+        kind: "inventory.speed".into(),
+        title: "네트워크 속도".into(),
+        summary: vec![
+            format!("잴 때마다 {}와 HTTPS로 빈 자료를 15MB쯤(빠른 회선은 50MB쯤) 주고받습니다.", super::speed::SERVER),
+            "관제 PC로 나가는 것: 내려받기 속도, 올리기 속도, 지연, 잰 때, 주고받은 양.".into(),
+            "측정 서버에는 이 PC의 공인 IP가 보입니다(어느 서버든 접속하면 그렇습니다).".into(),
+            "진단이 돌고 있는 동안에는 재지 않고 미룹니다.".into(),
+        ],
+        ..Finished::default()
+    }
+}
+
+/// 수집 한 건을 진단 결과와 같은 모양으로 만든다(같은 보낼 함, 같은 길로 간다). 속도는 여기서 재지 않는다(`speed::measure`).
 pub fn collect(what: &str, version: &str, host: &str, now: u64) -> Option<Finished> {
-    let (name, title, _, _) = known(what)?;
+    let (name, title, _, _) = known(what).filter(|k| !slow(k.0))?;
     let (data, line) = match name {
         "system" => {
             let s = system(version, host);

@@ -367,8 +367,18 @@ export interface Program {
   installed: string;
 }
 
+export interface SpeedInfo {
+  down_mbps: number;
+  up_mbps: number;
+  latency_ms: number;
+  server: string;
+  bytes: number;
+}
+
 export interface FleetSite {
   pc: Pc;
+  /** 최근 속도(가장 최근 것이 맨 앞): [잰 때, 속도] */
+  speeds: [number, SpeedInfo][];
   system_at: number;
   system: SystemInfo | null;
   software_at: number;

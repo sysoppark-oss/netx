@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod inventory;
+pub mod speed;
 pub mod key;
 pub mod net;
 pub mod store;
@@ -109,6 +110,8 @@ pub struct Plan {
 
 /// 바로 수집 사이의 가장 짧은 간격
 pub const NOW_GAP: u64 = 60_000;
+/// 수집에 실패한 항목을 다시 해 보기까지
+pub const RETRY_GAP: u64 = 10 * 60_000;
 
 /// 예약표 한 장에 실을 수 있는 항목 수
 pub const PLAN_MAX: usize = 16;
@@ -326,12 +329,15 @@ impl Hub {
 
     /// 지금 내보낼 모양 그대로(가리기 설정까지 적용한) 수집 한 건. 화면의 미리 보기와 실제 수집이 같은 길을 쓴다.
     pub fn inventory_now(&self, what: &str) -> Option<wire::Finished> {
+        if inventory::slow(what) {
+            return Some(inventory::speed_preview());
+        }
         let f = wire::tidy(inventory::collect(what, &self.version, &self.host, now_ms())?);
         Some(wire::Mask::new(self.config().mask, &self.secret, &self.host, &self.user, None).apply(f))
     }
 
-    /// 거점 PC 앞의 사람이 [지금 수집]을 눌렀다. 켜 둔 항목만 돈다.
-    pub fn inventory_run(&self, what: &str, now: u64) -> Result<(), String> {
+    /// 거점 PC 앞의 사람이 [지금 수집]을 눌러도 되는가. 켜 둔 항목만, 10초에 한 번까지.
+    pub fn inventory_may_run(&self, what: &str, now: u64) -> Result<&'static str, String> {
         let (name, _, _, _) = inventory::known(what).ok_or("모르는 수집 항목입니다")?;
         let c = self.config();
         if !c.inventory.get(name).is_some_and(|v| v.on) {
@@ -344,49 +350,84 @@ impl Hub {
         if now < last.saturating_add(10_000) {
             return Err("방금 수집했습니다. 잠시 뒤에 다시 눌러 주세요".into());
         }
+        Ok(name)
+    }
+
+    /// 거점 PC 앞의 사람이 [지금 수집]을 눌렀다(바로 읽을 수 있는 항목).
+    pub fn inventory_run(&self, what: &str, now: u64) -> Result<(), String> {
+        let name = self.inventory_may_run(what, now)?;
         let f = inventory::collect(name, &self.version, &self.host, now).ok_or("수집하지 못했습니다")?;
+        self.inventory_put(name, 0, f, now)
+    }
+
+    /// 수집한 한 건을 보낼 함에 넣고, 돌린 때와 치른 [바로 수집] 표시를 적는다.
+    pub fn inventory_put(&self, what: &str, mark: u64, f: wire::Finished, now: u64) -> Result<(), String> {
         self.submit(f, None)?;
-        lock(&self.inv_last).insert(name.to_string(), now);
-        if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
-            let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
+        {
+            let mut last = lock(&self.inv_last);
+            last.insert(what.to_string(), now);
+            last.remove(&format!("fail.{what}"));
+            if mark > 0 {
+                last.insert(format!("now.{what}"), mark);
+            }
         }
+        self.inventory_save();
         Ok(())
     }
 
-    /// 켜 둔 항목 가운데 때가 된 것을 한 번씩 돌려 보낼 함에 넣는다. 돌린 항목 이름을 돌려준다.
-    /// 보내기도 받기도 꺼져 있으면 아무것도 읽지 않는다. 꺼져 있던 동안 밀린 것은 한 번만 돈다.
-    pub fn inventory_due(&self, now: u64) -> Vec<String> {
+    /// 수집하지 못했다(속도 측정 실패 등). 10분 뒤에 다시 해 본다. 치른 표시는 다시 치르지 않는다.
+    pub fn inventory_failed(&self, what: &str, mark: u64, now: u64) {
+        {
+            let mut last = lock(&self.inv_last);
+            last.insert(format!("fail.{what}"), now);
+            if mark > 0 {
+                last.insert(format!("now.{what}"), mark);
+            }
+        }
+        self.inventory_save();
+    }
+
+    fn inventory_save(&self) {
+        if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
+            let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
+        }
+    }
+
+    /// 켜 둔 항목 가운데 지금 돌 때가 된 것: (항목, 치를 [바로 수집] 표시). 아무것도 읽거나 바꾸지 않는다.
+    /// 보내기도 받기도 꺼져 있으면 비어 있다. 꺼져 있던 동안 밀린 것은 한 번만 돈다.
+    pub fn inventory_pending(&self, now: u64) -> Vec<(String, u64)> {
         let c = self.config();
         if !(c.send && c.collector.is_some()) && !c.receive {
             return Vec::new();
         }
-        let mut ran = Vec::new();
-        for (what, inv) in c.inventory.iter().filter(|(_, v)| v.on) {
-            let last = lock(&self.inv_last).get(what).copied().unwrap_or(0);
-            // 주기: 관제 PC의 예약표에 있으면 그것, 없으면 이 PC에서 정한 것.
-            let every = c.plan.items.get(what).copied().unwrap_or(inv.every);
-            // 관제 PC의 [바로 수집] 표시: 아직 치르지 않은 표시가 있으면 주기를 기다리지 않는다(표시 하나에 한 번, 1분에 한 번까지).
-            let mark = c.plan.now.get(what).copied().unwrap_or(0);
-            let key = format!("now.{what}");
-            let fresh = mark > lock(&self.inv_last).get(&key).copied().unwrap_or(0) && now >= last.saturating_add(NOW_GAP);
-            if !fresh && now < last.saturating_add(u64::from(every) * 60_000) {
-                continue;
-            }
-            if mark > 0 {
-                lock(&self.inv_last).insert(key, mark);
-            }
-            let Some(f) = inventory::collect(what, &self.version, &self.host, now) else { continue };
-            if self.submit(f, None).is_ok() {
-                lock(&self.inv_last).insert(what.clone(), now);
-                ran.push(what.clone());
-            }
-        }
-        if !ran.is_empty() {
-            if let Ok(text) = serde_json::to_string(&*lock(&self.inv_last)) {
-                let _ = key::write_private(&self.dir.join(INV_FILE), text.as_bytes());
-            }
-        }
-        ran
+        let last = lock(&self.inv_last);
+        let at = |k: &str| last.get(k).copied().unwrap_or(0);
+        c.inventory
+            .iter()
+            .filter(|(_, v)| v.on)
+            .filter_map(|(what, inv)| {
+                let ran = at(what);
+                // 주기: 관제 PC의 예약표에 있으면 그것, 없으면 이 PC에서 정한 것.
+                let every = c.plan.items.get(what).copied().unwrap_or(inv.every);
+                // 관제 PC의 [바로 수집] 표시: 아직 치르지 않은 표시가 있으면 주기를 기다리지 않는다(표시 하나에 한 번, 1분에 한 번까지).
+                let mark = c.plan.now.get(what).copied().unwrap_or(0);
+                let fresh = mark > at(&format!("now.{what}")) && now >= ran.saturating_add(NOW_GAP);
+                let due = now >= ran.saturating_add(u64::from(every) * 60_000) && now >= at(&format!("fail.{what}")).saturating_add(RETRY_GAP);
+                (fresh || due).then(|| (what.clone(), if fresh { mark } else { 0 }))
+            })
+            .collect()
+    }
+
+    /// 때가 된 항목 가운데 바로 읽을 수 있는 것(시스템, 프로그램)을 한 번씩 돌린다. 돌린 항목 이름을 돌려준다.
+    pub fn inventory_due(&self, now: u64) -> Vec<String> {
+        self.inventory_pending(now)
+            .into_iter()
+            .filter(|(what, _)| !inventory::slow(what))
+            .filter_map(|(what, mark)| {
+                let f = inventory::collect(&what, &self.version, &self.host, now)?;
+                self.inventory_put(&what, mark, f, now).ok().map(|()| what)
+            })
+            .collect()
     }
 
     /// 보내는 쪽: 관제 PC와의 짝을 끊는다. 보내기도 꺼지고 기다리던 것은 비운다.

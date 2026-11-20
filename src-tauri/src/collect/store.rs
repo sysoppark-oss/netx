@@ -709,7 +709,7 @@ impl Inbox {
     pub fn latest(&self, pc: &str, kind: &str, n: u32) -> Vec<(u64, wire::Finished)> {
         let db = self.db();
         let Ok(mut st) = db.prepare("SELECT at, body FROM items WHERE pc = ?1 AND kind = ?2 ORDER BY seq DESC LIMIT ?3") else { return Vec::new() };
-        st.query_map(params![pc, kind, n.min(10)], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)))
+        st.query_map(params![pc, kind, n.min(30)], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)))
             .map(|rows| rows.flatten().filter_map(|(at, body)| Some((at, wire::from_ocsf(&serde_json::from_str(&body).ok()?)?.item))).collect())
             .unwrap_or_default()
     }
