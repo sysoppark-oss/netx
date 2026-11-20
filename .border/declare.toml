@@ -52,7 +52,3 @@ where = "src/components/SetupWizard.tsx"
 [[declare]]
 what = "고침"
 where = "src/lib/backend.ts"
-
-[[declare]]
-what = "고침"
-where = "src/components/SettingsDialog.tsx"
