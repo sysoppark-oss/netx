@@ -37,6 +37,23 @@ function Bar({ used, tone }: { used: number; tone: string }) {
   );
 }
 
+/** 최근 속도의 추이(왼쪽이 옛날). 내려받기 선 하나. */
+function Trend({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => `${(i / (values.length - 1)) * 100},${22 - (v / max) * 20}`).join(" ");
+  return (
+    <svg viewBox="0 0 100 24" preserveAspectRatio="none" className="h-5 w-24 shrink-0 text-accent" aria-hidden>
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function median(values: number[]): number {
+  const s = [...values].sort((a, b) => a - b);
+  return s.length ? s[Math.floor(s.length / 2)] : 0;
+}
+
 function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; picked: boolean }) {
   const pc = s.pc;
   const state = pc.state === "stopped" ? "받기 멈춤" : pc.own ? "이 PC" : pc.quiet ? "미확인" : "연결됨";
@@ -44,15 +61,30 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
   const sys = s.system;
   const moved = s.added.length + s.removed.length + s.changed.length;
   const low = sys?.disks.some((d) => d.total > 0 && d.free / d.total < DISK_LOW);
+  const speed = s.speeds[0]?.[1];
+  const downs = s.speeds.map((x) => x[1].down_mbps);
+  // 지난 측정이 넷 넘게 쌓였을 때만 견준다: 이번 내려받기 속도가 그동안 중앙값의 절반 아래면 느려진 것으로 본다.
+  const slow = speed && downs.length >= 5 && speed.down_mbps < median(downs.slice(1)) / 2;
   return (
     <button onClick={onPick} className={`rounded-lg border p-3 text-left text-xs hover:bg-raised ${picked ? "border-accent" : "border-line"}`}>
       <div className="mb-1.5 flex items-center gap-2">
         <span className="text-sm font-semibold">{pc.name || "이름 없음"}</span>
         <span className={`font-semibold ${tone}`}>● {state}</span>
         <span className="flex-1" />
+        {slow && <span className="text-caution">속도 느려짐</span>}
         {low && <span className="text-danger">디스크 부족</span>}
       </div>
-      {!sys && s.software_at === 0 && <p className="text-dim">아직 수집된 것이 없습니다. 이 거점의 NetX에서 "보내기" 탭의 예약 수집을 켜야 합니다.</p>}
+      {speed && (
+        <div className="mb-1 flex items-center gap-2" title={`${speed.server}와 잰 인터넷 속도 · ${timeText(s.speeds[0][0])} · 최근 ${s.speeds.length}번`}>
+          <span className="w-14 shrink-0 text-dim">속도</span>
+          <span className={slow ? "text-caution" : ""}>
+            ↓ {speed.down_mbps} · ↑ {speed.up_mbps} Mbps <span className="text-dim">· 지연 {speed.latency_ms}ms</span>
+          </span>
+          <span className="flex-1" />
+          <Trend values={[...downs].reverse()} />
+        </div>
+      )}
+      {!sys && !speed && s.software_at === 0 && <p className="text-dim">아직 수집된 것이 없습니다. 이 거점의 NetX에서 "보내기" 탭의 예약 수집을 켜야 합니다.</p>}
       {sys && (
         <div className="space-y-1">
           <p>
@@ -88,6 +120,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
         </p>
       )}
       <p className="mt-1.5 text-[11px] text-dim">
+        {speed && `속도 ${timeText(s.speeds[0][0])}${s.system_at > 0 || s.software_at > 0 ? " · " : ""}`}
         {s.system_at > 0 && `시스템 ${timeText(s.system_at)}`}
         {s.system_at > 0 && s.software_at > 0 && " · "}
         {s.software_at > 0 && `프로그램 ${timeText(s.software_at)}`}
@@ -323,12 +356,17 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
       .catch((e) => onError(String(e)))
       .finally(() => setBusy(false));
   };
+  const [running, setRunning] = useState("");
   const runNow = (it: InvItem) => {
     setBusy(true);
+    setRunning(it.what);
     collectInventoryRun(it.what)
       .then(setItems)
       .catch((e) => onError(String(e)))
-      .finally(() => setBusy(false));
+      .finally(() => {
+        setBusy(false);
+        setRunning("");
+      });
   };
   const show = (what: string) => {
     if (preview?.what === what) return setPreview(null);
@@ -341,7 +379,7 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
     <section>
       <h2 className="mb-1 text-xs font-semibold text-dim">예약 수집 (기본 꺼짐)</h2>
       <p className="mb-1.5 text-xs text-dim">
-        켠 항목만, 정한 주기로 이 PC의 정보를 읽어 관제 PC로 보냅니다. NetX가 켜져 있을 때만 돌고 명령은 실행하지 않습니다. 제품 키, 계정, 실행 중인 프로그램, 파일 목록은 읽지 않습니다. 프로그램 이름은 가리지 않고 나갑니다.
+        켠 항목만, 정한 주기로 이 PC의 정보를 읽어 관제 PC로 보냅니다. NetX가 켜져 있을 때만 돌고 명령은 실행하지 않습니다. 네트워크 속도는 잴 때마다 측정 서버와 15~50MB를 주고받습니다. 제품 키, 계정, 실행 중인 프로그램, 파일 목록은 읽지 않습니다. 프로그램 이름은 가리지 않고 나갑니다.
         {!ready && " 지금은 보내기가 꺼져 있어 켜 두어도 수집하지 않습니다."}
       </p>
       <ul className="space-y-1">
@@ -368,7 +406,7 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
               <span className="text-dim">{it.last ? `마지막 수집 ${timeText(it.last)}` : "아직 수집한 적 없음"}</span>
               <span className="flex-1" />
               <button onClick={() => runNow(it)} disabled={busy || !it.on || !ready} className={BTN} title={!it.on ? "먼저 이 항목을 켜야 합니다" : !ready ? "보내기가 꺼져 있습니다" : "주기를 기다리지 않고 지금 한 번 수집해 보냅니다"}>
-                지금 수집
+                {running === it.what ? "수집하는 중…" : "지금 수집"}
               </button>
               <button onClick={() => show(it.what)} className={BTN}>
                 {preview?.what === it.what ? "미리 보기 닫기" : "무엇이 나가는지 보기"}
@@ -387,7 +425,15 @@ function Preview({ data }: { data: InvPreview }) {
   const sw = data.data?.software;
   return (
     <div className="mt-1.5 rounded bg-raised p-2">
-      <p className="mb-1 text-dim">지금 켜면 아래 내용이 그대로 나갑니다.</p>
+      {!sys && !sw ? (
+        <ul className="space-y-0.5">
+          {data.summary.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-1 text-dim">지금 켜면 아래 내용이 그대로 나갑니다.</p>
+      )}
       {sys && (
         <ul className="space-y-0.5">
           <li>운영체제: {sys.os} ({sys.build})</li>

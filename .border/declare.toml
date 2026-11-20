@@ -4,3 +4,39 @@
 [[declare]]
 what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
+
+[[declare]]
+what = "만듦"
+where = "src-tauri/src/collect/speed.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/app.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/mod.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/inventory.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/store.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/collect/wire.rs"
+
+[[declare]]
+what = "고침"
+where = "src/components/FleetView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/lib/collect.ts"
+
+[[declare]]
+what = "고침"
+where = "docs/COLLECT_v1.md"

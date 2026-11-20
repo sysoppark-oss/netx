@@ -47,7 +47,25 @@ async fn run_inventory(hub: Arc<Hub>) {
     loop {
         let h = hub.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || h.inventory_due(super::now_ms())).await;
+        // 속도는 네트워크를 쓰고 시간이 걸린다. 진단이 돌고 있으면 결과를 흐리지 않게 미룬다.
+        for (what, mark) in hub.inventory_pending(super::now_ms()) {
+            if what == "speed" && !crate::engine::busy() {
+                let _ = measure_speed(&hub, mark).await;
+            }
+        }
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    }
+}
+
+/// 속도를 한 번 재서 보낼 함에 넣는다. 못 재면 10분 뒤에 다시 해 본다.
+async fn measure_speed(hub: &Hub, mark: u64) -> Result<(), String> {
+    let started = super::now_ms();
+    match super::speed::measure(super::speed::BASE).await {
+        Ok(s) => hub.inventory_put("speed", mark, super::inventory::speed_item(s, started, super::now_ms()), super::now_ms()),
+        Err(e) => {
+            hub.inventory_failed("speed", mark, super::now_ms());
+            Err(e)
+        }
     }
 }
 
@@ -468,6 +486,8 @@ pub struct FleetSite {
     pub pc: Pc,
     pub system_at: u64,
     pub system: Option<super::wire::System>,
+    /// 최근 속도(가장 최근 것이 맨 앞): (잰 때, 속도)
+    pub speeds: Vec<(u64, super::wire::Speed)>,
     pub software_at: u64,
     pub programs: Vec<super::wire::Program>,
     pub cut: bool,
@@ -493,6 +513,10 @@ pub fn collect_fleet(shared: State<'_, Shared>) -> Result<Vec<FleetSite>, String
                 Some((at, Finished { data: Some(Data::System(s)), .. })) => (at, Some(s)),
                 _ => (0, None),
             };
+            let speeds = hub.inbox.latest(&pc.id, "inventory.speed", 30).into_iter().filter_map(|(at, f)| match f.data {
+                Some(Data::Speed(s)) => Some((at, s)),
+                _ => None,
+            }).collect();
             let mut lists = hub.inbox.latest(&pc.id, "inventory.software", 2).into_iter().filter_map(|(at, f)| match f.data {
                 Some(Data::Software(s)) => Some((at, s)),
                 _ => None,
@@ -505,7 +529,7 @@ pub fn collect_fleet(shared: State<'_, Shared>) -> Result<Vec<FleetSite>, String
                 }
                 None => (0, Vec::new(), Vec::new(), Vec::new()),
             };
-            FleetSite { pc, system_at, system, software_at, programs: now.programs, cut: now.cut, prev_at, added, removed, changed }
+            FleetSite { pc, system_at, system, speeds, software_at, programs: now.programs, cut: now.cut, prev_at, added, removed, changed }
         })
         .collect();
     Ok(sites)
@@ -594,10 +618,19 @@ pub fn collect_plan_now(app: AppHandle, shared: State<'_, Shared>, id: String, w
 }
 
 /// 거점 PC의 [지금 수집]: 이 PC에서 켜 둔 항목을 바로 한 번 수집한다.
-#[tauri::command(async)]
-pub fn collect_inventory_run(app: AppHandle, shared: State<'_, Shared>, what: String) -> Result<Vec<InvItem>, String> {
+#[tauri::command]
+pub async fn collect_inventory_run(app: AppHandle, shared: State<'_, Shared>, what: String) -> Result<Vec<InvItem>, String> {
     let hub = hub(&shared)?;
-    hub.inventory_run(&what, super::now_ms())?;
-    audit(&app, "inventory.run", &[what.chars().take(20).collect()]);
+    let name = hub.inventory_may_run(&what, super::now_ms())?;
+    if super::inventory::slow(name) {
+        if crate::engine::busy() {
+            return Err("진단이 돌고 있습니다. 끝난 뒤에 눌러 주세요".into());
+        }
+        measure_speed(&hub, 0).await?;
+    } else {
+        let h = hub.clone();
+        tauri::async_runtime::spawn_blocking(move || h.inventory_run(name, super::now_ms())).await.map_err(|_| "수집하지 못했습니다".to_string())??;
+    }
+    audit(&app, "inventory.run", &[name.to_string()]);
     Ok(inv_items(&hub))
 }
