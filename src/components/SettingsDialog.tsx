@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { saveSettings, testLlm } from "../lib/backend";
 import type { Provider, Settings, SettingsView } from "../lib/types";
 import { WordLanguage } from "./Word";
@@ -31,6 +31,14 @@ export function SettingsDialog({
   onClose: () => void;
   onSaved: (view: SettingsView) => void;
 }) {
+  // Esc로도 닫는다.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const [form, setForm] = useState<Settings>({
     provider: initial.provider,
     base_url: initial.base_url,
@@ -112,8 +120,15 @@ export function SettingsDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="max-h-full w-full max-w-lg overflow-y-auto rounded-lg border border-line bg-panel p-6">
-        <h2 className="text-lg font-semibold">설정 · AI 연결</h2>
+      <div className="flex max-h-full w-full max-w-lg flex-col rounded-lg border border-line bg-panel">
+        {/* 제목과 [닫기]는 내용이 길어도 늘 위에 보인다. */}
+        <div className="flex items-center justify-between border-b border-line px-6 py-3">
+          <h2 className="text-lg font-semibold">설정 · AI 연결</h2>
+          <button onClick={onClose} className="rounded-md border border-line px-3 py-1 text-sm hover:bg-raised" title="저장하지 않고 닫습니다 (Esc)">
+            닫기
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         <p className="mt-1 text-xs text-dim">
           AI는 상황을 읽고 도구와 옵션을 제안하며, 실행 결과를 요약합니다. 연결하지 않아도 레시피와 키워드 찾기는 동작합니다.
         </p>
@@ -249,9 +264,12 @@ export function SettingsDialog({
 
         <WordLanguage />
 
-        {status && <p className={`mt-4 text-sm ${status.ok ? "text-safe" : "text-danger"}`}>{status.text}</p>}
+        </div>
 
-        <div className="mt-6 flex justify-end gap-2">
+        {/* 저장 단추도 늘 아래에 보인다. */}
+        <div className="border-t border-line px-6 py-3">
+        {status && <p className={`mb-2 text-sm ${status.ok ? "text-safe" : "text-danger"}`}>{status.text}</p>}
+        <div className="flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border border-line px-4 py-2 text-sm text-dim">
             닫기
           </button>
@@ -267,6 +285,7 @@ export function SettingsDialog({
           >
             저장
           </button>
+        </div>
         </div>
       </div>
     </div>
