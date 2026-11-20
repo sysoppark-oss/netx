@@ -34,6 +34,7 @@ mod term;
 mod updater;
 mod voice;
 mod word;
+mod wslsetup;
 
 /// 창이 화면보다 크면 줄일 크기(가로, 세로). 화면에 들어가면 없음. 단위는 모두 실제 화소.
 /// 작업 표시줄과 창 테두리 몫으로 화면의 92%까지만 쓴다.
@@ -166,6 +167,10 @@ pub fn run() {
             collect::app::collect_pair_close,
             collect::app::collect_pair_decide,
             collect::app::collect_pc_set,
+            commands::wsl_setup_status,
+            commands::wsl_setup_start,
+            commands::wsl_setup_restart,
+            commands::wsl_setup_clear,
             collect::app::collect_site,
             collect::app::collect_inventory,
             collect::app::collect_inventory_set,

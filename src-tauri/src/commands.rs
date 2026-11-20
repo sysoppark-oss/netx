@@ -53,6 +53,38 @@ pub async fn environment_status() -> EnvironmentStatus {
     env_check::check().await
 }
 
+/// 전체 진단(WSL) 설치가 어느 단계인지.
+#[tauri::command]
+pub async fn wsl_setup_status() -> crate::wslsetup::WslSetup {
+    crate::wslsetup::status().await
+}
+
+/// WSL 설치를 띄운다. 사용자가 누른 단추에서만 불린다. 승인 창은 사용자가 누른다.
+#[tauri::command]
+pub async fn wsl_setup_start(app: AppHandle) -> Result<crate::wslsetup::WslSetup, String> {
+    crate::wslsetup::start()?;
+    if let Ok(dir) = data_dir(&app) {
+        audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "setup", tool: "wsl-install", argv: &["--install".into(), "-d".into(), "Ubuntu".into(), "--no-launch".into()], risk: Risk::Caution, root: true, confirmed: true });
+    }
+    Ok(crate::wslsetup::status().await)
+}
+
+/// 다시 켜지면 NetX가 한 번 뜨게 해 두고 PC를 다시 시작한다(20초 뒤). 사용자가 한 번 더 확인한 뒤에만 불린다.
+#[tauri::command]
+pub fn wsl_setup_restart(app: AppHandle) -> Result<(), String> {
+    crate::wslsetup::restart()?;
+    if let Ok(dir) = data_dir(&app) {
+        audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "setup", tool: "restart-pc", argv: &["/r".into(), "/t".into(), "20".into()], risk: Risk::Caution, root: false, confirmed: true });
+    }
+    Ok(())
+}
+
+/// 설치가 끝났거나 그만둔다.
+#[tauri::command]
+pub fn wsl_setup_clear() {
+    crate::wslsetup::clear();
+}
+
 /// 등록된 도구와 옵션 스키마. 옵션 패널과 자동완성이 쓴다.
 #[tauri::command]
 pub fn get_tools() -> Vec<ToolSchema> {

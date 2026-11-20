@@ -274,3 +274,17 @@ export async function bridgeStatus(): Promise<BridgeStatus> {
   if (!isTauri()) return { state: "none", members: 0 };
   return invoke<BridgeStatus>("bridge_status");
 }
+
+/** 전체 진단(WSL) 설치의 단계 */
+export interface WslSetup {
+  stage: "ready" | "none" | "restart" | "resume" | "unsupported";
+  /** 사용자가 설치를 시작해 아직 끝내지 않았다 */
+  active: boolean;
+  build: number;
+  message: string;
+}
+
+export const wslSetupStatus = () => invoke<WslSetup>("wsl_setup_status");
+export const wslSetupStart = () => invoke<WslSetup>("wsl_setup_start");
+export const wslSetupRestart = () => invoke<void>("wsl_setup_restart");
+export const wslSetupClear = () => invoke<void>("wsl_setup_clear");

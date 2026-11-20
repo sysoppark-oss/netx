@@ -31,6 +31,7 @@ import {
   getToolStatus,
   getTools,
   installTools,
+  wslSetupStatus,
   listInterfaces,
   planMixed,
   runMixed,
@@ -79,6 +80,18 @@ export default function App() {
   };
   // 초기 설정 마법사: 첫 실행 때 한 번, 그 뒤로는 환경 배지를 눌렀을 때
   const [wizardOpen, setWizardOpen] = useState(() => !setupDone());
+  // 다시 시작한 뒤 이어 가는 WSL 설치가 있으면 초기 설정 창을 진단 방식 단계로 연다.
+  const [wizardStep, setWizardStep] = useState(0);
+  useEffect(() => {
+    wslSetupStatus()
+      .then((w) => {
+        if (w.active && w.stage !== "none") {
+          setWizardStep(1);
+          setWizardOpen(true);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
   const [mode, setMode] = useState<UiMode>("easy");
   const [situation, setSituation] = useState("");
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -1063,10 +1076,12 @@ export default function App() {
       {aboutOpen && <AboutDialog info={info} onClose={() => setAboutOpen(false)} />}
       {wizardOpen && (
         <SetupWizard
+          key={wizardStep}
           env={env}
           level={level}
           missing={missing}
           installing={installing}
+          initialStep={wizardStep}
           aiOn={aiOn}
           onLevel={setLevel}
           onRecheck={async () => {
@@ -1077,6 +1092,7 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           onClose={() => {
             markSetupDone();
+            setWizardStep(0);
             setWizardOpen(false);
           }}
         />

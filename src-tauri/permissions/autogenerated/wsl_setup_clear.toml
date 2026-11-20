@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wsl-setup-clear"
+description = "Enables the wsl_setup_clear command without any pre-configured scope."
+commands.allow = ["wsl_setup_clear"]
+
+[[permission]]
+identifier = "deny-wsl-setup-clear"
+description = "Denies the wsl_setup_clear command without any pre-configured scope."
+commands.deny = ["wsl_setup_clear"]
