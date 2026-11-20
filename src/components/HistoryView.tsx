@@ -1,5 +1,6 @@
 // 최근 진단 기록 목록. 한 건을 고르면 그때의 계획과 결과를 본 화면에 다시 연다.
 // 기록은 이 PC에만 있다. 결과 목록이므로 말씀 표시를 넣지 않는다.
+import { useDialog } from "../lib/dialog";
 import { useEffect, useRef, useState } from "react";
 import { historyDelete, historyImport, historyList, historyLoad, type HistoryEntry, type HistoryItem } from "../lib/history";
 import { reportMake, type ReportSaved } from "../lib/report";
@@ -14,6 +15,7 @@ function whenText(ms: number): string {
 }
 
 export function HistoryView({ onOpen, onReport, onClose }: { onOpen: (entry: HistoryEntry, time: number) => void; onReport: () => void; onClose: () => void }) {
+  const dialog = useDialog(onClose);
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmAll, setConfirmAll] = useState(false);
@@ -85,7 +87,7 @@ export function HistoryView({ onOpen, onReport, onClose }: { onOpen: (entry: His
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <div {...dialog} aria-label="최근 진단" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div className="flex max-h-full w-full max-w-3xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-line px-4 py-3">
           <h1 className="text-base font-semibold">🕘 최근 진단</h1>

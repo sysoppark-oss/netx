@@ -52,3 +52,59 @@ where = "src/components/SetupWizard.tsx"
 [[declare]]
 what = "고침"
 where = "src/lib/backend.ts"
+
+[[declare]]
+what = "고침"
+where = "src/components/CaptureView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/CollectView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/FleetView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/HistoryView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/LinkPill.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/NetBar.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/ReportView.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/SettingsDialog.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/SiteDetail.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/Word.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/index.css"
+
+[[declare]]
+what = "고침"
+where = "src/lib/collect.ts"
+
+[[declare]]
+what = "만듦"
+where = "src/lib/dialog.ts"
+
+[[declare]]
+what = "만듦"
+where = "src/lib/ui.ts"

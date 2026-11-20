@@ -1,3 +1,4 @@
+import { useDialog } from "../lib/dialog";
 import { useEffect, useRef, useState } from "react";
 import { wslSetupClear, wslSetupRestart, wslSetupStart, wslSetupStatus, type WslSetup } from "../lib/backend";
 import { USER_LEVELS } from "../lib/types";
@@ -52,6 +53,7 @@ interface Props {
 }
 
 export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, onRecheck, onInstall, onOpenSettings, onClose, initialStep = 0 }: Props) {
+  const dialog = useDialog(onClose);
   const [step, setStep] = useState(initialStep);
   const [wsl, setWsl] = useState<WslSetup | null>(null);
   const [wslError, setWslError] = useState("");
@@ -143,7 +145,7 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
 
   const button = "rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent hover:text-accent disabled:opacity-50";
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
+    <div {...dialog} aria-label="NetX 초기 설정" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
       <div className="flex max-h-full w-full max-w-2xl flex-col rounded-lg border border-line bg-panel">
         <div className="border-b border-line px-6 py-4">
           <h2 className="text-lg font-semibold">NetX 초기 설정</h2>

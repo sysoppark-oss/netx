@@ -1,3 +1,4 @@
+import { useDialog } from "../lib/dialog";
 import { useEffect, useState } from "react";
 import { bridgeStatus, getWord, openChurchMail, type BridgeStatus, setWordLang } from "../lib/backend";
 import type { AppInfo, Verse, WordView } from "../lib/types";
@@ -143,6 +144,7 @@ export function WordLanguage() {
 
 /** "정보" 화면: 프로그램 정보, 헌정 문구, [교회 안내] */
 export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: () => void }) {
+  const dialog = useDialog(onClose);
   const view = useWord();
   const [church, setChurch] = useState(false);
   const [bridge, setBridge] = useState<BridgeStatus | null>(null);
@@ -152,7 +154,7 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
       .catch(() => {});
   }, []);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+    <div {...dialog} aria-label="NetX 정보" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
       <div className="max-h-full w-full max-w-xl overflow-y-auto rounded-lg border border-line bg-panel p-6">
         <div className="flex items-baseline justify-between">
           <h2 className="text-lg font-semibold">정보</h2>

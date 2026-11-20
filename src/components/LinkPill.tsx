@@ -1,6 +1,7 @@
 // 거점 관제의 연결 표시: 이 PC의 정보가 지금 어디로 나가고 있는지(거점), 거점이 몇 곳 붙어 있는지(관제 PC)를 늘 보인다.
 // 보내기도 받기도 꺼져 있으면 아무것도 그리지 않는다. 이름은 이 화면에만 보이고 밖으로 나가지 않는다.
 import { useEffect, useState } from "react";
+import { hidden } from "../lib/ui";
 import { collectBoard, collectInventory, collectOverview, timeText, type Board, type Overview } from "../lib/collect";
 
 export type CollectTab = "dashboard" | "send";
@@ -15,6 +16,7 @@ export function LinkPill({ onOpen }: { onOpen: (tab: CollectTab) => void }) {
   useEffect(() => {
     let alive = true;
     const poll = async () => {
+      if (hidden()) return;
       const o = await collectOverview().catch(() => null);
       if (!alive || !o) return;
       setOv(o);
@@ -80,5 +82,5 @@ export function LinkPill({ onOpen }: { onOpen: (tab: CollectTab) => void }) {
       </button>,
     );
   }
-  return <span className="sticky right-0 flex shrink-0 items-center gap-2 bg-void pl-3">{pills}</span>;
+  return <span className="flex shrink-0 items-center gap-2 pl-3">{pills}</span>;
 }

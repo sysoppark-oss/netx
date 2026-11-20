@@ -413,5 +413,8 @@ export const EVERY_CHOICES: { minutes: number; label: string }[] = [
 
 export function gbText(bytes: number): string {
   const gb = bytes / 1024 / 1024 / 1024;
-  return gb >= 100 ? `${Math.round(gb)}GB` : `${gb.toFixed(1)}GB`;
+  if (gb >= 1024) return `${(gb / 1024).toFixed(1)}TB`;
+  if (gb >= 100) return `${Math.round(gb)}GB`;
+  if (gb >= 0.1 || bytes === 0) return `${gb.toFixed(1)}GB`;
+  return `${Math.max(1, Math.round(bytes / 1024 / 1024))}MB`;
 }
