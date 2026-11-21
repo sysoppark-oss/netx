@@ -26,7 +26,7 @@ export function Zone({
 }) {
   return (
     <section className={`${bare ? "" : "hud"} flex min-w-0 flex-col ${className ?? ""}`}>
-      <header className={`flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-accent/25 py-1.5 ${bare ? "" : "px-3"}`}>
+      <header data-grip className={`flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-accent/25 py-1.5 ${bare ? "" : "px-3"}`}>
         <span className="font-mono text-[10px] tracking-[0.18em] text-accent" aria-hidden>
           {code}
         </span>

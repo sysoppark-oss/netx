@@ -97,3 +97,9 @@ code {
   border-top: 0;
   border-left: 0;
 }
+
+/* 대시보드 구역의 잡는 자리(제목 띠, 카드의 이름 줄) */
+[data-grip] {
+  cursor: grab;
+  user-select: none;
+}

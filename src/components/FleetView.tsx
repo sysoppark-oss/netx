@@ -142,8 +142,8 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
   const sys = s.system;
   const { moved, low, speed, downs, slow } = signs(s);
   return (
-    <button onClick={onPick} className={`hud flex flex-col justify-start p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
-      <div className="mb-2 flex items-center gap-2 border-b border-accent/20 pb-1.5">
+    <button onClick={onPick} className={`hud flex min-h-0 w-full flex-1 flex-col justify-start p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
+      <div data-grip className="mb-2 flex items-center gap-2 border-b border-accent/20 pb-1.5">
         <span className={`h-2 w-2 shrink-0 rounded-full bg-current ${tone} ${pc.state === "active" && !pc.quiet ? "animate-pulse" : ""}`} aria-hidden />
         <span className="font-mono text-sm font-semibold tracking-wide">{pc.name || "이름 없음"}</span>
         <span className={`rounded-sm border border-current px-1.5 py-px text-[11px] font-semibold ${tone}`}>{state}</span>
@@ -362,21 +362,14 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
       ),
     },
     { id: "alerts", title: "알림", span: 4, min: 3, node: <Alerts sites={sites} onPick={setDetail} /> },
-    {
-      id: "sites",
-      title: "거점 상태",
-      span: 12,
-      min: 4,
-      node: (
-        <Zone className="min-h-0 flex-1" code="03" title="거점 상태" note="시스템 · 속도 · 카드를 누르면 프로그램 현황을 그 거점만으로 좁힙니다" bare>
-          <div className="grid gap-3 p-px [grid-template-columns:repeat(auto-fill,minmax(22rem,1fr))]">
-            {sites.map((s) => (
-              <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />
-            ))}
-          </div>
-        </Zone>
-      ),
-    },
+    // 거점 카드는 하나씩 따로 옮기고 크기를 바꾼다. 카드를 누르면 프로그램 현황을 그 거점만으로 좁힌다.
+    ...sites.map((s) => ({
+      id: `site:${s.pc.id}`,
+      title: s.pc.name || "이름 없음",
+      span: 6,
+      min: 3,
+      node: <SiteCard s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />,
+    })),
     { id: "plan", title: "수집 예약", span: 12, min: 6, node: <PlanTable onError={onError} /> },
     {
       id: "programs",

@@ -83,7 +83,7 @@ export function MapTiles({ map }: { map: SiteMapData }) {
   const relay = map.sites.filter((s) => s.path?.kind === "relay").length;
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div data-grip className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Tile label="연결된 거점" value={`${live}/${n}`} unit="곳" tone={n > 0 && live === n ? "text-safe" : live > 0 ? "text-caution" : "text-dim"} />
         <Tile label="24시간 수신" value={String(items)} unit={`건 · ${sizeText(bytes)}`} tone="text-accent" />
         <Tile label="24시간 위험 판정" value={String(danger)} unit="건" tone={danger > 0 ? "text-danger" : "text-ink"} />
