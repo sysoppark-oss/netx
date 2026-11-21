@@ -49,8 +49,8 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
 
   // 옮기기: 구역의 제목 띠(data-grip)를 잡아 끌면 다른 구역 자리로 들어간다. [배치 편집]을 켜면 구역 어디를 잡아도 된다.
   // 6픽셀 넘게 움직여야 끌기로 본다(그냥 누른 것은 누르기로 남긴다).
-  const press = useRef<{ id: string; x: number; y: number } | null>(null);
-  const dragging = useRef<string | null>(null);
+  // 움직임은 창 전체에서 듣는다(빨리 끌어 구역 밖으로 나가도 놓치지 않게).
+  const dragging = useRef(false);
   const down = (id: string) => (e: RPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || sizing.current) return;
     const t = e.target as HTMLElement;
@@ -61,26 +61,37 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
       // 제목 띠 안의 단추·입력칸을 누른 것은 끌기가 아니다. (카드처럼 단추가 띠를 감싼 경우는 끌 수 있다.)
       if (!grip || (control && grip.contains(control))) return;
     }
-    press.current = { id, x: e.clientX, y: e.clientY };
-  };
-  const move = (id: string) => (e: RPointerEvent<HTMLDivElement>) => {
-    const p = press.current;
-    if (!p || p.id !== id) return;
-    if (dragging.current !== id) {
-      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < 6) return;
-      e.currentTarget.setPointerCapture(e.pointerId);
-      dragging.current = id;
-      setHeld(id);
-    }
-    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-slot]")?.dataset.slot;
-    if (over && over !== id) change(moveTo(live.current, id, over));
-  };
-  const up = () => {
-    press.current = null;
-    if (!dragging.current) return;
-    dragging.current = null;
-    setHeld(null);
-    keep(live.current);
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const onMove = (m: PointerEvent) => {
+      if (!dragging.current) {
+        if (Math.hypot(m.clientX - x0, m.clientY - y0) < 6) return;
+        dragging.current = true;
+        setHeld(id);
+      }
+      m.preventDefault();
+      const over = document.elementFromPoint(m.clientX, m.clientY)?.closest<HTMLElement>("[data-slot]")?.dataset.slot;
+      if (over && over !== id) change(moveTo(live.current, id, over));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (!dragging.current) return;
+      dragging.current = false;
+      setHeld(null);
+      keep(live.current);
+      // 끌고 난 뒤 손을 뗄 때 생기는 누르기는 버린다(카드가 눌리지 않게).
+      const swallow = (c: MouseEvent) => {
+        c.stopPropagation();
+        c.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   // 크기: 오른쪽 아래 모서리를 끈다. 너비는 격자 칸에, 높이는 20픽셀에 맞춘다.
@@ -141,9 +152,6 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
               data-slot={slot.id}
               style={style}
               onPointerDown={down(slot.id)}
-              onPointerMove={move(slot.id)}
-              onPointerUp={up}
-              onPointerCancel={up}
               className={`relative col-span-12 flex min-w-0 flex-col md:[grid-column:span_var(--span)] ${edit ? "cursor-grab touch-none" : ""} ${edit ? "rounded outline-1 outline-offset-4 outline-dashed" : ""} ${held === slot.id ? "opacity-80 outline-accent" : "outline-line"}`}
             >
               {edit && (
