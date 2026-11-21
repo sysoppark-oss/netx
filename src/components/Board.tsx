@@ -95,6 +95,9 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
     commit(resize(live.current, items, slot.id, slot.span + dSpan, h));
   };
 
+  // 배치에 없는 구역이 나중에 생기면 맨 뒤에 붙여 그린다(사라지지 않게).
+  const shown = [...layout, ...defaults(items.filter((x) => !layout.some((s) => s.id === x.id)))];
+
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center justify-end gap-2 text-xs">
@@ -109,7 +112,7 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
         </button>
       </div>
       <div ref={grid} className={`grid grid-cols-12 gap-3 ${held ? "select-none" : ""}`}>
-        {layout.map((slot, i) => {
+        {shown.map((slot, i) => {
           const item = items.find((x) => x.id === slot.id);
           if (!item) return null;
           const style = { "--span": slot.span, height: slot.h > 0 ? slot.h : undefined } as CSSProperties;
@@ -135,7 +138,7 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
                   <button className={MINI} disabled={i === 0} onClick={() => commit(nudge(live.current, slot.id, -1))} aria-label={`${item.title} 앞으로`}>
                     ◀
                   </button>
-                  <button className={MINI} disabled={i === layout.length - 1} onClick={() => commit(nudge(live.current, slot.id, 1))} aria-label={`${item.title} 뒤로`}>
+                  <button className={MINI} disabled={i === shown.length - 1} onClick={() => commit(nudge(live.current, slot.id, 1))} aria-label={`${item.title} 뒤로`}>
                     ▶
                   </button>
                   <span className="flex-1" />

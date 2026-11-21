@@ -346,12 +346,21 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
   const shown = hits.slice(0, 300);
 
   const items: BoardItem[] = [
-    ...(map
-      ? [
-          { id: "stats", title: "숫자판", span: 12, min: 6, node: <MapTiles map={map} /> },
-          { id: "map", title: "연결 지도", span: 8, min: 4, node: <MapZone className="min-h-0 flex-1" map={map} onPick={setDetail} /> },
-        ]
-      : []),
+    // 지도 자료가 아직 없어도 자리는 늘 둔다(구역 목록이 바뀌면 저장된 배치와 어긋난다).
+    { id: "stats", title: "숫자판", span: 12, min: 6, node: map ? <MapTiles map={map} /> : <p className="text-xs text-dim">읽는 중…</p> },
+    {
+      id: "map",
+      title: "연결 지도",
+      span: 8,
+      min: 4,
+      node: map ? (
+        <MapZone className="min-h-0 flex-1" map={map} onPick={setDetail} />
+      ) : (
+        <Zone className="min-h-0 flex-1" code="01" title="연결 지도">
+          <p className="text-xs text-dim">읽는 중…</p>
+        </Zone>
+      ),
+    },
     { id: "alerts", title: "알림", span: 4, min: 3, node: <Alerts sites={sites} onPick={setDetail} /> },
     {
       id: "sites",
