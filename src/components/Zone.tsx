@@ -35,7 +35,7 @@ export function Zone({
         <span className="flex-1" />
         {right}
       </header>
-      <div className={`min-h-0 min-w-0 flex-1 ${bare ? "pt-3" : flush ? "" : "p-3"}`}>{children}</div>
+      <div className={`min-h-0 min-w-0 flex-1 overflow-auto ${bare ? "pt-3" : flush ? "" : "p-3"}`}>{children}</div>
     </section>
   );
 }

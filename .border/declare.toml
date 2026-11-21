@@ -100,3 +100,19 @@ where = "src/components/CollectView.tsx"
 [[declare]]
 what = "만듦"
 where = "src/components/Zone.tsx"
+
+[[declare]]
+what = "만듦"
+where = "src/components/Board.tsx"
+
+[[declare]]
+what = "만듦"
+where = "src/lib/board.ts"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/bridge/mod.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/src/bridge/pipe.rs"

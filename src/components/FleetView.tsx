@@ -1,7 +1,8 @@
 // 거점 관리 대시보드(관제 PC)와 예약 수집 동의 칸(거점 PC).
 // 프로그램 이름, 만든 곳, 운영체제 이름은 거점이 보낸 자료다. 글자로만 그린다.
 import { SiteDetail } from "./SiteDetail";
-import { SiteMap } from "./SiteMap";
+import { Board, type BoardItem } from "./Board";
+import { MapTiles, MapZone, useSiteMap } from "./SiteMap";
 import { Zone } from "./Zone";
 import { BTN, FIELD, hidden } from "../lib/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -99,7 +100,7 @@ function Alerts({ sites, onPick }: { sites: FleetSite[]; onPick: (id: string) =>
   const order = ["text-danger", "text-caution", "text-accent"];
   rows.sort((a, b) => order.indexOf(a.tone) - order.indexOf(b.tone));
   return (
-    <Zone code="02" title="알림" right={<span className={`font-mono text-xs font-semibold ${rows.length ? "text-caution" : "text-safe"}`}>{rows.length}건</span>} flush>
+    <Zone className="min-h-0 flex-1" code="02" title="알림" right={<span className={`font-mono text-xs font-semibold ${rows.length ? "text-caution" : "text-safe"}`}>{rows.length}건</span>} flush>
       {rows.length === 0 ? (
         <div className="p-3 text-xs">
           <p className="font-semibold text-safe">✓ 지금 알릴 것이 없습니다.</p>
@@ -236,7 +237,12 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
     const t = window.setInterval(load, 15_000);
     return () => window.clearInterval(t);
   }, [load]);
-  if (rows.length === 0) return null;
+  if (rows.length === 0)
+    return (
+      <Zone className="min-h-0 flex-1" code="04" title="수집 예약">
+        <p className="text-xs text-dim">짝 맺은 거점이 생기면 여기서 거점마다 수집할 항목과 주기를 고릅니다.</p>
+      </Zone>
+    );
   const set = (id: string, what: string, value: string) =>
     collectPlanSet(id, what, value === "" ? null : Number(value))
       .then(load)
@@ -246,7 +252,7 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
       .then(load)
       .catch((e) => onError(String(e)));
   return (
-    <Zone code="04" title="수집 예약" note="거점마다 항목과 주기">
+    <Zone className="min-h-0 flex-1" code="04" title="수집 예약" note="거점마다 항목과 주기">
       <p className="mb-2 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. [바로 수집]은 주기를 기다리지 않고 한 번 수집합니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
       <div className="overflow-x-auto rounded border border-line">
       <table className="w-full min-w-[44rem] border-collapse text-xs">
@@ -307,6 +313,7 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
   const [sites, setSites] = useState<FleetSite[] | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   const [find, setFind] = useState("");
+  const map = useSiteMap(onError);
 
   const load = useCallback(() => {
     if (hidden()) return;
@@ -338,22 +345,38 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
   if (sites.length === 0) return <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">아직 짝 맺은 거점이 없습니다. "이 PC를 관제 PC로" 탭에서 켜고 [새 PC 짝 맺기]를 누르세요.</p>;
   const shown = hits.slice(0, 300);
 
-  return (
-    <div className="space-y-3">
-      <SiteMap onPick={setDetail} onError={onError} aside={<Alerts sites={sites} onPick={setDetail} />} />
-      {detail && <SiteDetail id={detail} onClose={() => setDetail(null)} />}
-
-      <Zone code="03" title="거점 상태" note="시스템 · 속도 · 카드를 누르면 프로그램 현황을 그 거점만으로 좁힙니다" bare>
-        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-          {sites.map((s) => (
-            <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />
-          ))}
-        </div>
-      </Zone>
-
-      <PlanTable onError={onError} />
-
+  const items: BoardItem[] = [
+    ...(map
+      ? [
+          { id: "stats", title: "숫자판", span: 12, min: 6, node: <MapTiles map={map} /> },
+          { id: "map", title: "연결 지도", span: 8, min: 4, node: <MapZone className="min-h-0 flex-1" map={map} onPick={setDetail} /> },
+        ]
+      : []),
+    { id: "alerts", title: "알림", span: 4, min: 3, node: <Alerts sites={sites} onPick={setDetail} /> },
+    {
+      id: "sites",
+      title: "거점 상태",
+      span: 12,
+      min: 4,
+      node: (
+        <Zone className="min-h-0 flex-1" code="03" title="거점 상태" note="시스템 · 속도 · 카드를 누르면 프로그램 현황을 그 거점만으로 좁힙니다" bare>
+          <div className="grid gap-3 p-px [grid-template-columns:repeat(auto-fill,minmax(22rem,1fr))]">
+            {sites.map((s) => (
+              <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />
+            ))}
+          </div>
+        </Zone>
+      ),
+    },
+    { id: "plan", title: "수집 예약", span: 12, min: 6, node: <PlanTable onError={onError} /> },
+    {
+      id: "programs",
+      title: "프로그램 현황",
+      span: 12,
+      min: 4,
+      node: (
       <Zone
+        className="min-h-0 flex-1"
         code="05"
         title="프로그램 현황"
         note={`${pick ? `${sites.find((s) => s.pc.id === pick)?.pc.name ?? ""}만` : "모든 거점"} · ${hits.length}개`}
@@ -406,6 +429,14 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
           </div>
         )}
       </Zone>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      {detail && <SiteDetail id={detail} onClose={() => setDetail(null)} />}
+      <Board storageKey="netx.dash.layout" items={items} />
     </div>
   );
 }

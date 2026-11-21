@@ -2,7 +2,7 @@
 // 선 색 = 상태, 선 굵기 = 최근 24시간에 받은 양, 점선 = 중계 서버를 거침. 색만으로 말하지 않도록 글자를 함께 적는다.
 // 이름과 주소는 거점이 보낸 자료다. SVG의 글자로만 그린다. 움직임은 SVG 자체 애니메이션만 쓴다(CSP).
 // 움직이는 것(레이더, 흐르는 신호)에는 motion-dot 을 붙여 "움직임 줄이기"에서 감춘다.
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Zone } from "./Zone";
 import { collectMap, sizeText, timeText, type MapSite, type SiteMapData } from "../lib/collect";
 import { hidden } from "../lib/ui";
@@ -54,8 +54,8 @@ function Tile({ label, value, unit, tone }: { label: string; value: string; unit
   );
 }
 
-/** aside: 지도 오른쪽(좁은 창에서는 아래)에 놓을 구역 */
-export function SiteMap({ onPick, onError, aside }: { onPick: (id: string) => void; onError: (m: string) => void; aside?: ReactNode }) {
+/** 지도 자료를 20초마다 읽는다. 숫자판과 지도가 같이 쓴다. */
+export function useSiteMap(onError: (m: string) => void): SiteMapData | null {
   const [map, setMap] = useState<SiteMapData | null>(null);
   const load = useCallback(() => {
     if (hidden()) return;
@@ -69,7 +69,31 @@ export function SiteMap({ onPick, onError, aside }: { onPick: (id: string) => vo
     return () => window.clearInterval(t);
   }, [load]);
 
-  if (!map) return null;
+  return map;
+}
+
+/** 숫자판 네 개 */
+export function MapTiles({ map }: { map: SiteMapData }) {
+  const n = map.sites.length;
+  const live = map.sites.filter((s) => stateOf(s).live).length;
+  const items = map.sites.reduce((a, s) => a + s.items, 0);
+  const bytes = map.sites.reduce((a, s) => a + s.bytes, 0);
+  const danger = map.sites.reduce((a, s) => a + s.danger, 0);
+  const direct = map.sites.filter((s) => s.path?.kind === "direct").length;
+  const relay = map.sites.filter((s) => s.path?.kind === "relay").length;
+
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Tile label="연결된 거점" value={`${live}/${n}`} unit="곳" tone={n > 0 && live === n ? "text-safe" : live > 0 ? "text-caution" : "text-dim"} />
+        <Tile label="24시간 수신" value={String(items)} unit={`건 · ${sizeText(bytes)}`} tone="text-accent" />
+        <Tile label="24시간 위험 판정" value={String(danger)} unit="건" tone={danger > 0 ? "text-danger" : "text-ink"} />
+        <Tile label="경로" value={map.paths ? `${direct}` : "?"} unit={map.paths ? `직접 · 중계 ${relay}` : "테일스케일에서 읽지 못함"} />
+    </div>
+  );
+}
+
+/** 연결 지도 구역 */
+export function MapZone({ map, onPick, className }: { map: SiteMapData; onPick: (id: string) => void; className?: string }) {
   const n = map.sites.length;
   // 거점이 한두 곳이면 한 줄로 놓으므로 낮게 그린다.
   const H = n <= 2 ? 250 : 380;
@@ -80,25 +104,10 @@ export function SiteMap({ onPick, onError, aside }: { onPick: (id: string) => vo
     return { s, x: CX + Math.cos(angle) * 300, y: CY + Math.sin(angle) * (n <= 2 ? 0 : 100) };
   });
   const live = map.sites.filter((s) => stateOf(s).live).length;
-  const items = map.sites.reduce((a, s) => a + s.items, 0);
-  const bytes = map.sites.reduce((a, s) => a + s.bytes, 0);
-  const danger = map.sites.reduce((a, s) => a + s.danger, 0);
-  const direct = map.sites.filter((s) => s.path?.kind === "direct").length;
-  const relay = map.sites.filter((s) => s.path?.kind === "relay").length;
-
   return (
-    <section className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Tile label="연결된 거점" value={`${live}/${n}`} unit="곳" tone={n > 0 && live === n ? "text-safe" : live > 0 ? "text-caution" : "text-dim"} />
-        <Tile label="24시간 수신" value={String(items)} unit={`건 · ${sizeText(bytes)}`} tone="text-accent" />
-        <Tile label="24시간 위험 판정" value={String(danger)} unit="건" tone={danger > 0 ? "text-danger" : "text-ink"} />
-        <Tile label="경로" value={map.paths ? `${direct}` : "?"} unit={map.paths ? `직접 · 중계 ${relay}` : "테일스케일에서 읽지 못함"} />
-      </div>
-
-      <div className={aside ? "grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)]" : ""}>
-      <Zone code="01" title="연결 지도" note="선 굵기 = 24시간에 받은 양 · 점선 = 중계 · 거점을 누르면 상세" flush>
+      <Zone className={className} code="01" title="연결 지도" note="선 굵기 = 24시간에 받은 양 · 점선 = 중계 · 거점을 누르면 상세" flush>
         <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${W} ${H}`} className="mx-auto block max-h-[26rem] w-full min-w-[36rem]" role="group" aria-label={`거점 지도: 거점 ${n}곳 중 ${live}곳 연결됨`}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="mx-auto block max-h-[26rem] w-full min-w-[30rem]" role="group" aria-label={`거점 지도: 거점 ${n}곳 중 ${live}곳 연결됨`}>
           <defs>
             <pattern id="map-grid" width="32" height="32" patternUnits="userSpaceOnUse">
               <path d="M32 0H0V32" fill="none" className="stroke-accent" strokeWidth="0.5" opacity="0.16" />
@@ -235,8 +244,5 @@ export function SiteMap({ onPick, onError, aside }: { onPick: (id: string) => vo
         </svg>
         </div>
       </Zone>
-      {aside}
-      </div>
-    </section>
   );
 }
