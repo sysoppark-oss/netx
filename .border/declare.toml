@@ -88,3 +88,7 @@ where = "src-tauri/src/collect/path.rs"
 [[declare]]
 what = "만듦"
 where = "src/components/SiteMap.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/SiteDetail.tsx"
