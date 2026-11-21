@@ -55,6 +55,7 @@
     "allow-collect-inventory-set",
     "allow-collect-inventory-preview",
     "allow-collect-fleet",
+    "allow-collect-map",
     "allow-collect-plan",
     "allow-collect-plan-set",
     "allow-collect-plan-now",

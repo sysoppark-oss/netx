@@ -418,3 +418,33 @@ export function gbText(bytes: number): string {
   if (gb >= 0.1 || bytes === 0) return `${gb.toFixed(1)}GB`;
   return `${Math.max(1, Math.round(bytes / 1024 / 1024))}MB`;
 }
+
+// ---- 거점 지도 ----
+
+export interface SitePath {
+  kind: "direct" | "relay" | "idle";
+  addr: string;
+  relay: string;
+  online: boolean;
+  rx: number;
+  tx: number;
+}
+
+export interface MapSite {
+  pc: Pc;
+  path: SitePath | null;
+  /** 최근 24시간 */
+  items: number;
+  bytes: number;
+  danger: number;
+}
+
+export interface SiteMapData {
+  name: string;
+  listening: string | null;
+  /** 테일스케일에게 길을 물을 수 있었는가 */
+  paths: boolean;
+  sites: MapSite[];
+}
+
+export const collectMap = () => invoke<SiteMapData>("collect_map");

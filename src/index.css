@@ -61,4 +61,39 @@ code {
   .animate-pulse {
     animation: none;
   }
+  /* 거점 지도의 흐르는 점은 감춘다. 선의 색·굵기·점선과 글자는 그대로 남는다. */
+  .motion-dot {
+    display: none;
+  }
+}
+
+/* 관제실 화면의 틀: 옅은 강조색 테두리와 두 모서리의 꺾쇠 */
+.hud {
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 55%),
+    var(--color-panel);
+}
+.hud::before,
+.hud::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--color-accent);
+  pointer-events: none;
+}
+.hud::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.hud::after {
+  right: -1px;
+  bottom: -1px;
+  border-top: 0;
+  border-left: 0;
 }
