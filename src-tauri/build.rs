@@ -78,6 +78,7 @@ fn main() {
                 "collect_inventory_set",
                 "collect_inventory_preview",
                 "collect_fleet",
+                "collect_map",
                 "collect_plan",
                 "collect_plan_set",
                 "collect_plan_now",

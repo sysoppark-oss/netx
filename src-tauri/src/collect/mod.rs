@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod inventory;
+pub mod path;
 pub mod speed;
 pub mod key;
 pub mod net;
