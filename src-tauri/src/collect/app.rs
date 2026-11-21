@@ -665,7 +665,9 @@ pub fn collect_map(shared: State<'_, Shared>) -> Result<SiteMap, String> {
     let hub = hub(&shared)?;
     let now = super::now_ms();
     // 개발용: 짝 맺은 거점 없이 지도 모양을 보려고 지어낸 거점을 그린다(디버그 빌드에서만).
-    if cfg!(debug_assertions) && std::env::var_os("NETX_TEST_MAP").is_some() {
+    if cfg!(debug_assertions)
+        && let Some(count) = std::env::var("NETX_TEST_MAP").ok().and_then(|v| v.parse::<usize>().ok())
+    {
         use super::path::Path;
         let site = |name: &str, addr: &str, state: &str, quiet: bool, path: Option<Path>, items: u64, danger: u64| MapSite {
             pc: Pc { id: format!("{:064x}", addr.len() + name.len()), name: name.into(), addr: addr.into(), state: state.into(), own: false, paired: now, last_seq: items, seen: now, quiet, items, bytes: items * 9000 },
@@ -676,7 +678,7 @@ pub fn collect_map(shared: State<'_, Shared>) -> Result<SiteMap, String> {
         };
         let direct = Path { kind: "direct", addr: "121.1.2.3:41641".into(), relay: "tok".into(), online: true, rx: 1, tx: 1 };
         return Ok(SiteMap {
-            name: "용인".into(),
+            name: "DESKTOP-RBLMSDI".into(),
             listening: Some("100.89.153.49:49317".into()),
             paths: true,
             sites: vec![
@@ -685,7 +687,10 @@ pub fn collect_map(shared: State<'_, Shared>) -> Result<SiteMap, String> {
                 site("삼척", "100.64.0.22", "active", true, Some(Path { kind: "idle", addr: String::new(), online: false, ..direct.clone() }), 0, 0),
                 site("사무실", "100.64.0.23", "stopped", false, None, 3, 0),
                 site("이름이 아주 긴 거점 노트북 하나", "100.64.0.24", "active", false, Some(direct), 40, 0),
-            ],
+            ]
+            .into_iter()
+            .take(count)
+            .collect(),
         });
     }
     let paths = super::path::read();

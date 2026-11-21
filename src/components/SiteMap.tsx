@@ -6,9 +6,7 @@ import { collectMap, sizeText, timeText, type MapSite, type SiteMapData } from "
 import { hidden } from "../lib/ui";
 
 const W = 800;
-const H = 330;
 const CX = W / 2;
-const CY = H / 2;
 
 function stateOf(s: MapSite): { tone: string; text: string; live: boolean } {
   if (s.pc.state === "stopped") return { tone: "text-danger", text: "받기 멈춤", live: false };
@@ -29,7 +27,7 @@ function widthOf(items: number): number {
   return Math.min(6, 1.5 + Math.log10(1 + items) * 1.6);
 }
 
-function short(name: string, max = 12): string {
+function short(name: string, max = 18): string {
   const chars = [...name];
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : name;
 }
@@ -50,10 +48,14 @@ export function SiteMap({ onPick, onError }: { onPick: (id: string) => void; onE
 
   if (!map || map.sites.length === 0) return null;
   const n = map.sites.length;
+  // 거점이 한두 곳이면 한 줄로 놓으므로 낮게 그린다.
+  const H = n <= 2 ? 190 : 360;
+  const CY = n <= 2 ? 78 : H / 2;
   // 둘레에 고르게 놓는다. 하나면 왼쪽, 둘이면 왼쪽과 오른쪽.
   const spots = map.sites.map((s, i) => {
-    const angle = Math.PI + (2 * Math.PI * i) / n;
-    return { s, x: CX + Math.cos(angle) * 300, y: CY + Math.sin(angle) * (n <= 2 ? 0 : 82) };
+    // 셋 넘으면 반 칸 돌려 놓아, 관제 PC 바로 위아래(이름 적는 자리)에 거점이 오지 않게 한다.
+    const angle = Math.PI + (2 * Math.PI * i) / n + (n > 2 ? Math.PI / n : 0);
+    return { s, x: CX + Math.cos(angle) * 300, y: CY + Math.sin(angle) * (n <= 2 ? 0 : 95) };
   });
   const live = map.sites.filter((s) => stateOf(s).live).length;
 
@@ -75,7 +77,7 @@ export function SiteMap({ onPick, onError }: { onPick: (id: string) => void; onE
               <g key={`l${s.pc.id}`} className={st.tone}>
                 <line x1={x} y1={y} x2={CX} y2={CY} stroke="currentColor" strokeWidth={widthOf(s.items)} strokeDasharray={relay ? "7 6" : undefined} strokeLinecap="round" opacity={st.live ? 0.9 : 0.7} />
                 {st.live && s.items > 0 && (
-                  <circle r="4" fill="currentColor" className="motion-dot">
+                  <circle r="3.5" className="motion-dot fill-ink stroke-void" strokeWidth="1">
                     <animateMotion dur={relay ? "3.2s" : "2s"} repeatCount="indefinite" path={`M${x},${y} L${CX},${CY}`} />
                   </circle>
                 )}
@@ -84,14 +86,18 @@ export function SiteMap({ onPick, onError }: { onPick: (id: string) => void; onE
           })}
 
           <g>
-            <circle cx={CX} cy={CY} r="34" className="fill-panel stroke-accent" strokeWidth="2" />
-            <text x={CX} y={CY - 3} textAnchor="middle" className="fill-accent text-[13px] font-semibold">
-              {short(map.name || "관제 PC", 8)}
+            <circle cx={CX} cy={CY} r="30" className="fill-panel stroke-accent" strokeWidth="2" />
+            <text x={CX} y={CY + 7} textAnchor="middle" className="text-[20px]" aria-hidden>
+              📡
             </text>
-            <text x={CX} y={CY + 13} textAnchor="middle" className="fill-dim text-[10px]">
+            {/* 이름은 원 밖에 적는다(긴 PC 이름이 원을 넘지 않게). */}
+            <text x={CX} y={CY + 48} textAnchor="middle" className="fill-accent text-[12px] font-semibold">
+              {short(map.name || "관제 PC", 18)}
+            </text>
+            <text x={CX} y={CY + 62} textAnchor="middle" className="fill-dim text-[10px]">
               관제 PC
             </text>
-            <text x={CX} y={CY + 52} textAnchor="middle" className={`text-[10px] ${map.listening ? "fill-dim" : "fill-danger"}`}>
+            <text x={CX} y={CY + 75} textAnchor="middle" className={`text-[10px] ${map.listening ? "fill-dim" : "fill-danger"}`}>
               {map.listening ? map.listening : "듣지 못함"}
             </text>
           </g>
