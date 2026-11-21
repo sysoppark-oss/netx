@@ -60,3 +60,7 @@ where = "src/components/SetupWizard.tsx"
 [[declare]]
 what = "고침"
 where = "src/lib/backend.ts"
+
+[[declare]]
+what = "고침"
+where = "docs/DEV_PLAN_v0.1.md"
