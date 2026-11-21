@@ -34,10 +34,15 @@ function uptimeText(secs: number): string {
   return `${Math.floor(secs / 86400)}일`;
 }
 
+/** 칸으로 나뉜 계기 막대(24칸). 쓴 만큼 불이 켜진다. */
+const BAR_CELLS = 24;
 function Bar({ used, tone }: { used: number; tone: string }) {
+  const lit = Math.min(BAR_CELLS, Math.max(used > 0 ? 1 : 0, Math.round(used * BAR_CELLS)));
   return (
-    <span className="inline-block h-1.5 w-full overflow-hidden rounded bg-raised align-middle">
-      <span className={`block h-full bg-current ${tone}`} style={{ width: `${Math.min(100, Math.max(2, used * 100))}%` }} />
+    <span className="flex h-2.5 w-full gap-px" aria-hidden>
+      {Array.from({ length: BAR_CELLS }, (_, i) => (
+        <span key={i} className={`h-full flex-1 rounded-[1px] ${i < lit ? `bg-current ${tone}` : "bg-raised"}`} />
+      ))}
     </span>
   );
 }
@@ -48,7 +53,8 @@ function Trend({ values }: { values: number[] }) {
   const max = Math.max(...values, 1);
   const pts = values.map((v, i) => `${(i / (values.length - 1)) * 100},${22 - (v / max) * 20}`).join(" ");
   return (
-    <svg viewBox="0 0 100 24" preserveAspectRatio="none" className="h-5 w-24 shrink-0 text-accent" aria-hidden>
+    <svg viewBox="0 0 100 24" preserveAspectRatio="none" className="h-8 w-32 shrink-0 text-accent" aria-hidden>
+      <polygon points={`0,24 ${pts} 100,24`} fill="currentColor" opacity="0.14" />
       <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
     </svg>
   );
@@ -71,20 +77,38 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
   // 지난 측정이 넷 넘게 쌓였을 때만 견준다: 이번 내려받기 속도가 그동안 중앙값의 절반 아래면 느려진 것으로 본다.
   const slow = speed && downs.length >= 5 && speed.down_mbps < median(downs.slice(1)) / 2;
   return (
-    <button onClick={onPick} className={`rounded-lg border p-3 text-left text-xs hover:bg-raised ${picked ? "border-accent" : "border-line"}`}>
-      <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-sm font-semibold">{pc.name || "이름 없음"}</span>
-        <span className={`font-semibold ${tone}`}>● {state}</span>
+    <button onClick={onPick} className={`hud p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
+      <div className="mb-2 flex items-center gap-2 border-b border-accent/20 pb-1.5">
+        <span className={`h-2 w-2 shrink-0 rounded-full bg-current ${tone} ${pc.state === "active" && !pc.quiet ? "animate-pulse" : ""}`} aria-hidden />
+        <span className="font-mono text-sm font-semibold tracking-wide">{pc.name || "이름 없음"}</span>
+        <span className={`rounded-sm border border-current px-1.5 py-px text-[11px] font-semibold ${tone}`}>{state}</span>
         <span className="flex-1" />
-        {slow && <span className="text-caution">속도 느려짐</span>}
-        {low && <span className="text-danger">디스크 부족</span>}
+        {slow && <span className="rounded-sm border border-caution px-1.5 py-px text-[11px] text-caution">속도 느려짐</span>}
+        {low && <span className="rounded-sm border border-danger px-1.5 py-px text-[11px] text-danger">디스크 부족</span>}
       </div>
       {speed && (
-        <div className="mb-1 flex items-center gap-2" title={`${speed.server}와 잰 인터넷 속도 · ${timeText(s.speeds[0][0])} · 최근 ${s.speeds.length}번`}>
-          <span className="w-14 shrink-0 text-dim">속도</span>
-          <span className={slow ? "text-caution" : ""}>
-            ↓ {speed.down_mbps} · ↑ {speed.up_mbps} Mbps <span className="text-dim">· 지연 {speed.latency_ms}ms</span>
-          </span>
+        <div className="mb-2 flex items-end gap-4" title={`${speed.server}와 잰 인터넷 속도 · ${timeText(s.speeds[0][0])} · 최근 ${s.speeds.length}번`}>
+          <div>
+            <div className="text-[10px] tracking-[0.18em] text-dim">내려받기</div>
+            <div className={`font-mono text-lg leading-tight font-semibold ${slow ? "text-caution" : "text-accent"}`}>
+              ↓ {speed.down_mbps}
+              <span className="ml-1 text-[10px] font-normal text-dim">Mbps</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] tracking-[0.18em] text-dim">올리기</div>
+            <div className="font-mono text-lg leading-tight font-semibold">
+              ↑ {speed.up_mbps}
+              <span className="ml-1 text-[10px] font-normal text-dim">Mbps</span>
+            </div>
+          </div>
+          <div>
+            <div className="text-[10px] tracking-[0.18em] text-dim">지연</div>
+            <div className="font-mono text-lg leading-tight font-semibold">
+              {speed.latency_ms}
+              <span className="ml-1 text-[10px] font-normal text-dim">ms</span>
+            </div>
+          </div>
           <span className="flex-1" />
           <Trend values={[...downs].reverse()} />
         </div>
@@ -102,7 +126,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
           <div className="flex items-center gap-2">
             <span className="w-14 shrink-0 text-dim">메모리</span>
             <Bar used={sys.mem_total ? sys.mem_used / sys.mem_total : 0} tone="text-accent" />
-            <span className="w-28 shrink-0 text-right">
+            <span className="w-28 shrink-0 text-right font-mono">
               {gbText(sys.mem_used)} / {gbText(sys.mem_total)}
             </span>
           </div>
@@ -112,7 +136,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
               <div key={d.name} className="flex items-center gap-2">
                 <span className="w-14 shrink-0 truncate text-dim">{d.name}</span>
                 <Bar used={used} tone={diskLow(d) ? "text-danger" : "text-safe"} />
-                <span className="w-28 shrink-0 text-right">남음 {gbText(d.free)}</span>
+                <span className="w-28 shrink-0 text-right font-mono">남음 {gbText(d.free)}</span>
               </div>
             );
           })}

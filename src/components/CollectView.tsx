@@ -1,7 +1,6 @@
 // 거점 관제 화면: 받은 결과(목록·필터), 이 PC의 결과 보내기, 이 PC를 관제 PC로 쓰기.
 // 받은 글자(대상, 제목, 해석 문장)는 다른 PC가 보낸 자료다. 글자로만 그리고 링크나 서식으로 만들지 않는다.
 import { BTN, BTN_MAIN, FIELD, TONE } from "../lib/ui";
-import { useDialog } from "../lib/dialog";
 import { useCallback, useEffect, useState } from "react";
 import {
   CONN_LABEL,
@@ -718,8 +717,8 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
   );
 }
 
-export function CollectView({ onClose, initial = "dashboard" }: { onClose: () => void; initial?: Tab }) {
-  const dialog = useDialog(onClose);
+/** 거점 관제. 겹침 창이 아니라 본문 자리에 그린다(관제 PC에서는 이것이 첫 화면이다). */
+export function CollectView({ initial = "dashboard" }: { initial?: Tab }) {
   const [tab, setTab] = useState<Tab>(initial);
   const [ov, setOv] = useState<Overview | null>(null);
   const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [], strangers: [] });
@@ -750,25 +749,30 @@ export function CollectView({ onClose, initial = "dashboard" }: { onClose: () =>
   ];
 
   return (
-    <div {...dialog} aria-label="거점 관제" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div className="flex h-full max-h-full w-full max-w-5xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
-        <header className="flex items-center gap-3 border-b border-line px-4 py-3">
-          <h1 className="text-base font-semibold">📡 거점 관제</h1>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-accent/25 px-5 py-2.5">
+          <h1 className="font-mono text-base font-semibold tracking-[0.12em] text-accent">📡 거점 관제</h1>
+          <span className="flex items-center gap-1.5 rounded-sm border border-accent/40 px-1.5 py-px text-[10px] tracking-[0.18em] text-accent">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" aria-hidden />
+            실시간
+          </span>
           <span className="text-xs text-dim">테일스케일 안에서, 거점이 거는 연결로만 주고받습니다.</span>
-          <span className="flex-1" />
-          <button onClick={onClose} className="rounded border border-line px-3 py-1 text-xs hover:bg-raised">
-            닫기
-          </button>
         </header>
-        <nav className="flex gap-1 border-b border-line px-3 pt-2 text-sm">
+        <nav className="flex flex-wrap gap-1 border-b border-line px-4 pt-2 text-sm" aria-label="거점 관제 탭">
           {tabs.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} className={`rounded-t px-3 py-1.5 ${tab === t.id ? "border border-b-0 border-line bg-raised" : "text-dim hover:bg-raised"}`}>
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              aria-current={tab === t.id ? "page" : undefined}
+              className={`rounded-t px-3 py-1.5 ${tab === t.id ? "border border-b-0 border-accent/40 bg-raised text-accent" : "text-dim hover:bg-raised"}`}
+            >
               {t.label}
             </button>
           ))}
         </nav>
         {error && <p className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">{error}</p>}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {!ov ? (
             <p className="text-sm text-dim">읽는 중…</p>
           ) : tab === "dashboard" ? (

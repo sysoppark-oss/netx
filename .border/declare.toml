@@ -92,3 +92,7 @@ where = "src/components/SiteMap.tsx"
 [[declare]]
 what = "고침"
 where = "src/components/SiteDetail.tsx"
+
+[[declare]]
+what = "고침"
+where = "src/components/CollectView.tsx"

@@ -2,7 +2,7 @@ import { CaptureView } from "./components/CaptureView";
 import { HistoryView } from "./components/HistoryView";
 import { ReportView } from "./components/ReportView";
 import { CollectView } from "./components/CollectView";
-import { collectSubmit } from "./lib/collect";
+import { collectOverview, collectSubmit } from "./lib/collect";
 import { manualSave } from "./lib/report";
 import { toStandaloneSvg } from "./components/Topology";
 import { historySave, reportEntry, worstLight, type HistoryEntry } from "./lib/history";
@@ -116,7 +116,15 @@ export default function App() {
   const [capture, setCapture] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  // 거점 관제를 본문 자리에 보이는가. 관제 PC로 쓰는 PC에서는 켤 때부터 이것이 첫 화면이다.
   const [collectOpen, setCollectOpen] = useState(false);
+  useEffect(() => {
+    collectOverview()
+      .then((o) => {
+        if (o.config.receive) setCollectOpen(true);
+      })
+      .catch(() => undefined);
+  }, []);
   const [collectTab, setCollectTab] = useState<"dashboard" | "send">("dashboard");
   // 메뉴별로 마지막에 보던 화면(입력, 계획, 실행 번호)
   const kept = useRef<Record<string, { inputs: Record<string, string>; plan: ValidatedPlan | null; planRunId: number | null; extras: string[]; custom: Record<string, boolean> }>>({});
@@ -124,6 +132,10 @@ export default function App() {
   const recorded = useRef<Set<number>>(new Set());
   // 다른 프로그램이 넘긴 진단 대상: 입력칸에 채우고 알림을 보인다. 실행하지 않는다.
   const [handoff, setHandoff] = useState<Handoff | null>(null);
+  // 진단을 고르거나 시작하면(레시피, 제안, 도구, 직접 명령, 넘겨받은 의뢰) 진단 화면으로 바꾼다.
+  useEffect(() => {
+    if (recipe || ai || plan || tool || manualMode || handoff) setCollectOpen(false);
+  }, [recipe, ai, plan, tool, manualMode, handoff]);
   // 넘겨받은 대상을 지금 열린 진단의 입력칸에도 채웠는지
   const [handoffFilled, setHandoffFilled] = useState(false);
   // 알림을 받는 쪽이 볼 지금 상태(열린 진단, 실행 중인지)
@@ -332,6 +344,7 @@ export default function App() {
   }
 
   function pickRecipe(r: Recipe, prefilled: Record<string, string> = {}) {
+    setCollectOpen(false);
     leaveRecipe();
     setAi(null);
     setManualMode(false);
@@ -714,6 +727,18 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {/* 좌측 패널 */}
         <aside className="w-60 shrink-0 overflow-y-auto border-r border-line bg-panel p-3">
+          <button
+            onClick={() => {
+              setCollectTab("dashboard");
+              setCollectOpen(true);
+            }}
+            aria-current={collectOpen ? "page" : undefined}
+            title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 관제 PC로 보냅니다. 둘 다 기본은 꺼져 있습니다."
+            className={`mb-3 flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left text-sm font-semibold ${collectOpen ? "border-accent/60 bg-raised text-accent" : "border-line hover:bg-raised"}`}
+          >
+            <span className="text-base">📡</span>
+            <span className="flex-1">거점 관제</span>
+          </button>
           {mode === "easy" ? (
             <>
               <h2 className="mb-2 px-1 text-xs font-semibold text-dim">상황 레시피</h2>
@@ -757,17 +782,6 @@ export default function App() {
               >
                 <span className="text-base">📄</span>
                 <span className="flex-1">보고서 만들기</span>
-              </button>
-              <button
-                onClick={() => {
-                  setCollectTab("dashboard");
-                  setCollectOpen(true);
-                }}
-                title="다른 PC의 NetX가 진단한 결과를 이 PC에 모으거나, 이 PC의 결과를 관제 PC로 보냅니다. 둘 다 기본은 꺼져 있습니다."
-                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-raised"
-              >
-                <span className="text-base">📡</span>
-                <span className="flex-1">거점 관제</span>
               </button>
               <button
                 onClick={() => setCapture("")}
@@ -816,8 +830,13 @@ export default function App() {
           )}
         </aside>
 
-        {/* 중앙: 제안 카드 영역 */}
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        {/* 중앙: 거점 관제(본문 자리) 또는 제안 카드 영역 */}
+        {collectOpen && (
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-void">
+            <CollectView key={collectTab} initial={collectTab} />
+          </main>
+        )}
+        <main className={`min-w-0 flex-1 overflow-y-auto p-6 ${collectOpen ? "hidden" : ""}`}>
           {error && (
             <p className="mx-auto mb-5 max-w-3xl rounded-md border border-danger/40 px-3 py-2 text-sm text-danger">{error}</p>
           )}
@@ -1111,7 +1130,6 @@ export default function App() {
         />
       )}
       {reportOpen && <ReportView onClose={() => setReportOpen(false)} />}
-      {collectOpen && <CollectView initial={collectTab} onClose={() => setCollectOpen(false)} />}
       {capture !== null && <CaptureView key={capture} initial={capture} onClose={() => setCapture(null)} />}
     </div>
   );
