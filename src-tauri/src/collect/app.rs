@@ -634,3 +634,72 @@ pub async fn collect_inventory_run(app: AppHandle, shared: State<'_, Shared>, wh
     audit(&app, "inventory.run", &[name.to_string()]);
     Ok(inv_items(&hub))
 }
+
+// ================= 거점 지도 =================
+
+/// 지도 위의 거점 하나
+#[derive(Serialize)]
+pub struct MapSite {
+    pub pc: Pc,
+    /// 테일스케일이 알려 준 길. 모르면 없음.
+    pub path: Option<super::path::Path>,
+    /// 최근 24시간에 받은 건수, 바이트, 위험 판정 수
+    pub items: u64,
+    pub bytes: u64,
+    pub danger: u64,
+}
+
+#[derive(Serialize)]
+pub struct SiteMap {
+    /// 이 PC(관제 PC)의 이름과 듣는 주소(듣지 못하면 없음)
+    pub name: String,
+    pub listening: Option<String>,
+    /// 테일스케일에게 길을 물을 수 있었는가
+    pub paths: bool,
+    pub sites: Vec<MapSite>,
+}
+
+/// 거점 지도: 짝 맺은 거점과 거기까지의 길, 최근 24시간의 흐름.
+#[tauri::command(async)]
+pub fn collect_map(shared: State<'_, Shared>) -> Result<SiteMap, String> {
+    let hub = hub(&shared)?;
+    let now = super::now_ms();
+    // 개발용: 짝 맺은 거점 없이 지도 모양을 보려고 지어낸 거점을 그린다(디버그 빌드에서만).
+    if cfg!(debug_assertions) && std::env::var_os("NETX_TEST_MAP").is_some() {
+        use super::path::Path;
+        let site = |name: &str, addr: &str, state: &str, quiet: bool, path: Option<Path>, items: u64, danger: u64| MapSite {
+            pc: Pc { id: format!("{:064x}", addr.len() + name.len()), name: name.into(), addr: addr.into(), state: state.into(), own: false, paired: now, last_seq: items, seen: now, quiet, items, bytes: items * 9000 },
+            path,
+            items,
+            bytes: items * 9000,
+            danger,
+        };
+        let direct = Path { kind: "direct", addr: "121.1.2.3:41641".into(), relay: "tok".into(), online: true, rx: 1, tx: 1 };
+        return Ok(SiteMap {
+            name: "용인".into(),
+            listening: Some("100.89.153.49:49317".into()),
+            paths: true,
+            sites: vec![
+                site("평창", "100.99.126.111", "active", false, Some(direct.clone()), 120, 0),
+                site("교회", "100.64.0.21", "active", false, Some(Path { kind: "relay", addr: String::new(), ..direct.clone() }), 14, 2),
+                site("삼척", "100.64.0.22", "active", true, Some(Path { kind: "idle", addr: String::new(), online: false, ..direct.clone() }), 0, 0),
+                site("사무실", "100.64.0.23", "stopped", false, None, 3, 0),
+                site("이름이 아주 긴 거점 노트북 하나", "100.64.0.24", "active", false, Some(direct), 40, 0),
+            ],
+        });
+    }
+    let paths = super::path::read();
+    let flow = hub.inbox.flow(now.saturating_sub(super::store::DAY));
+    let sites = hub
+        .inbox
+        .pcs(now)
+        .into_iter()
+        .filter(|p| !p.own && p.state != "removed")
+        .map(|pc| {
+            let path = paths.as_ref().and_then(|t| t.get(&pc.addr.parse::<std::net::Ipv4Addr>().ok()?).cloned());
+            let (items, bytes, danger) = flow.get(&pc.id).copied().unwrap_or_default();
+            MapSite { pc, path, items, bytes, danger }
+        })
+        .collect();
+    Ok(SiteMap { name: hub.config().name, listening: super::lock(&hub.status).listening.clone(), paths: paths.is_some(), sites })
+}

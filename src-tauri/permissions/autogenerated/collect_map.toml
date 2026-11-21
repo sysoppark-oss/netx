@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-map"
+description = "Enables the collect_map command without any pre-configured scope."
+commands.allow = ["collect_map"]
+
+[[permission]]
+identifier = "deny-collect-map"
+description = "Denies the collect_map command without any pre-configured scope."
+commands.deny = ["collect_map"]

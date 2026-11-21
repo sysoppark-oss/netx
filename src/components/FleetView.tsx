@@ -1,5 +1,7 @@
 // 거점 관리 대시보드(관제 PC)와 예약 수집 동의 칸(거점 PC).
 // 프로그램 이름, 만든 곳, 운영체제 이름은 거점이 보낸 자료다. 글자로만 그린다.
+import { SiteDetail } from "./SiteDetail";
+import { SiteMap } from "./SiteMap";
 import { BTN, FIELD, hidden } from "../lib/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -214,6 +216,7 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
 
 /** 관제 PC: 거점 카드, 바뀐 것, 프로그램 찾기 */
 export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
+  const [detail, setDetail] = useState<string | null>(null);
   const [sites, setSites] = useState<FleetSite[] | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   const [find, setFind] = useState("");
@@ -251,6 +254,9 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
 
   return (
     <div className="space-y-4">
+      <SiteMap onPick={setDetail} onError={onError} />
+      {detail && <SiteDetail id={detail} onClose={() => setDetail(null)} />}
+
       <section className="grid gap-3 md:grid-cols-2">
         {sites.map((s) => (
           <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />

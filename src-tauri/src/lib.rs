@@ -176,6 +176,7 @@ pub fn run() {
             collect::app::collect_inventory_set,
             collect::app::collect_inventory_preview,
             collect::app::collect_fleet,
+            collect::app::collect_map,
             collect::app::collect_plan,
             collect::app::collect_plan_set,
             collect::app::collect_plan_now,

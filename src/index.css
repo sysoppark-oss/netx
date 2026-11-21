@@ -61,4 +61,8 @@ code {
   .animate-pulse {
     animation: none;
   }
+  /* 거점 지도의 흐르는 점은 감춘다. 선의 색·굵기·점선과 글자는 그대로 남는다. */
+  .motion-dot {
+    display: none;
+  }
 }

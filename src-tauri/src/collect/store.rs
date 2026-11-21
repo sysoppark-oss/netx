@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use super::wire::{self, MAX_ITEM_BYTES};
 
 const HOUR: u64 = 3_600_000;
-const DAY: u64 = 24 * HOUR;
+pub const DAY: u64 = 24 * HOUR;
 
 /// 관제 PC의 보관 기한 기본값(받은 시각 기준)
 pub const KEEP_DAYS_DEFAULT: u32 = 90;
@@ -750,6 +750,15 @@ impl Inbox {
             params![n(c.at), c.pc, c.addr, c.outcome, n(c.ms), n(c.stored), n(c.again), n(c.refused), n(c.bytes), n(c.first_seq), n(c.last_seq)],
         );
         let _ = db.execute("DELETE FROM conns WHERE id <= (SELECT MAX(id) FROM conns) - ?1", params![CONN_KEEP]);
+    }
+
+    /// 거점별 최근 구간의 흐름: 지문 → (받은 건수, 바이트, 위험 판정 수)
+    pub fn flow(&self, since: u64) -> std::collections::HashMap<String, (u64, u64, u64)> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT pc, COUNT(*), COALESCE(SUM(size), 0), COALESCE(SUM(verdict = 'danger'), 0) FROM items WHERE got >= ?1 GROUP BY pc") else { return Default::default() };
+        st.query_map(params![since as i64], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64, r.get::<_, i64>(3)? as u64))))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
     }
 
     /// 접속 내역(최근 것부터). `pc`가 없으면 짝이 아닌 접속만.
