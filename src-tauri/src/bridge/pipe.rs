@@ -5,6 +5,8 @@
 //!   다른 사용자는 읽기만 되어 요청을 보낼 수 없다).
 //! - 접속자 확인: 접속한 프로세스의 실행 파일 경로가 `HKLM\SOFTWARE\Antioch\Modules\<id>`의 `Exe`와 같을 때만
 //!   권한을 준다. HKLM은 관리자만 쓸 수 있으므로, 관리자가 설치한 랙 구성원만 통과한다.
+//!   운영체제가 돌려준 경로 그대로도 관리자 전용 폴더 아래여야 한다(띄운 뒤 폴더를 바꿔치기하는 것을 막는다).
+//!   섀시(`Modules\antioch`, `Kind = chassis`)는 read 까지만 받는다. 등록부는 64비트 보기만 읽는다.
 //!   (스토리방화벽 공개판은 판마다 쓰고 버리는 자체 서명 키를 쓰므로 서명자 이름으로는 확인할 수 없다.)
 
 use std::os::windows::io::AsRawHandle;
@@ -14,15 +16,17 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{NamedPipeServer, PipeMode, ServerOptions};
-use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
-use super::{Caller, Handoff, Host};
+use super::{Caller, Handoff, Host, Member};
 use crate::audit::{self, AuditEntry};
 use crate::model::{Level, Risk};
 
 const RUNNING_KEY: &str = r"SOFTWARE\Antioch\Running\netx";
 const MODULES_KEY: &str = r"SOFTWARE\Antioch\Modules";
+/// 등록부는 64비트 보기만 읽는다(섀시 2차 규격 보강 2판 2장). 32비트 보기(WOW6432Node)에 쓴 항목은 보지 않는다.
+const VIEW: u32 = KEY_READ | KEY_WOW64_64KEY;
 /// 동시에 받는 접속 수
 const MAX_CLIENTS: usize = 4;
 /// 이만큼 아무 요청이 없으면 접속을 끊는다.
@@ -123,23 +127,24 @@ pub(crate) fn final_path(path: &str) -> Option<String> {
 
 /// 관리자만 쓸 수 있는 프로그램 폴더들. 환경 변수가 아니라 HKLM에서 읽는다(환경 변수는 실행한 쪽이 바꿀 수 있다).
 pub(crate) fn admin_dirs() -> Vec<String> {
-    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion") else { return Vec::new() };
+    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(r"SOFTWARE\Microsoft\Windows\CurrentVersion", VIEW) else { return Vec::new() };
     ["ProgramFilesDir", "ProgramFilesDir (x86)", "ProgramW6432Dir"].iter().filter_map(|name| final_path(&key.get_value::<String, _>(name).ok()?)).collect()
 }
 
-/// 관리자가 등록한 랙 구성원의 실행 파일 경로들(모듈마다 `Exe`와, 있으면 `ClientExe`).
-/// 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다.
-fn registered_members() -> Vec<String> {
-    let Ok(modules) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(MODULES_KEY) else { return Vec::new() };
-    let found: Vec<String> = modules
-        .enum_keys()
-        .flatten()
-        .take(32)
-        .filter_map(|id| modules.open_subkey(id).ok())
-        .flat_map(|key| super::MEMBER_VALUES.iter().filter_map(|name| key.get_value::<String, _>(*name).ok()).collect::<Vec<String>>())
-        .filter_map(|raw| final_path(&raw))
-        .collect();
-    super::admitted(found, &admin_dirs())
+/// 관리자가 등록한 랙 구성원의 실행 파일들(모듈마다 `Exe`와, 있으면 `ClientExe`).
+/// 관리자 전용 폴더 아래에 실제로 있는 파일만 남긴다. 섀시(`antioch`) 항목은 표시해 둔다.
+fn registered_members() -> Vec<Member> {
+    let Ok(modules) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(MODULES_KEY, VIEW) else { return Vec::new() };
+    let dirs = admin_dirs();
+    let mut out = Vec::new();
+    for id in modules.enum_keys().flatten().take(32) {
+        let Ok(key) = modules.open_subkey_with_flags(&id, VIEW) else { continue };
+        let kind = key.get_value::<String, _>("Kind").ok();
+        let Some(chassis) = super::slot_role(&id, kind.as_deref()) else { continue };
+        let found: Vec<String> = super::MEMBER_VALUES.iter().filter_map(|name| key.get_value::<String, _>(*name).ok()).filter_map(|raw| final_path(&raw)).collect();
+        out.extend(super::admitted(found, &dirs).into_iter().map(|exe| Member { exe, chassis }));
+    }
+    out
 }
 
 fn client_pid(server: &NamedPipeServer) -> Option<u32> {
@@ -179,9 +184,9 @@ fn client_image(server: &NamedPipeServer) -> Option<(u32, String)> {
 
 fn caller_of(server: &NamedPipeServer) -> Caller {
     let Some((pid, image)) = client_image(server) else { return Caller::default() };
-    // 비교는 운영체제의 최종 경로끼리 한다.
-    let member = final_path(&image).is_some_and(|image| super::is_member(&image, &registered_members()));
-    Caller { pid, image, granted: if member { vec!["read", "operate"] } else { Vec::new() } }
+    // 비교는 운영체제의 최종 경로끼리 한다. 돌려받은 경로 그대로도 관리자 폴더 아래여야 한다(`grants`).
+    let granted = super::grants(&image, final_path(&image).as_deref(), &registered_members(), &admin_dirs());
+    Caller { pid, image, granted }
 }
 
 async fn serve(server: NamedPipeServer, app: AppHandle) {

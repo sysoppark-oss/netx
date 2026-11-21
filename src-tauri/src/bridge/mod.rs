@@ -366,6 +366,47 @@ pub fn is_member(image: &str, registered: &[String]) -> bool {
     plain_absolute(&image) && registered.iter().any(|r| norm_path(r) == image)
 }
 
+/// 섀시(통합 화면)의 슬롯 id. 이 id 로 올라온 항목은 read 까지만 받는다(섀시 2차 규격 보강 2판 1장).
+pub const CHASSIS_ID: &str = "antioch";
+
+/// 등록부에서 읽은 구성원 실행 파일 하나. `exe`는 운영체제의 최종 경로.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Member {
+    pub exe: String,
+    pub chassis: bool,
+}
+
+/// 등록부 항목 하나를 구성원으로 읽을지. `Kind = chassis`는 id 가 `antioch`일 때만 받는다
+/// (다른 id 의 chassis 항목은 믿지 않는다). 돌려주는 값은 "섀시인가".
+pub fn slot_role(id: &str, kind: Option<&str>) -> Option<bool> {
+    let chassis = id == CHASSIS_ID;
+    if kind == Some("chassis") && !chassis {
+        return None;
+    }
+    Some(chassis)
+}
+
+/// 접속자에게 줄 권한 (설계 8.3, 섀시 2차 규격 보강 2판 1장 4번·5장).
+/// - `raw`: 운영체제가 돌려준 접속자 실행 파일 경로 그대로. 띄울 때의 글자열이라, 띄운 뒤 폴더를 연결로
+///   바꿔치기하면 푼 경로만으로는 가짜가 통과한다. 그래서 이 값 그대로도 관리자 전용 폴더 아래여야 한다.
+/// - `resolved`: 그 경로를 푼 최종 경로. 등록된 실행 파일과 통째로 같아야 한다.
+/// 섀시는 read 까지만, 다른 구성원은 read 와 operate.
+pub fn grants(raw: &str, resolved: Option<&str>, members: &[Member], admin_dirs: &[String]) -> Vec<&'static str> {
+    let Some(resolved) = resolved else { return Vec::new() };
+    if !under_admin_dirs(raw, admin_dirs) {
+        return Vec::new();
+    }
+    let hits: Vec<&Member> = members.iter().filter(|m| is_member(resolved, std::slice::from_ref(&m.exe))).collect();
+    if hits.is_empty() {
+        Vec::new()
+    } else if hits.iter().any(|m| m.chassis) {
+        // 같은 파일이 두 항목에 올라 있어도 섀시 항목이 하나라도 있으면 낮은 쪽을 준다.
+        vec!["read"]
+    } else {
+        vec!["read", "operate"]
+    }
+}
+
 // ---- 화면이 가져갈 인계 ----
 
 static PENDING: Mutex<Option<Handoff>> = Mutex::new(None);
@@ -738,6 +779,30 @@ mod tests {
         assert!(!is_member(r"C:\Program Files\Story Firewall", &reg));
         assert!(!is_member("", &reg) && !is_member("x", &[]) && !is_member("", &[String::new()]));
         assert!(!is_member(r"C:\Program Files\Story Firewall\..\Story Firewall\story-firewall-ui.exe", &reg), "돌아가는 경로는 받지 않는다");
+    }
+
+    #[test]
+    fn the_chassis_reads_only_and_a_swapped_folder_is_refused() {
+        let dirs = vec![r"\\?\C:\Program Files".to_string()];
+        let ui = r"C:\Program Files\Story Firewall\story-firewall-ui.exe";
+        let shell = r"C:\Program Files\Antioch\antioch.exe";
+        let members = vec![Member { exe: format!(r"\\?\{ui}"), chassis: false }, Member { exe: format!(r"\\?\{shell}"), chassis: true }];
+
+        assert_eq!(grants(ui, Some(ui), &members, &dirs), ["read", "operate"]);
+        assert_eq!(grants(shell, Some(shell), &members, &dirs), ["read"], "섀시는 read 까지만");
+        assert!(grants(r"C:\Program Files\Other\x.exe", Some(r"C:\Program Files\Other\x.exe"), &members, &dirs).is_empty());
+        // 사용자 폴더에서 띄운 뒤 그 자리를 연결로 바꿔, 푼 경로는 진짜 실행 파일이 된 경우: 돌려받은 경로가 관리자 폴더 밖이라 거절.
+        assert!(grants(r"C:\Users\me\fake\story-firewall-ui.exe", Some(ui), &members, &dirs).is_empty());
+        assert!(grants(ui, None, &members, &dirs).is_empty(), "경로를 풀지 못하면 거절");
+        // 같은 파일이 섀시 항목에도 올라 있으면 낮은 권한.
+        let both = vec![Member { exe: ui.to_string(), chassis: false }, Member { exe: ui.to_string(), chassis: true }];
+        assert_eq!(grants(ui, Some(ui), &both, &dirs), ["read"]);
+
+        assert_eq!(slot_role("antioch", Some("chassis")), Some(true));
+        assert_eq!(slot_role("antioch", None), Some(true), "antioch 는 Kind 가 없어도 read 까지만");
+        assert_eq!(slot_role("storyfirewall", Some("service")), Some(false));
+        assert_eq!(slot_role("netx", None), Some(false));
+        assert_eq!(slot_role("evil", Some("chassis")), None, "다른 id 의 chassis 항목은 믿지 않는다");
     }
 
     #[test]
