@@ -45,3 +45,20 @@ code {
   background: var(--color-line);
   border-radius: 5px;
 }
+
+/* 키보드로 옮긴 초점은 늘 보인다. 입력칸은 테두리 색으로 따로 보인다(outline-none + focus:border-accent). */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+/* 겹침 창 자체가 초점을 받을 때(열린 직후)는 테두리를 그리지 않는다. */
+[role="dialog"]:focus {
+  outline: none;
+}
+
+/* 움직임 줄이기를 켠 PC: 깜박임을 멈춘다. 상태는 색과 글자로 그대로 보인다. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse {
+    animation: none;
+  }
+}

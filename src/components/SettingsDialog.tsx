@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useDialog } from "../lib/dialog";
 import { saveSettings, testLlm } from "../lib/backend";
 import type { Provider, Settings, SettingsView } from "../lib/types";
 import { WordLanguage } from "./Word";
@@ -31,14 +32,7 @@ export function SettingsDialog({
   onClose: () => void;
   onSaved: (view: SettingsView) => void;
 }) {
-  // Esc로도 닫는다.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const dialog = useDialog(onClose);
   const [form, setForm] = useState<Settings>({
     provider: initial.provider,
     base_url: initial.base_url,
@@ -119,7 +113,7 @@ export function SettingsDialog({
   const active = form.provider !== "none";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+    <div {...dialog} aria-label="설정" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
       <div className="flex max-h-full w-full max-w-lg flex-col rounded-lg border border-line bg-panel">
         {/* 제목과 [닫기]는 내용이 길어도 늘 위에 보인다. */}
         <div className="flex items-center justify-between border-b border-line px-6 py-3">

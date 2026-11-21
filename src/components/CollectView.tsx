@@ -1,5 +1,7 @@
 // 거점 관제 화면: 받은 결과(목록·필터), 이 PC의 결과 보내기, 이 PC를 관제 PC로 쓰기.
 // 받은 글자(대상, 제목, 해석 문장)는 다른 PC가 보낸 자료다. 글자로만 그리고 링크나 서식으로 만들지 않는다.
+import { BTN, BTN_MAIN, FIELD, TONE } from "../lib/ui";
+import { useDialog } from "../lib/dialog";
 import { useCallback, useEffect, useState } from "react";
 import {
   CONN_LABEL,
@@ -38,10 +40,6 @@ import { SiteDetail } from "./SiteDetail";
 
 type Tab = "dashboard" | "inbox" | "analysis" | "send" | "receive";
 
-const TONE: Record<Verdict, string> = { ok: "text-safe", caution: "text-caution", danger: "text-danger", unknown: "text-dim" };
-const BTN = "rounded border border-line px-2.5 py-1 text-xs hover:bg-raised disabled:opacity-50";
-const BTN_MAIN = "rounded border border-accent/60 px-2.5 py-1 text-xs text-accent hover:bg-raised disabled:opacity-50";
-const FIELD = "rounded border border-line bg-void px-2 py-1 text-xs";
 
 const SENT_STATE: Record<SentRow["state"], string> = { queued: "보낼 함에서 기다림", sent: "보냄", dropped: "버림(보내지 않음)", local: "이 PC의 거점 관제에만" };
 
@@ -250,7 +248,7 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
 
       <section>
         <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
-          <select value={pc} onChange={(e) => (setPc(e.target.value), reset())} className={FIELD}>
+          <select aria-label="거점 고르기" value={pc} onChange={(e) => (setPc(e.target.value), reset())} className={FIELD}>
             <option value="">모든 PC</option>
             {board.pcs.map((p) => (
               <option key={p.id} value={p.id}>
@@ -258,11 +256,11 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
               </option>
             ))}
           </select>
-          <input type="date" value={from} max={to || undefined} onChange={(e) => (setFrom(e.target.value), reset())} className={FIELD} />
+          <input aria-label="기간 시작 날짜" type="date" value={from} max={to || undefined} onChange={(e) => (setFrom(e.target.value), reset())} className={FIELD} />
           ~
-          <input type="date" value={to} min={from || undefined} onChange={(e) => (setTo(e.target.value), reset())} className={FIELD} />
-          <input value={target} onChange={(e) => (setTarget(e.target.value), reset())} placeholder="대상(주소·이름)" maxLength={120} className={`${FIELD} w-44`} />
-          <select value={kind} onChange={(e) => (setKind(e.target.value), reset())} className={FIELD}>
+          <input aria-label="기간 끝 날짜" type="date" value={to} min={from || undefined} onChange={(e) => (setTo(e.target.value), reset())} className={FIELD} />
+          <input aria-label="대상(주소·이름)으로 거르기" value={target} onChange={(e) => (setTarget(e.target.value), reset())} placeholder="대상(주소·이름)" maxLength={120} className={`${FIELD} w-44`} />
+          <select aria-label="진단 종류로 거르기" value={kind} onChange={(e) => (setKind(e.target.value), reset())} className={FIELD}>
             <option value="">모든 진단</option>
             {board.kinds.map((k) => (
               <option key={k} value={k}>
@@ -270,7 +268,7 @@ function Inbox({ board, onError, reload }: { board: Board; onError: (m: string) 
               </option>
             ))}
           </select>
-          <select value={verdict} onChange={(e) => (setVerdict(e.target.value), reset())} className={FIELD}>
+          <select aria-label="판정으로 거르기" value={verdict} onChange={(e) => (setVerdict(e.target.value), reset())} className={FIELD}>
             <option value="">모든 판정</option>
             {(Object.keys(VERDICT_LABEL) as Verdict[]).map((v) => (
               <option key={v} value={v}>
@@ -403,7 +401,7 @@ function AnalysisTab({ onError }: { onError: (m: string) => void }) {
         <div className="mb-1 flex items-center gap-2">
           <h2 className="font-semibold text-dim">대상별 — 지점마다 어떻게 보였나</h2>
           <span className="flex-1" />
-          <select value={only} onChange={(e) => setOnly(e.target.value as typeof only)} className={FIELD}>
+          <select aria-label="종합 분석에서 볼 것" value={only} onChange={(e) => setOnly(e.target.value as typeof only)} className={FIELD}>
             <option value="all">모두</option>
             <option value="multi">여러 PC가 본 대상</option>
             <option value="differs">PC마다 판정이 다른 대상</option>
@@ -522,8 +520,8 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
           <div className="space-y-1.5 text-xs">
             <p className="text-dim">관제 PC의 NetX에서 [새 PC 짝 맺기]를 누르면 그 화면에 주소와 일회용 코드가 뜹니다(2분 동안). 그것을 여기에 적습니다.</p>
             <div className="flex flex-wrap items-center gap-2">
-              <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="관제 PC의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
-              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="일회용 코드" maxLength={24} autoComplete="off" spellCheck={false} className={`${FIELD} w-40 font-mono uppercase`} />
+              <input aria-label="관제 PC의 테일스케일 주소" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="관제 PC의 테일스케일 주소 (100.x.y.z)" maxLength={15} className={`${FIELD} w-64 font-mono`} />
+              <input aria-label="일회용 코드" value={code} onChange={(e) => setCode(e.target.value)} placeholder="일회용 코드" maxLength={24} autoComplete="off" spellCheck={false} className={`${FIELD} w-40 font-mono uppercase`} />
               <button disabled={busy || !addr.trim() || code.replace(/\s+/g, "").length < 8} onClick={join} className={BTN_MAIN}>
                 {busy ? "확인 중…" : "짝 맺기"}
               </button>
@@ -583,7 +581,15 @@ function Send({ ov, onError, reload }: { ov: Overview; onError: (m: string) => v
         </label>
       </section>
 
-      <InventoryConsent ready={(c.send && !!c.collector) || c.receive} onError={onError} />
+      <InventoryConsent
+        ready={(c.send && !!c.collector) || c.receive}
+        onError={onError}
+        onRan={() =>
+          void collectSent()
+            .then(setSent)
+            .catch(() => {})
+        }
+      />
 
       <section>
         <h2 className="mb-1 text-xs font-semibold text-dim">나간 건의 목록 (최근 200건)</h2>
@@ -623,7 +629,7 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
       <section className="space-y-2 text-xs">
         <h2 className="font-semibold text-dim">이 PC의 이름</h2>
         <div className="flex items-center gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} className={`${FIELD} w-56`} />
+          <input aria-label="이 PC의 이름" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} className={`${FIELD} w-56`} />
           <button disabled={!name.trim() || name === c.name} onClick={() => save({ name })} className={BTN}>
             저장
           </button>
@@ -650,7 +656,7 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
         )}
         <div className="flex items-center gap-2">
           보관 기한
-          <input value={days} onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 3))} className={`${FIELD} w-16`} />일
+          <input aria-label="보관 기한(일)" value={days} onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 3))} className={`${FIELD} w-16`} />일
           <button disabled={!Number(days) || Number(days) === c.keep_days || Number(days) > ov.limits.keep_days_max} onClick={() => save({ keep_days: Number(days) })} className={BTN}>
             저장
           </button>
@@ -713,6 +719,7 @@ function Receive({ ov, onError, reload }: { ov: Overview; onError: (m: string) =
 }
 
 export function CollectView({ onClose, initial = "dashboard" }: { onClose: () => void; initial?: Tab }) {
+  const dialog = useDialog(onClose);
   const [tab, setTab] = useState<Tab>(initial);
   const [ov, setOv] = useState<Overview | null>(null);
   const [board, setBoard] = useState<Board>({ pcs: [], kinds: [], gaps: [], alerts: [], downtime: [], strangers: [] });
@@ -743,7 +750,7 @@ export function CollectView({ onClose, initial = "dashboard" }: { onClose: () =>
   ];
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <div {...dialog} aria-label="거점 관제" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div className="flex h-full max-h-full w-full max-w-5xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-line px-4 py-3">
           <h1 className="text-base font-semibold">📡 거점 관제</h1>

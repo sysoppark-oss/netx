@@ -1,6 +1,7 @@
 // 보고서 만들기: 구역, 기간, 가리기를 고르고 보고서 파일 하나를 만든다.
 // 보고서는 사용자가 고른 자리에 파일로만 저장한다(보내는 단추가 없다). 내보내는 파일에는 말씀 표시를 넣지 않는다.
-import { useState } from "react";
+import { useDialog } from "../lib/dialog";
+import { useRef, useState } from "react";
 import { REPORT_ZONES, periodOf, reportCancel, reportMake, reportOpen, type PeriodKind, type ReportSaved } from "../lib/report";
 
 const PERIODS: { id: PeriodKind; label: string }[] = [
@@ -40,6 +41,11 @@ export function ReportSavedBar({ saved, onError }: { saved: ReportSaved; onError
 }
 
 export function ReportView({ onClose }: { onClose: () => void }) {
+  // 보고서를 만드는 동안에는 Esc로 닫히지 않는다.
+  const busyRef = useRef(false);
+  const dialog = useDialog(() => {
+    if (!busyRef.current) onClose();
+  });
   const [picked, setPicked] = useState<Record<string, boolean>>(() => Object.fromEntries(REPORT_ZONES.map((z) => [z.id, !z.later && !z.off])));
   const [kind, setKind] = useState<PeriodKind>("7d");
   const [from, setFrom] = useState(() => dayText(Date.now() - 7 * 86_400_000));
@@ -48,6 +54,7 @@ export function ReportView({ onClose }: { onClose: () => void }) {
   const [data, setData] = useState(false);
   const [askPlain, setAskPlain] = useState(false);
   const [busy, setBusy] = useState(false);
+  busyRef.current = busy;
   const [saved, setSaved] = useState<ReportSaved | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +82,7 @@ export function ReportView({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onClose}>
+    <div {...dialog} aria-label="보고서 만들기" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onClose}>
       <div className="flex max-h-full w-full max-w-2xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center gap-3 border-b border-line px-4 py-3">
           <h1 className="text-base font-semibold">📄 보고서 만들기</h1>

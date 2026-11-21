@@ -77,7 +77,9 @@ export function NetBar({ onCollect }: { onCollect: (tab: CollectTab) => void }) 
   );
 
   return (
-    <div className="flex items-center gap-x-5 gap-y-1 overflow-x-auto border-b border-line bg-void px-5 py-1.5 text-xs whitespace-nowrap">
+    <div className="flex items-center border-b border-line bg-void text-xs whitespace-nowrap">
+      {/* 왼쪽 줄만 가로로 스크롤된다. 연결 표시는 줄 밖에 있어 글자를 덮지 않는다. */}
+      <div className="flex min-w-0 flex-1 items-center gap-x-5 overflow-x-auto px-5 py-1.5">
       <span className="shrink-0 font-semibold text-accent">내 네트워크</span>
       <Item label="어댑터" value={info.iface ? `${info.iface}${info.link ? ` (${info.link})` : ""}` : null} />
       <Item label="내 IP" value={info.ip ? `${info.ip}${info.prefix !== null ? `/${info.prefix}` : ""}` : null} />
@@ -100,7 +102,10 @@ export function NetBar({ onCollect }: { onCollect: (tab: CollectTab) => void }) 
           </span>
         </span>
       )}
-      <LinkPill onOpen={onCollect} />
+      </div>
+      <span className="shrink-0 pr-5">
+        <LinkPill onOpen={onCollect} />
+      </span>
     </div>
   );
 }

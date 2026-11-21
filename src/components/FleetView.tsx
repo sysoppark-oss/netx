@@ -1,5 +1,6 @@
 // 거점 관리 대시보드(관제 PC)와 예약 수집 동의 칸(거점 PC).
 // 프로그램 이름, 만든 곳, 운영체제 이름은 거점이 보낸 자료다. 글자로만 그린다.
+import { BTN, FIELD, hidden } from "../lib/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   EVERY_CHOICES,
@@ -19,9 +20,11 @@ import {
   type PlanRow,
 } from "../lib/collect";
 
-const BTN = "rounded border border-line px-2.5 py-1 text-xs hover:bg-raised disabled:opacity-50";
-const FIELD = "rounded border border-line bg-void px-2 py-1 text-xs";
-const DISK_LOW = 0.1;
+/** 디스크 부족: 1GB 넘는 볼륨에서 남은 비율이 10% 아래이고 남은 양이 20GB 아래일 때. 작은 복구·붙임 볼륨은 보지 않는다. */
+const GB = 1024 * 1024 * 1024;
+function diskLow(d: { total: number; free: number }): boolean {
+  return d.total >= GB && d.free / d.total < 0.1 && d.free < 20 * GB;
+}
 
 function uptimeText(secs: number): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}분`;
@@ -60,7 +63,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
   const tone = pc.state !== "active" ? "text-danger" : pc.quiet ? "text-caution" : "text-safe";
   const sys = s.system;
   const moved = s.added.length + s.removed.length + s.changed.length;
-  const low = sys?.disks.some((d) => d.total > 0 && d.free / d.total < DISK_LOW);
+  const low = sys?.disks.some(diskLow);
   const speed = s.speeds[0]?.[1];
   const downs = s.speeds.map((x) => x[1].down_mbps);
   // 지난 측정이 넷 넘게 쌓였을 때만 견준다: 이번 내려받기 속도가 그동안 중앙값의 절반 아래면 느려진 것으로 본다.
@@ -84,7 +87,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
           <Trend values={[...downs].reverse()} />
         </div>
       )}
-      {!sys && !speed && s.software_at === 0 && <p className="text-dim">아직 수집된 것이 없습니다. 이 거점의 NetX에서 "보내기" 탭의 예약 수집을 켜야 합니다.</p>}
+      {!sys && !speed && s.software_at === 0 && <p className="text-dim">아직 수집된 것이 없습니다. {pc.own ? '이 PC의 정보도 보려면 "보내기" 탭의 예약 수집을 켜세요.' : '이 거점의 NetX에서 "보내기" 탭의 예약 수집을 켜야 합니다.'}</p>}
       {sys && (
         <div className="space-y-1">
           <p>
@@ -106,7 +109,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
             return (
               <div key={d.name} className="flex items-center gap-2">
                 <span className="w-14 shrink-0 truncate text-dim">{d.name}</span>
-                <Bar used={used} tone={1 - used < DISK_LOW ? "text-danger" : "text-safe"} />
+                <Bar used={used} tone={diskLow(d) ? "text-danger" : "text-safe"} />
                 <span className="w-28 shrink-0 text-right">남음 {gbText(d.free)}</span>
               </div>
             );
@@ -133,6 +136,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
 function PlanTable({ onError }: { onError: (m: string) => void }) {
   const [rows, setRows] = useState<PlanRow[]>([]);
   const load = useCallback(() => {
+    if (hidden()) return;
     collectPlan()
       .then(setRows)
       .catch((e) => onError(String(e)));
@@ -155,16 +159,17 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
     <section>
       <h2 className="mb-1 text-xs font-semibold text-dim">수집 예약</h2>
       <p className="mb-1.5 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. [바로 수집]은 주기를 기다리지 않고 한 번 수집합니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
-      <table className="w-full border-collapse rounded border border-line text-xs">
+      <div className="overflow-x-auto rounded border border-line">
+      <table className="w-full min-w-[44rem] border-collapse text-xs">
         <thead className="text-left text-dim">
           <tr>
-            <th className="px-2 py-1 font-normal">거점</th>
+            <th scope="col" className="px-2 py-1 font-normal">거점</th>
             {rows[0].cells.map((c) => (
               <th key={c.what} className="px-2 py-1 font-normal">
                 {c.title}
               </th>
             ))}
-            <th className="px-2 py-1 font-normal">전달</th>
+            <th scope="col" className="px-2 py-1 font-normal">전달</th>
           </tr>
         </thead>
         <tbody>
@@ -173,7 +178,7 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
               <td className="px-2 py-1 font-semibold">{r.pc.name || r.pc.id.slice(0, 8)}</td>
               {r.cells.map((c) => (
                 <td key={c.what} className="px-2 py-1">
-                  <select value={c.every ?? ""} onChange={(e) => set(r.pc.id, c.what, e.target.value)} className={FIELD}>
+                  <select aria-label={`${r.pc.name || "거점"} — ${c.title} 주기`} value={c.every ?? ""} onChange={(e) => set(r.pc.id, c.what, e.target.value)} className={FIELD}>
                     <option value="">요청 안 함</option>
                     {EVERY_CHOICES.filter((o) => o.minutes >= c.floor).map((o) => (
                       <option key={o.minutes} value={o.minutes}>
@@ -202,6 +207,7 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   );
 }
@@ -213,6 +219,7 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
   const [find, setFind] = useState("");
 
   const load = useCallback(() => {
+    if (hidden()) return;
     collectFleet()
       .then(setSites)
       .catch((e) => onError(String(e)));
@@ -285,7 +292,7 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
       <section>
         <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
           <h2 className="font-semibold text-dim">프로그램 찾기</h2>
-          <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="프로그램 이름이나 만든 곳" className={`${FIELD} w-64`} />
+          <input aria-label="프로그램 이름이나 만든 곳으로 찾기" value={find} onChange={(e) => setFind(e.target.value)} placeholder="프로그램 이름이나 만든 곳" className={`${FIELD} w-64`} />
           <span className="text-dim">
             {pick ? `${sites.find((s) => s.pc.id === pick)?.pc.name ?? ""}만` : "모든 거점"} · {hits.length}개
           </span>
@@ -298,15 +305,15 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
         {hits.length === 0 ? (
           <p className="text-xs text-dim">{sites.some((s) => s.software_at > 0) ? "맞는 프로그램이 없습니다." : "아직 프로그램 목록을 보낸 거점이 없습니다."}</p>
         ) : (
-          <div className="max-h-80 overflow-y-auto rounded border border-line">
+          <div className="max-h-80 overflow-auto rounded border border-line">
             <table className="w-full border-collapse text-xs">
               <thead className="sticky top-0 bg-panel text-left text-dim">
                 <tr>
-                  <th className="px-2 py-1 font-normal">프로그램</th>
-                  <th className="px-2 py-1 font-normal">판</th>
-                  <th className="px-2 py-1 font-normal">만든 곳</th>
-                  <th className="px-2 py-1 font-normal">설치한 날</th>
-                  <th className="px-2 py-1 font-normal">거점</th>
+                  <th scope="col" className="px-2 py-1 font-normal">프로그램</th>
+                  <th scope="col" className="px-2 py-1 font-normal">판</th>
+                  <th scope="col" className="px-2 py-1 font-normal">만든 곳</th>
+                  <th scope="col" className="px-2 py-1 font-normal">설치한 날</th>
+                  <th scope="col" className="px-2 py-1 font-normal">거점</th>
                 </tr>
               </thead>
               <tbody>
@@ -338,7 +345,7 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
 }
 
 /** 거점 PC: 예약 수집을 항목마다 켜고 끈다. 켜기 전에 지금 나갈 내용을 보여 준다. */
-export function InventoryConsent({ ready, onError }: { ready: boolean; onError: (m: string) => void }) {
+export function InventoryConsent({ ready, onError, onRan }: { ready: boolean; onError: (m: string) => void; onRan?: () => void }) {
   const [items, setItems] = useState<InvItem[]>([]);
   const [preview, setPreview] = useState<{ what: string; data: InvPreview } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -361,7 +368,10 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
     setBusy(true);
     setRunning(it.what);
     collectInventoryRun(it.what)
-      .then(setItems)
+      .then((now) => {
+        setItems(now);
+        onRan?.();
+      })
       .catch((e) => onError(String(e)))
       .finally(() => {
         setBusy(false);
@@ -390,7 +400,7 @@ export function InventoryConsent({ ready, onError }: { ready: boolean; onError: 
                 <input type="checkbox" checked={it.on} disabled={busy} onChange={(e) => set(it, e.target.checked, it.every)} />
                 <span className="font-semibold">{it.title}</span>
               </label>
-              <select value={it.every} disabled={busy} onChange={(e) => set(it, it.on, Number(e.target.value))} className={FIELD}>
+              <select aria-label={`${it.title} 주기`} value={it.every} disabled={busy} onChange={(e) => set(it, it.on, Number(e.target.value))} className={FIELD}>
                 {EVERY_CHOICES.filter((c) => c.minutes >= it.floor).map((c) => (
                   <option key={c.minutes} value={c.minutes}>
                     {c.label}
