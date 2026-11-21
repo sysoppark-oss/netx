@@ -2,6 +2,7 @@
 // 프로그램 이름, 만든 곳, 운영체제 이름은 거점이 보낸 자료다. 글자로만 그린다.
 import { SiteDetail } from "./SiteDetail";
 import { SiteMap } from "./SiteMap";
+import { Zone } from "./Zone";
 import { BTN, FIELD, hidden } from "../lib/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -65,17 +66,80 @@ function median(values: number[]): number {
   return s.length ? s[Math.floor(s.length / 2)] : 0;
 }
 
+/** 거점 하나에서 눈여겨볼 것 */
+function signs(s: FleetSite) {
+  const speed = s.speeds[0]?.[1];
+  const downs = s.speeds.map((x) => x[1].down_mbps);
+  const usual = median(downs.slice(1));
+  // 지난 측정이 넷 넘게 쌓였을 때만 견준다: 이번 내려받기 속도가 그동안 중앙값의 절반 아래면 느려진 것으로 본다.
+  const slow = !!speed && downs.length >= 5 && speed.down_mbps < usual / 2;
+  const lowDisks = s.system?.disks.filter(diskLow) ?? [];
+  const moved = s.added.length + s.removed.length + s.changed.length;
+  return { speed, downs, usual, slow, lowDisks, low: lowDisks.length > 0, moved };
+}
+
+type Alert = { id: string; site: string; tone: string; tag: string; text: string; lines?: string[] };
+
+/** 알림 구역: 받기 멈춤, 소식 없음, 디스크 부족, 속도 느려짐, 프로그램 바뀜. 색과 함께 글자로 적는다. */
+function Alerts({ sites, onPick }: { sites: FleetSite[]; onPick: (id: string) => void }) {
+  const rows: Alert[] = [];
+  for (const s of sites) {
+    const id = s.pc.id;
+    const site = s.pc.name || id.slice(0, 8);
+    const g = signs(s);
+    if (s.pc.state === "stopped") rows.push({ id, site, tone: "text-danger", tag: "받기 멈춤", text: "이 거점에서 받기를 멈춰 두었습니다." });
+    else if (s.pc.quiet && !s.pc.own) rows.push({ id, site, tone: "text-caution", tag: "소식 없음", text: "한동안 접속이 없습니다." });
+    if (g.low) rows.push({ id, site, tone: "text-danger", tag: "디스크 부족", text: g.lowDisks.map((d) => `${d.name} 남음 ${gbText(d.free)}`).join(", ") });
+    if (g.slow && g.speed) rows.push({ id, site, tone: "text-caution", tag: "속도 느려짐", text: `내려받기 ${g.speed.down_mbps} Mbps (평소 ${g.usual})` });
+    if (g.moved > 0) {
+      const lines = [...s.added.map((p) => `+ 새로 깔림: ${p.name} ${p.version}`), ...s.removed.map((p) => `− 없어짐: ${p.name} ${p.version}`), ...s.changed.map(([name, from, to]) => `↻ 판 바뀜: ${name} ${from} → ${to}`)];
+      rows.push({ id, site, tone: "text-accent", tag: "프로그램 바뀜", text: `${timeText(s.prev_at)} → ${timeText(s.software_at)} · +${s.added.length} −${s.removed.length} ↻${s.changed.length}`, lines });
+    }
+  }
+  const order = ["text-danger", "text-caution", "text-accent"];
+  rows.sort((a, b) => order.indexOf(a.tone) - order.indexOf(b.tone));
+  return (
+    <Zone code="02" title="알림" right={<span className={`font-mono text-xs font-semibold ${rows.length ? "text-caution" : "text-safe"}`}>{rows.length}건</span>} flush>
+      {rows.length === 0 ? (
+        <div className="p-3 text-xs">
+          <p className="font-semibold text-safe">✓ 지금 알릴 것이 없습니다.</p>
+          <p className="mt-1 text-dim">받기 멈춤, 소식 없음, 디스크 부족, 속도 느려짐, 프로그램 바뀜이 여기에 뜹니다.</p>
+        </div>
+      ) : (
+        <ul className="max-h-[26rem] divide-y divide-accent/15 overflow-auto text-xs">
+          {rows.map((r, i) => (
+            <li key={i}>
+              <button onClick={() => onPick(r.id)} className="block w-full px-3 py-2 text-left hover:bg-raised" title="누르면 거점 상세가 열립니다">
+                <span className="flex items-center gap-2">
+                  <span className={`shrink-0 rounded-sm border border-current px-1.5 py-px text-[11px] font-semibold ${r.tone}`}>{r.tag}</span>
+                  <span className="truncate font-mono font-semibold">{r.site}</span>
+                </span>
+                <span className="mt-1 block text-dim">{r.text}</span>
+                {r.lines && (
+                  <span className="mt-1 block space-y-0.5 text-[11px]">
+                    {r.lines.slice(0, 5).map((l, k) => (
+                      <span key={k} className="block truncate">
+                        {l}
+                      </span>
+                    ))}
+                    {r.lines.length > 5 && <span className="block text-dim">외 {r.lines.length - 5}건</span>}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Zone>
+  );
+}
+
 function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; picked: boolean }) {
   const pc = s.pc;
   const state = pc.state === "stopped" ? "받기 멈춤" : pc.own ? "이 PC" : pc.quiet ? "미확인" : "연결됨";
   const tone = pc.state !== "active" ? "text-danger" : pc.quiet ? "text-caution" : "text-safe";
   const sys = s.system;
-  const moved = s.added.length + s.removed.length + s.changed.length;
-  const low = sys?.disks.some(diskLow);
-  const speed = s.speeds[0]?.[1];
-  const downs = s.speeds.map((x) => x[1].down_mbps);
-  // 지난 측정이 넷 넘게 쌓였을 때만 견준다: 이번 내려받기 속도가 그동안 중앙값의 절반 아래면 느려진 것으로 본다.
-  const slow = speed && downs.length >= 5 && speed.down_mbps < median(downs.slice(1)) / 2;
+  const { moved, low, speed, downs, slow } = signs(s);
   return (
     <button onClick={onPick} className={`hud p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
       <div className="mb-2 flex items-center gap-2 border-b border-accent/20 pb-1.5">
@@ -182,9 +246,8 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
       .then(load)
       .catch((e) => onError(String(e)));
   return (
-    <section>
-      <h2 className="mb-1 text-xs font-semibold text-dim">수집 예약</h2>
-      <p className="mb-1.5 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. [바로 수집]은 주기를 기다리지 않고 한 번 수집합니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
+    <Zone code="04" title="수집 예약" note="거점마다 항목과 주기">
+      <p className="mb-2 text-xs text-dim">거점마다 수집할 항목과 주기를 고릅니다. [바로 수집]은 주기를 기다리지 않고 한 번 수집합니다. 거점이 다음에 접속할 때 받아 가며, 그 거점 PC에서 사람이 승인한 항목만 수집됩니다. 여기서 거점에 명령을 보내지는 않습니다.</p>
       <div className="overflow-x-auto rounded border border-line">
       <table className="w-full min-w-[44rem] border-collapse text-xs">
         <thead className="text-left text-dim">
@@ -234,7 +297,7 @@ function PlanTable({ onError }: { onError: (m: string) => void }) {
         </tbody>
       </table>
       </div>
-    </section>
+    </Zone>
   );
 }
 
@@ -273,65 +336,38 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
 
   if (!sites) return <p className="text-sm text-dim">읽는 중…</p>;
   if (sites.length === 0) return <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">아직 짝 맺은 거점이 없습니다. "이 PC를 관제 PC로" 탭에서 켜고 [새 PC 짝 맺기]를 누르세요.</p>;
-  const changes = sites.filter((s) => s.added.length + s.removed.length + s.changed.length > 0);
   const shown = hits.slice(0, 300);
 
   return (
-    <div className="space-y-4">
-      <SiteMap onPick={setDetail} onError={onError} />
+    <div className="space-y-3">
+      <SiteMap onPick={setDetail} onError={onError} aside={<Alerts sites={sites} onPick={setDetail} />} />
       {detail && <SiteDetail id={detail} onClose={() => setDetail(null)} />}
 
-      <section className="grid gap-3 md:grid-cols-2">
-        {sites.map((s) => (
-          <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />
-        ))}
-      </section>
+      <Zone code="03" title="거점 상태" note="시스템 · 속도 · 카드를 누르면 프로그램 현황을 그 거점만으로 좁힙니다" bare>
+        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+          {sites.map((s) => (
+            <SiteCard key={s.pc.id} s={s} picked={pick === s.pc.id} onPick={() => setPick(pick === s.pc.id ? null : s.pc.id)} />
+          ))}
+        </div>
+      </Zone>
 
       <PlanTable onError={onError} />
 
-      {changes.length > 0 && (
-        <section>
-          <h2 className="mb-1 text-xs font-semibold text-dim">바뀐 것 (지난 수집과 견줌)</h2>
-          <ul className="space-y-1 rounded border border-line p-2 text-xs">
-            {changes.map((s) => (
-              <li key={s.pc.id}>
-                <span className="font-semibold">{s.pc.name}</span> <span className="text-dim">{timeText(s.prev_at)} → {timeText(s.software_at)}</span>
-                <ul className="ml-3 mt-0.5 space-y-0.5">
-                  {s.added.map((p) => (
-                    <li key={`a${p.name}`} className="text-safe">
-                      + 새로 깔림: {p.name} {p.version}
-                    </li>
-                  ))}
-                  {s.removed.map((p) => (
-                    <li key={`r${p.name}`} className="text-caution">
-                      − 없어짐: {p.name} {p.version}
-                    </li>
-                  ))}
-                  {s.changed.map(([name, from, to]) => (
-                    <li key={`c${name}`}>
-                      ↻ 판 바뀜: {name} {from} → {to}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section>
-        <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs">
-          <h2 className="font-semibold text-dim">프로그램 찾기</h2>
-          <input aria-label="프로그램 이름이나 만든 곳으로 찾기" value={find} onChange={(e) => setFind(e.target.value)} placeholder="프로그램 이름이나 만든 곳" className={`${FIELD} w-64`} />
-          <span className="text-dim">
-            {pick ? `${sites.find((s) => s.pc.id === pick)?.pc.name ?? ""}만` : "모든 거점"} · {hits.length}개
+      <Zone
+        code="05"
+        title="프로그램 현황"
+        note={`${pick ? `${sites.find((s) => s.pc.id === pick)?.pc.name ?? ""}만` : "모든 거점"} · ${hits.length}개`}
+        right={
+          <span className="flex flex-wrap items-center gap-2 text-xs">
+            {pick && (
+              <button onClick={() => setPick(null)} className={BTN}>
+                모든 거점 보기
+              </button>
+            )}
+            <input aria-label="프로그램 이름이나 만든 곳으로 찾기" value={find} onChange={(e) => setFind(e.target.value)} placeholder="프로그램 이름이나 만든 곳" className={`${FIELD} w-56`} />
           </span>
-          {pick && (
-            <button onClick={() => setPick(null)} className={BTN}>
-              모든 거점 보기
-            </button>
-          )}
-        </div>
+        }
+      >
         {hits.length === 0 ? (
           <p className="text-xs text-dim">{sites.some((s) => s.software_at > 0) ? "맞는 프로그램이 없습니다." : "아직 프로그램 목록을 보낸 거점이 없습니다."}</p>
         ) : (
@@ -369,7 +405,7 @@ export function FleetDashboard({ onError }: { onError: (m: string) => void }) {
             {hits.length > shown.length && <p className="px-2 py-1 text-[11px] text-dim">처음 300개만 보입니다. 이름을 적어 좁혀 보세요.</p>}
           </div>
         )}
-      </section>
+      </Zone>
     </div>
   );
 }
