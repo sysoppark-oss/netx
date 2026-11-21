@@ -1,5 +1,6 @@
 // 캡처 분석 화면: 저장해 둔 캡처 파일을 열어 요약, 문제 찾기, 패킷 목록, 패킷 상세를 본다.
 // 진단 결과 화면이므로 말씀 표시를 넣지 않는다. 읽기 전용이다.
+import { useDialog } from "../lib/dialog";
 import { useEffect, useRef, useState } from "react";
 import {
   captureFolder,
@@ -49,6 +50,7 @@ function whenText(secs: number): string {
 }
 
 export function CaptureView({ initial, onClose }: { initial: string; onClose: () => void }) {
+  const dialog = useDialog(onClose);
   const [files, setFiles] = useState<CaptureFile[] | null>(null);
   const [name, setName] = useState(initial);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -117,7 +119,7 @@ export function CaptureView({ initial, onClose }: { initial: string; onClose: ()
   const maxPackets = Math.max(...(analysis?.protocols.map((p) => p.packets) ?? [1]), 1);
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-void">
+    <div {...dialog} aria-label="캡처 분석" className="fixed inset-0 z-40 flex flex-col bg-void">
       <header className="flex flex-wrap items-center gap-3 border-b border-line bg-panel px-4 py-2">
         <h1 className="text-base font-semibold">📂 캡처 분석</h1>
         <select
@@ -289,13 +291,13 @@ export function CaptureView({ initial, onClose }: { initial: string; onClose: ()
               <table className="w-full border-collapse font-mono text-xs">
                 <thead className="sticky top-0 bg-panel text-left text-dim">
                   <tr>
-                    <th className="px-2 py-1.5 text-right font-normal">번호</th>
-                    <th className="px-2 py-1.5 text-right font-normal">시각(초)</th>
-                    <th className="px-2 py-1.5 font-normal">보낸 곳</th>
-                    <th className="px-2 py-1.5 font-normal">받는 곳</th>
-                    <th className="px-2 py-1.5 font-normal">프로토콜</th>
-                    <th className="px-2 py-1.5 text-right font-normal">길이</th>
-                    <th className="px-2 py-1.5 font-normal">설명</th>
+                    <th scope="col" className="px-2 py-1.5 text-right font-normal">번호</th>
+                    <th scope="col" className="px-2 py-1.5 text-right font-normal">시각(초)</th>
+                    <th scope="col" className="px-2 py-1.5 font-normal">보낸 곳</th>
+                    <th scope="col" className="px-2 py-1.5 font-normal">받는 곳</th>
+                    <th scope="col" className="px-2 py-1.5 font-normal">프로토콜</th>
+                    <th scope="col" className="px-2 py-1.5 text-right font-normal">길이</th>
+                    <th scope="col" className="px-2 py-1.5 font-normal">설명</th>
                   </tr>
                 </thead>
                 <tbody>

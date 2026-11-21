@@ -1,3 +1,4 @@
+import { useDialog } from "../lib/dialog";
 import { useState } from "react";
 import { USER_LEVELS } from "../lib/types";
 import type { EnvironmentStatus, UserLevel } from "../lib/types";
@@ -48,6 +49,7 @@ interface Props {
 }
 
 export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, onRecheck, onInstall, onOpenSettings, onClose }: Props) {
+  const dialog = useDialog(onClose);
   const [step, setStep] = useState(0);
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -71,7 +73,7 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
 
   const button = "rounded-md border border-line px-3 py-1.5 text-sm hover:border-accent hover:text-accent disabled:opacity-50";
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
+    <div {...dialog} aria-label="NetX 초기 설정" className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6">
       <div className="flex max-h-full w-full max-w-2xl flex-col rounded-lg border border-line bg-panel">
         <div className="border-b border-line px-6 py-4">
           <h2 className="text-lg font-semibold">NetX 초기 설정</h2>

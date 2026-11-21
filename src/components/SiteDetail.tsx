@@ -1,11 +1,12 @@
 // 거점 상세: 한 거점의 접속 내역, 전송 내역, 7일 시간표, 건강(빠진 구간과 경고).
 // 여기 나오는 글자 가운데 제목과 종류는 거점이 보낸 자료다. 글자로만 그린다.
+import { TONE, hidden } from "../lib/ui";
+import { useDialog } from "../lib/dialog";
 import { useCallback, useEffect, useState } from "react";
 import { CONN_LABEL, VERDICT_LABEL, collectSite, sizeText, timeText, type Site, type Verdict } from "../lib/collect";
 
 type Tab = "summary" | "conns" | "transfers" | "health";
 
-const TONE: Record<Verdict, string> = { ok: "text-safe", caution: "text-caution", danger: "text-danger", unknown: "text-dim" };
 const GOOD = new Set(["ok", "closed", "pair_ok"]);
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -29,31 +30,36 @@ function Timeline({ hours }: { hours: Site["timeline"] }) {
           <span className="w-12 shrink-0 text-[10px] text-dim">{new Date(day[0].at).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" })}</span>
           <div className="flex flex-1 gap-px">
             {day.map((h) => {
-              const tone = h.danger > 0 ? "text-danger" : h.items > 0 ? "text-safe" : h.failed > 0 ? "text-caution" : "text-line";
-              const opacity = h.items > 0 ? 0.35 + 0.65 * (h.items / peak) : h.failed > 0 || h.conns > 0 ? 0.6 : 1;
-              return (
-                <span
-                  key={h.at}
-                  className={`h-4 flex-1 rounded-sm bg-current ${tone}`}
-                  style={{ opacity }}
-                  title={`${timeText(h.at)} — 받은 결과 ${h.items}건${h.danger ? `(위험 ${h.danger})` : ""}, 접속 ${h.conns}번${h.failed ? `(실패 ${h.failed})` : ""}`}
-                />
+              // 빈 칸은 테두리만(바탕과 3:1 넘게), 채운 칸은 가장 옅어도 3:1을 넘긴다. 위험과 실패는 색 말고 표식으로도 알린다.
+              const empty = h.items === 0 && h.failed === 0 && h.conns === 0;
+              const tone = h.danger > 0 ? "text-danger" : h.items > 0 ? "text-safe" : h.failed > 0 ? "text-caution" : "text-dim";
+              const opacity = h.danger > 0 ? 1 : h.items > 0 ? 0.6 + 0.4 * (h.items / peak) : 0.6;
+              const mark = h.danger > 0 ? "!" : h.failed > 0 ? "×" : "";
+              const label = `${timeText(h.at)} — 받은 결과 ${h.items}건${h.danger ? `(위험 ${h.danger})` : ""}, 접속 ${h.conns}번${h.failed ? `(실패 ${h.failed})` : ""}`;
+              return empty ? (
+                <span key={h.at} className="h-4 flex-1 rounded-sm border border-dim/60" title={label} />
+              ) : (
+                <span key={h.at} className={`flex h-4 flex-1 items-center justify-center rounded-sm bg-current ${tone}`} style={{ opacity }} title={label}>
+                  {mark && <span className="text-[10px] leading-none font-bold text-void">{mark}</span>}
+                </span>
               );
             })}
           </div>
         </div>
       ))}
-      <p className="pt-1 text-[11px] text-dim">한 줄이 24시간, 한 칸이 한 시간이고 맨 아래 줄의 오른쪽 끝이 지금입니다. 초록은 결과를 받은 시간, 빨강은 위험 판정이 있던 시간, 노랑은 접속이 실패한 시간, 빈 칸은 소식이 없던 시간입니다.</p>
+      <p className="pt-1 text-[11px] text-dim">한 줄이 24시간, 한 칸이 한 시간이고 맨 아래 줄의 오른쪽 끝이 지금입니다. 초록은 결과를 받은 시간, 빨강(!)은 위험 판정이 있던 시간, 노랑(×)은 접속이 실패한 시간, 테두리만 있는 칸은 소식이 없던 시간입니다.</p>
     </div>
   );
 }
 
 export function SiteDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const dialog = useDialog(onClose);
   const [site, setSite] = useState<Site | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("summary");
 
   const load = useCallback(() => {
+    if (hidden()) return;
     collectSite(id)
       .then((s) => {
         setSite(s);
@@ -80,7 +86,7 @@ export function SiteDetail({ id, onClose }: { id: string; onClose: () => void })
   const stateTone = !pc ? "" : pc.state !== "active" ? "text-danger" : pc.quiet ? "text-caution" : "text-safe";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+    <div {...dialog} aria-label="거점 상세" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div className="flex h-full max-h-full w-full max-w-4xl flex-col rounded-lg border border-line bg-panel" onClick={(e) => e.stopPropagation()}>
         <header className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
           <h1 className="text-base font-semibold">🏠 {pc?.name || "거점"}</h1>
@@ -129,13 +135,13 @@ export function SiteDetail({ id, onClose }: { id: string; onClose: () => void })
                 <table className="w-full border-collapse">
                   <thead className="text-left text-dim">
                     <tr>
-                      <th className="py-1 pr-3 font-normal">때</th>
-                      <th className="py-1 pr-3 font-normal">끝난 까닭</th>
-                      <th className="py-1 pr-3 font-normal">걸린 시간</th>
-                      <th className="py-1 pr-3 font-normal">받음</th>
-                      <th className="py-1 pr-3 font-normal">크기</th>
-                      <th className="py-1 pr-3 font-normal">순번</th>
-                      <th className="py-1 font-normal">주소</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">때</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">끝난 까닭</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">걸린 시간</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">받음</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">크기</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">순번</th>
+                      <th scope="col" className="py-1 font-normal">주소</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -166,12 +172,12 @@ export function SiteDetail({ id, onClose }: { id: string; onClose: () => void })
                 <table className="w-full border-collapse">
                   <thead className="text-left text-dim">
                     <tr>
-                      <th className="py-1 pr-3 font-normal">순번</th>
-                      <th className="py-1 pr-3 font-normal">받은 때</th>
-                      <th className="py-1 pr-3 font-normal">진단</th>
-                      <th className="py-1 pr-3 font-normal">판정</th>
-                      <th className="py-1 pr-3 font-normal">크기</th>
-                      <th className="py-1 font-normal">늦게 온 정도</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">순번</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">받은 때</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">진단</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">판정</th>
+                      <th scope="col" className="py-1 pr-3 font-normal">크기</th>
+                      <th scope="col" className="py-1 font-normal">늦게 온 정도</th>
                     </tr>
                   </thead>
                   <tbody>
