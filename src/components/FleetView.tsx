@@ -142,7 +142,7 @@ function SiteCard({ s, onPick, picked }: { s: FleetSite; onPick: () => void; pic
   const sys = s.system;
   const { moved, low, speed, downs, slow } = signs(s);
   return (
-    <button onClick={onPick} className={`hud p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
+    <button onClick={onPick} className={`hud flex flex-col justify-start p-3 text-left text-xs hover:brightness-125 ${picked ? "ring-1 ring-accent" : ""}`}>
       <div className="mb-2 flex items-center gap-2 border-b border-accent/20 pb-1.5">
         <span className={`h-2 w-2 shrink-0 rounded-full bg-current ${tone} ${pc.state === "active" && !pc.quiet ? "animate-pulse" : ""}`} aria-hidden />
         <span className="font-mono text-sm font-semibold tracking-wide">{pc.name || "이름 없음"}</span>
