@@ -1,6 +1,6 @@
 import { useDialog } from "../lib/dialog";
 import { useEffect, useState } from "react";
-import { bridgeStatus, getWord, openChurchMail, type BridgeStatus, setWordLang } from "../lib/backend";
+import { bridgeStatus, checkUpdate, getWord, openChurchMail, type BridgeStatus, setWordLang } from "../lib/backend";
 import type { AppInfo, Verse, WordView } from "../lib/types";
 
 /**
@@ -148,6 +148,14 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
   const view = useWord();
   const [church, setChurch] = useState(false);
   const [bridge, setBridge] = useState<BridgeStatus | null>(null);
+  // [업데이트 확인]: ""(아직 안 눌렀음), "busy", "off", "latest", "error:…", 그 밖에는 새 버전의 커밋
+  const [update, setUpdate] = useState("");
+  const lookForUpdate = () => {
+    setUpdate("busy");
+    checkUpdate()
+      .then(setUpdate)
+      .catch((e) => setUpdate(`error:${String(e)}`));
+  };
   useEffect(() => {
     bridgeStatus()
       .then(setBridge)
@@ -164,6 +172,23 @@ export function AboutDialog({ info, onClose }: { info: AppInfo | null; onClose: 
             {info?.channel ? ` · ${info.channel} 채널` : ""}
           </p>
         </div>
+
+        <p className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <button type="button" onClick={lookForUpdate} disabled={update === "busy"} className="rounded border border-line px-2.5 py-1 hover:border-accent disabled:opacity-50">
+            {update === "busy" ? "확인 중…" : "업데이트 확인"}
+          </button>
+          <span role="status" className={update.startsWith("error:") ? "text-danger" : update === "latest" ? "text-safe" : "text-dim"}>
+            {update === "" || update === "busy"
+              ? "NetX는 켤 때와 3시간마다 스스로 확인합니다."
+              : update === "off"
+                ? "이 빌드는 자동 업데이트를 쓰지 않습니다."
+                : update === "latest"
+                  ? "✓ 지금 판이 최신입니다."
+                  : update.startsWith("error:")
+                    ? `확인하지 못했습니다: ${update.slice(6)}`
+                    : `새 버전이 있습니다(${update}). 이 창을 닫고 맨 위 줄의 [지금 업데이트]를 누르세요.`}
+          </span>
+        </p>
 
         {bridge && bridge.state !== "none" && (
           <p className="mt-2 text-xs text-dim">

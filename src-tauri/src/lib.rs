@@ -135,6 +135,7 @@ pub fn run() {
             commands::kill_process,
             commands::save_topology,
             commands::apply_update,
+            commands::check_update,
             commands::get_word,
             commands::set_word_lang,
             commands::open_church_mail,

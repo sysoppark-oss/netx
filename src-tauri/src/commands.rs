@@ -513,6 +513,24 @@ pub fn watch_updates(app: AppHandle) {
     });
 }
 
+/// "정보" 화면의 [업데이트 확인]: 3시간 주기를 기다리지 않고 지금 새 버전이 있는지 본다.
+/// 있으면 맨 위 알림 줄에 [지금 업데이트]를 띄우기만 한다(여기서 설치하지 않는다).
+/// 돌려주는 값: "off"(이 빌드는 업데이트를 쓰지 않음), "latest"(최신), 그 밖에는 새 버전의 커밋 앞 7자.
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<String, String> {
+    if !crate::updater::enabled() {
+        return Ok("off".into());
+    }
+    match crate::updater::check().await? {
+        Some(m) => {
+            let text = if crate::updater::needs_admin() { UPDATE_OFFER_ADMIN } else { "새 버전이 있습니다." };
+            update_status(&app, "available", &m.commit, text);
+            Ok(m.commit.chars().take(7).collect())
+        }
+        None => Ok("latest".into()),
+    }
+}
+
 /// 화면의 [지금 업데이트] 버튼
 #[tauri::command]
 pub async fn apply_update(app: AppHandle) -> Result<(), String> {

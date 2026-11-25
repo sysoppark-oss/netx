@@ -196,6 +196,12 @@ export function onUpdateStatus(handler: (s: UpdateStatus) => void): () => void {
   return () => void sub.then((off) => off());
 }
 
+/** 지금 새 버전이 있는지 본다. "off"(업데이트를 쓰지 않는 빌드), "latest"(최신), 그 밖에는 새 버전의 커밋 앞 7자. 있으면 맨 위 알림 줄이 뜬다. */
+export async function checkUpdate(): Promise<string> {
+  if (!isTauri()) return "off";
+  return invoke<string>("check_update");
+}
+
 /** 새 버전을 지금 내려받아 설치한다. 설치가 시작되면 NetX가 닫혔다가 다시 열린다. */
 export async function applyUpdate(): Promise<void> {
   if (!isTauri()) return;

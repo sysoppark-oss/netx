@@ -41,6 +41,7 @@ fn main() {
                 "kill_process",
                 "save_topology",
                 "apply_update",
+                "check_update",
                 "get_word",
                 "set_word_lang",
                 "open_church_mail",

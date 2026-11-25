@@ -32,6 +32,7 @@
     "allow-kill-process",
     "allow-save-topology",
     "allow-apply-update",
+    "allow-check-update",
     "allow-get-word",
     "allow-set-word-lang",
     "allow-open-church-mail",
