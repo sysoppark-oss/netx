@@ -8,19 +8,3 @@ where = "docs/DEV_PLAN_v0.1.md"
 [[declare]]
 what = "고침"
 where = "src/components/Board.tsx"
-
-[[declare]]
-what = "고침"
-where = "src/components/FleetView.tsx"
-
-[[declare]]
-what = "고침"
-where = "src/components/SiteMap.tsx"
-
-[[declare]]
-what = "고침"
-where = "src/components/Zone.tsx"
-
-[[declare]]
-what = "고침"
-where = "src/index.css"
