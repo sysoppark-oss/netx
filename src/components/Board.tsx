@@ -197,7 +197,7 @@ export function Board({ storageKey, items }: { storageKey: string; items: BoardI
                   tabIndex={-1}
                   aria-hidden
                   title="끌어서 크기 바꾸기"
-                  className={`absolute -right-1 -bottom-1 h-5 w-5 cursor-nwse-resize touch-none rounded-sm border-r-4 border-b-4 border-accent ${edit ? "bg-accent/20" : "opacity-35 hover:opacity-100"}`}
+                  className={`absolute -right-1.5 -bottom-1.5 h-8 w-8 cursor-nwse-resize touch-none rounded-sm border-r-4 border-b-4 border-accent ${edit ? "bg-accent/20" : "opacity-50 hover:opacity-100"}`}
                 />
               )}
             </div>
