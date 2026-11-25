@@ -52,6 +52,39 @@ interface Props {
   initialStep?: number;
 }
 
+type WslStep = { title: string; note?: string; state: "wait" | "now" | "done" | "fail" };
+
+const minutes = (secs: number) => (secs < 60 ? `${secs}초` : `${Math.floor(secs / 60)}분 ${secs % 60}초`);
+
+/** 전체 진단 설치의 네 단계와 지금 어디인지. 설치 창이 도는지·끝났는지는 NetX가 그 창을 지켜봐서 안다. */
+function wslSteps(wsl: WslSetup | null): WslStep[] {
+  const stage = wsl?.stage ?? "none";
+  const run = wsl?.run ?? "";
+  const took = wsl ? minutes(wsl.run_secs) : "";
+  const first: WslStep =
+    stage === "none" || stage === "unsupported"
+      ? { title: "Windows의 리눅스 기능 설치", note: "[설치 시작] → 승인 창에서 [예]. 검은 설치 창이 뜹니다(몇 분).", state: stage === "none" ? "now" : "wait" }
+      : stage === "restart" && run === "running"
+        ? { title: "Windows의 리눅스 기능 설치", note: `검은 설치 창이 도는 중입니다 · ${took}째. 창이 저절로 닫힐 때까지 기다리세요.`, state: "now" }
+        : stage === "restart" && run === "failed"
+          ? { title: "Windows의 리눅스 기능 설치", note: `설치 창이 오류로 끝났습니다(코드 ${wsl?.exit}). [설치 다시 띄우기]를 눌러 보세요. 이미 설치됐다면 다시 시작하면 됩니다.`, state: "fail" }
+          : { title: "Windows의 리눅스 기능 설치", note: run === "done" ? `설치 창이 끝났습니다(${took}).` : undefined, state: "done" };
+  const second: WslStep =
+    stage === "restart" && run !== "running"
+      ? { title: "PC 다시 시작", note: "[지금 다시 시작]을 누르세요. 다시 켜지면 NetX가 스스로 떠서 나머지를 이어 갑니다.", state: "now" }
+      : { title: "PC 다시 시작", note: stage === "none" || stage === "restart" ? "다시 켜지면 NetX가 스스로 뜹니다." : undefined, state: stage === "resume" || stage === "ready" ? "done" : "wait" };
+  const third: WslStep =
+    stage === "resume"
+      ? run === "failed"
+        ? { title: "리눅스(Ubuntu) 받기", note: `설치 창이 오류로 끝났습니다(코드 ${wsl?.exit}). [관리자 권한으로 다시]를 눌러 보세요. 그래도 안 되면 PC의 가상화 기능(BIOS의 VT-x/AMD-V)이 꺼져 있을 수 있습니다.`, state: "fail" }
+        : run === "running"
+          ? { title: "리눅스(Ubuntu) 받기", note: `저절로 시작했습니다. 검은 설치 창이 도는 중 · ${took}째. 누를 것이 없습니다.`, state: "now" }
+          : { title: "리눅스(Ubuntu) 받기", note: run === "done" ? "설치 창이 끝났습니다. 리눅스가 켜지는지 확인하는 중…" : "저절로 시작합니다…", state: "now" }
+      : { title: "리눅스(Ubuntu) 받기", note: stage === "ready" ? undefined : "다시 시작한 뒤 저절로 시작합니다. 리눅스 계정은 만들지 않습니다.", state: stage === "ready" ? "done" : "wait" };
+  const fourth: WslStep = { title: "진단 도구 설치", note: "리눅스가 준비되면 저절로 깝니다(nmap, tcpdump, iperf3 등).", state: stage === "ready" ? "now" : "wait" };
+  return [first, second, third, fourth];
+}
+
 export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, onRecheck, onInstall, onOpenSettings, onClose, initialStep = 0 }: Props) {
   const dialog = useDialog(onClose);
   const [step, setStep] = useState(initialStep);
@@ -61,8 +94,9 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const autoTools = useRef(false);
+  const autoResume = useRef(false);
 
-  // 진단 방식 단계에서는 설치가 어디까지 왔는지 5초마다 본다. 전체 진단이 되면 화면의 상태도 다시 읽는다.
+  // 진단 방식 단계에서는 설치가 어디까지 왔는지 3초마다 본다. 전체 진단이 되면 화면의 상태도 다시 읽는다.
   useEffect(() => {
     if (step !== 1) return;
     let alive = true;
@@ -75,7 +109,7 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
       });
     };
     void poll();
-    const t = window.setInterval(poll, 5000);
+    const t = window.setInterval(poll, 3000);
     return () => {
       alive = false;
       window.clearInterval(t);
@@ -95,11 +129,20 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsl?.active, env?.mode, missing.length, installing]);
 
-  async function startWsl() {
+  // 다시 시작한 뒤에는 누르지 않아도 이어서 설치한다(사용자가 시작한 설치일 때, 켜진 동안 한 번만).
+  // 보통 권한으로 띄운다: 승인 창이 없고, 쓰는 계정에 Ubuntu가 등록된다. 안 되면 화면의 단추로 관리자 권한으로 다시 한다.
+  useEffect(() => {
+    if (step !== 1 || !wsl?.active || wsl.stage !== "resume" || wsl.run !== "" || autoResume.current) return;
+    autoResume.current = true;
+    void startWsl(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, wsl?.active, wsl?.stage, wsl?.run]);
+
+  async function startWsl(admin: boolean) {
     setStarting(true);
     setWslError("");
     try {
-      setWsl(await wslSetupStart());
+      setWsl(await wslSetupStart(admin));
     } catch (e) {
       setWslError(String(e));
     } finally {
@@ -212,20 +255,27 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
                   <section className="rounded-md border border-line p-3">
                     <h3 className="font-semibold">전체 진단 쓰기 (WSL 설치)</h3>
                     <p className="mt-1 text-xs text-dim">Windows의 리눅스 기능(WSL2)과 Ubuntu, 진단 도구를 NetX가 차례로 설치합니다. 패킷 캡처, 대역폭 측정, 서비스 확인(nmap)까지 쓸 수 있게 됩니다.</p>
-                    <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-xs">
-                      <li className={wsl?.stage === "none" || !wsl ? "text-ink" : "text-dim"}>[설치 시작] → 승인 창에서 [예] → 검은 설치 창이 끝날 때까지 기다림(몇 분)</li>
-                      <li className={wsl?.stage === "restart" ? "text-ink" : "text-dim"}>PC 다시 시작 (NetX가 스스로 다시 뜹니다)</li>
-                      <li className={wsl?.stage === "resume" ? "text-ink" : "text-dim"}>Ubuntu와 진단 도구 설치 (자동, 리눅스 계정은 만들지 않습니다)</li>
+                    <ol className="mt-2 space-y-1 text-xs">
+                      {wslSteps(wsl).map((s, i) => (
+                        <li key={i} className={`flex gap-2 rounded px-2 py-1 ${s.state === "now" ? "bg-raised text-ink" : s.state === "done" ? "text-safe" : s.state === "fail" ? "text-danger" : "text-dim"}`}>
+                          <span className="w-12 shrink-0 font-semibold">{s.state === "done" ? "✓ 끝남" : s.state === "now" ? "▶ 지금" : s.state === "fail" ? "✕ 실패" : `${i + 1}단계`}</span>
+                          <span>
+                            {s.title}
+                            {s.note && <span className="block text-[11px] text-dim">{s.note}</span>}
+                          </span>
+                        </li>
+                      ))}
                     </ol>
-                    {wsl && wsl.stage !== "none" && <p className={`mt-2 text-xs ${wsl.stage === "unsupported" ? "text-danger" : "text-caution"}`}>{wsl.message}</p>}
+                    {wsl?.stage === "unsupported" && <p className="mt-2 text-xs text-danger">{wsl.message}</p>}
                     {wslError && <p className="mt-2 text-xs text-danger">{wslError}</p>}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {(!wsl || wsl.stage === "none") && (
-                        <button type="button" onClick={startWsl} disabled={starting || !wsl} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-void disabled:opacity-50">
+                        <button type="button" onClick={() => startWsl(true)} disabled={starting || !wsl} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-void disabled:opacity-50">
                           {starting ? "승인 창을 기다리는 중…" : "설치 시작"}
                         </button>
                       )}
                       {wsl?.stage === "restart" &&
+                        wsl.run !== "running" &&
                         (confirmRestart ? (
                           <>
                             <span className="text-xs text-caution">열어 둔 다른 프로그램의 작업을 저장하셨나요? 20초 뒤 다시 시작합니다.</span>
@@ -241,15 +291,20 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
                             <button type="button" onClick={() => setConfirmRestart(true)} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-void">
                               지금 다시 시작
                             </button>
-                            <button type="button" onClick={startWsl} disabled={starting} className={button} title="승인 창을 놓쳤거나 설치 창이 바로 닫혔을 때 다시 띄웁니다">
+                            <button type="button" onClick={() => startWsl(true)} disabled={starting} className={button} title="승인 창을 놓쳤거나 설치 창이 바로 닫혔을 때 다시 띄웁니다">
                               설치 다시 띄우기
                             </button>
                           </>
                         ))}
-                      {wsl?.stage === "resume" && (
-                        <button type="button" onClick={startWsl} disabled={starting} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-void disabled:opacity-50">
-                          {starting ? "승인 창을 기다리는 중…" : "이어서 설치"}
-                        </button>
+                      {wsl?.stage === "resume" && wsl.run !== "running" && (
+                        <>
+                          <button type="button" onClick={() => startWsl(false)} disabled={starting} className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-void disabled:opacity-50">
+                            {starting ? "띄우는 중…" : "이어서 설치 다시 하기"}
+                          </button>
+                          <button type="button" onClick={() => startWsl(true)} disabled={starting} className={button} title="보통 권한으로 안 될 때. 승인 창에서 [예]를 눌러야 합니다">
+                            관리자 권한으로 다시
+                          </button>
+                        </>
                       )}
                       {wsl?.active && !restarting && (
                         <button type="button" onClick={stopWsl} className="text-xs text-dim hover:text-ink">
@@ -257,7 +312,6 @@ export function SetupWizard({ env, level, missing, installing, aiOn, onLevel, on
                         </button>
                       )}
                     </div>
-                    {wsl?.stage === "resume" && <p className="mt-2 text-xs text-dim">이어서 설치해도 전체 진단이 되지 않으면, PC의 가상화 기능(BIOS의 VT-x/AMD-V)이 꺼져 있을 수 있습니다.</p>}
                     <details className="mt-2 text-xs text-dim">
                       <summary className="cursor-pointer">직접 설치하려면</summary>
                       <p className="mt-1">

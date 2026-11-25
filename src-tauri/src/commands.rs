@@ -59,12 +59,13 @@ pub async fn wsl_setup_status() -> crate::wslsetup::WslSetup {
     crate::wslsetup::status().await
 }
 
-/// WSL 설치를 띄운다. 사용자가 누른 단추에서만 불린다. 승인 창은 사용자가 누른다.
+/// WSL 설치를 띄운다. 사용자가 누른 단추에서, 그리고 사용자가 시작한 설치를 다시 시작한 뒤 이어 갈 때 불린다.
+/// `admin`이면 관리자로 띄운다(승인 창은 사용자가 누른다).
 #[tauri::command]
-pub async fn wsl_setup_start(app: AppHandle) -> Result<crate::wslsetup::WslSetup, String> {
-    crate::wslsetup::start()?;
+pub async fn wsl_setup_start(app: AppHandle, admin: bool) -> Result<crate::wslsetup::WslSetup, String> {
+    crate::wslsetup::start(admin)?;
     if let Ok(dir) = data_dir(&app) {
-        audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "setup", tool: "wsl-install", argv: &["--install".into(), "-d".into(), "Ubuntu".into(), "--no-launch".into()], risk: Risk::Caution, root: true, confirmed: true });
+        audit::log(&dir, &AuditEntry { time: audit::now(), run_id: 0, level: Level::General, source: "setup", tool: "wsl-install", argv: &["--install".into(), "-d".into(), "Ubuntu".into(), "--no-launch".into()], risk: Risk::Caution, root: admin, confirmed: true });
     }
     Ok(crate::wslsetup::status().await)
 }

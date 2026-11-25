@@ -282,9 +282,14 @@ export interface WslSetup {
   active: boolean;
   build: number;
   message: string;
+  /** 이번에 띄운 설치 창: 띄운 적 없음, 도는 중, 끝남, 오류로 끝남 */
+  run: "" | "running" | "done" | "failed";
+  exit: number;
+  run_secs: number;
 }
 
 export const wslSetupStatus = () => invoke<WslSetup>("wsl_setup_status");
-export const wslSetupStart = () => invoke<WslSetup>("wsl_setup_start");
+/** admin: 관리자로 띄운다(승인 창). 다시 시작한 뒤 이어 갈 때는 보통 권한으로 먼저 띄운다. */
+export const wslSetupStart = (admin: boolean) => invoke<WslSetup>("wsl_setup_start", { admin });
 export const wslSetupRestart = () => invoke<void>("wsl_setup_restart");
 export const wslSetupClear = () => invoke<void>("wsl_setup_clear");

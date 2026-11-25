@@ -20,6 +20,47 @@ pub struct WslSetup {
     pub active: bool,
     pub build: u32,
     pub message: String,
+    /// 이번에 켜진 동안 띄운 설치 창: ""(띄운 적 없음), running(도는 중), done(끝남), failed(오류로 끝남)
+    pub run: &'static str,
+    /// 설치 창이 끝났을 때의 종료 코드(끝나지 않았으면 0)
+    pub exit: u32,
+    /// 설치 창을 띄운 뒤 지난 초(도는 중일 때), 끝났으면 걸린 초
+    pub run_secs: u64,
+}
+
+/// 이번에 띄운 설치 창 하나의 경과. NetX를 다시 켜면 잊는다.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Run {
+    pub began: u64,
+    pub ended: Option<(u64, u32)>,
+}
+
+static RUN: std::sync::Mutex<Option<Run>> = std::sync::Mutex::new(None);
+
+fn clock() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn run_began() {
+    *RUN.lock().unwrap_or_else(|e| e.into_inner()) = Some(Run { began: clock(), ended: None });
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn run_ended(code: u32) {
+    if let Some(run) = RUN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        run.ended = Some((clock(), code));
+    }
+}
+
+/// 화면에 보일 설치 창의 상태: (낱말, 종료 코드, 초)
+pub fn run_view(run: Option<Run>, now: u64) -> (&'static str, u32, u64) {
+    match run {
+        None => ("", 0, 0),
+        Some(Run { began, ended: None }) => ("running", 0, now.saturating_sub(began)),
+        Some(Run { began, ended: Some((at, 0)) }) => ("done", 0, at.saturating_sub(began)),
+        Some(Run { began, ended: Some((at, code)) }) => ("failed", code, at.saturating_sub(began)),
+    }
 }
 
 /// 지금 어느 단계인가. `started`는 설치를 띄운 때(초, 없으면 0), `boot`는 PC가 켜진 때(초).
@@ -54,16 +95,20 @@ pub async fn status() -> WslSetup {
         && let Ok(forced) = std::env::var("NETX_TEST_WSLSETUP")
         && let Some(s) = ["none", "restart", "resume", "unsupported"].into_iter().find(|s| *s == forced)
     {
-        return WslSetup { stage: s, active: s != "none" && s != "unsupported", build: MIN_BUILD, message: message(s, MIN_BUILD) };
+        let run = std::env::var("NETX_TEST_WSLRUN").ok().and_then(|r| ["running", "done", "failed"].into_iter().find(|x| *x == r)).unwrap_or("");
+        return WslSetup { stage: s, active: s != "none" && s != "unsupported", build: MIN_BUILD, message: message(s, MIN_BUILD), run, exit: if run == "failed" { 1 } else { 0 }, run_secs: 75 };
     }
     let (build, started) = (os::build(), os::started());
     let s = stage(full, build, started, sysinfo::System::boot_time());
-    WslSetup { stage: s, active: started > 0, build, message: message(s, build) }
+    let (run, exit, run_secs) = run_view(*RUN.lock().unwrap_or_else(|e| e.into_inner()), clock());
+    WslSetup { stage: s, active: started > 0, build, message: message(s, build), run, exit, run_secs }
 }
 
 /// 설치를 띄운다(처음이든 다시 시작한 뒤든 같은 명령이다 — 이미 된 단계는 Windows가 건너뛴다).
-pub fn start() -> Result<(), String> {
-    os::install()
+/// `admin`: 관리자로 띄운다(승인 창). 처음(Windows 기능 켜기)에는 필요하다. 다시 시작한 뒤 Ubuntu만 받을 때는
+/// 보통 권한으로 먼저 띄운다 — 그래야 승인 창 없이 이어지고, 쓰는 계정에 Ubuntu가 등록된다.
+pub fn start(admin: bool) -> Result<(), String> {
+    os::install(admin)
 }
 
 /// 다시 켜지면 NetX가 한 번 스스로 뜨게 해 두고, 20초 뒤 PC를 다시 시작한다.
@@ -117,8 +162,10 @@ mod os {
         RegKey::predef(HKEY_CURRENT_USER).open_subkey(OWN_KEY).and_then(|k| k.get_value::<String, _>(STARTED)).ok().and_then(|v| v.parse().ok()).unwrap_or(0)
     }
 
-    pub fn install() -> Result<(), String> {
-        use windows::Win32::UI::Shell::ShellExecuteW;
+    pub fn install(admin: bool) -> Result<(), String> {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+        use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
         use windows::core::{HSTRING, PCWSTR, w};
         if build() < super::MIN_BUILD {
@@ -127,19 +174,44 @@ mod os {
         let file = HSTRING::from(system("wsl.exe")?.as_os_str());
         let args = HSTRING::from(INSTALL_ARGS);
         // "runas": 관리자로 실행. Windows가 승인 창을 띄우고 사용자가 [예]를 눌러야 시작된다.
-        let result = unsafe { ShellExecuteW(None, w!("runas"), &file, &args, PCWSTR::null(), SW_SHOWNORMAL) };
-        match result.0 as isize {
-            code if code > 32 => {
-                let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(OWN_KEY).map_err(|e| format!("설치 상태를 적지 못했습니다: {e}"))?;
-                // 다시 시작한 뒤 이어서 띄울 때는 처음 시작한 때를 그대로 둔다(그래야 "다시 시작했음"을 안다).
-                if started() == 0 {
-                    key.set_value(STARTED, &now().to_string()).map_err(|e| format!("설치 상태를 적지 못했습니다: {e}"))?;
-                }
-                Ok(())
-            }
-            5 => Err("설치를 시작하지 못했습니다. 관리자 승인 창에서 [예]를 눌러야 합니다.".into()),
-            code => Err(format!("설치 명령을 실행하지 못했습니다 (오류 {code}).")),
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: SEE_MASK_NOCLOSEPROCESS,
+            lpVerb: if admin { w!("runas") } else { w!("open") },
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(args.as_ptr()),
+            nShow: SW_SHOWNORMAL.0,
+            ..Default::default()
+        };
+        if let Err(e) = unsafe { ShellExecuteExW(&mut info) } {
+            // 1223: 사용자가 승인 창에서 [아니요]를 눌렀다.
+            return Err(if (e.code().0 as u32 & 0xFFFF) == 1223 { "설치를 시작하지 못했습니다. 관리자 승인 창에서 [예]를 눌러야 합니다.".into() } else { format!("설치 명령을 실행하지 못했습니다 ({e}).") });
         }
+        let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(OWN_KEY).map_err(|e| format!("설치 상태를 적지 못했습니다: {e}"))?;
+        // 다시 시작한 뒤 이어서 띄울 때는 처음 시작한 때를 그대로 둔다(그래야 "다시 시작했음"을 안다).
+        if started() == 0 {
+            key.set_value(STARTED, &now().to_string()).map_err(|e| format!("설치 상태를 적지 못했습니다: {e}"))?;
+        }
+        super::run_began();
+        // 설치 창이 끝나는 것을 기다렸다가 종료 코드를 적는다(화면이 "끝났습니다"를 보이게).
+        let raw = info.hProcess.0 as usize;
+        if raw != 0 {
+            std::thread::spawn(move || {
+                let process = HANDLE(raw as _);
+                let mut code = 0u32;
+                unsafe {
+                    WaitForSingleObject(process, INFINITE);
+                    if GetExitCodeProcess(process, &mut code).is_err() {
+                        code = 0;
+                    }
+                    let _ = CloseHandle(process);
+                }
+                super::run_ended(code);
+            });
+        } else {
+            super::run_ended(0);
+        }
+        Ok(())
     }
 
     pub fn restart() -> Result<(), String> {
@@ -174,7 +246,7 @@ mod os {
     pub fn started() -> u64 {
         0
     }
-    pub fn install() -> Result<(), String> {
+    pub fn install(_admin: bool) -> Result<(), String> {
         Err("WSL 설치는 Windows에서만 합니다".into())
     }
     pub fn restart() -> Result<(), String> {
@@ -198,5 +270,10 @@ mod tests {
         assert_eq!(stage(false, 26100, 200, 300), "resume");
         assert_eq!(stage(true, 26100, 200, 300), "ready");
         assert!(message("unsupported", 18363).contains("19041"));
+        // 설치 창의 경과
+        assert_eq!(run_view(None, 500), ("", 0, 0));
+        assert_eq!(run_view(Some(Run { began: 400, ended: None }), 500), ("running", 0, 100));
+        assert_eq!(run_view(Some(Run { began: 400, ended: Some((460, 0)) }), 500), ("done", 0, 60));
+        assert_eq!(run_view(Some(Run { began: 400, ended: Some((410, 1)) }), 500), ("failed", 1, 10));
     }
 }
