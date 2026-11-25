@@ -776,9 +776,11 @@ export function CollectView({ initial = "dashboard" }: { initial?: Tab }) {
           {!ov ? (
             <p className="text-sm text-dim">읽는 중…</p>
           ) : tab === "dashboard" ? (
-            !ov.config.receive && board.pcs.length === 0 ? (
+            // 받기를 끈 PC(거점으로 바뀐 PC 포함)에서는 지난 기록이 남아 있어도 대시보드를 그리지 않는다. 기록은 지우지 않는다.
+            !ov.config.receive ? (
               <p className="rounded border border-line px-3 py-8 text-center text-sm text-dim">
                 이 PC는 관제 PC로 쓰고 있지 않습니다. 거점을 여기서 관리하려면 "이 PC를 관제 PC로" 탭에서 켜세요. 이 PC가 거점이면 "보내기" 탭을 쓰세요.
+                {board.pcs.length > 0 && <span className="mt-2 block">전에 받아 둔 기록은 지우지 않았습니다. "받은 결과" 탭에서 볼 수 있고, 다시 관제 PC로 켜면 대시보드에 나옵니다.</span>}
               </p>
             ) : (
               <FleetDashboard onError={setError} />
