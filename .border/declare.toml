@@ -7,6 +7,14 @@ where = "docs/DEV_PLAN_v0.1.md"
 
 [[declare]]
 what = "고침"
+where = "src-tauri/Cargo.lock"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/Cargo.toml"
+
+[[declare]]
+what = "고침"
 where = "src-tauri/build.rs"
 
 [[declare]]
@@ -42,8 +50,16 @@ what = "고침"
 where = "src-tauri/src/lib.rs"
 
 [[declare]]
+what = "고침"
+where = "src-tauri/src/updater.rs"
+
+[[declare]]
 what = "만듦"
 where = "src-tauri/src/wslsetup.rs"
+
+[[declare]]
+what = "고침"
+where = "src-tauri/tauri.conf.json"
 
 [[declare]]
 what = "고침"

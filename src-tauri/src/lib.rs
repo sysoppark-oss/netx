@@ -72,9 +72,43 @@ mod window_tests {
     }
 }
 
+/// 웹뷰가 옮겨 가도 되는 주소인지: NetX 자기 화면뿐이다.
+/// Windows는 `http(s)://tauri.localhost`, 그 밖에는 `tauri://localhost`. 개발 빌드에서만 개발 서버(`localhost:1420`)를 더 받는다.
+pub fn may_navigate(url: &url::Url, debug: bool) -> bool {
+    let host = url.host_str().unwrap_or("");
+    match url.scheme() {
+        "tauri" => host == "localhost",
+        "http" | "https" if host == "tauri.localhost" => true,
+        "http" if debug => (host == "localhost" || host == "127.0.0.1") && url.port() == Some(1420),
+        "about" => url.as_str() == "about:blank",
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::may_navigate;
+
+    #[test]
+    fn the_webview_stays_on_its_own_pages() {
+        let go = |s: &str, debug: bool| may_navigate(&url::Url::parse(s).unwrap(), debug);
+        for own in ["tauri://localhost/", "tauri://localhost/index.html", "http://tauri.localhost/", "https://tauri.localhost/index.html#x", "about:blank"] {
+            assert!(go(own, false), "{own}");
+        }
+        for out in ["https://example.com/", "http://localhost:1420/", "http://127.0.0.1:1420/", "http://tauri.localhost.evil.com/", "https://evil.com/tauri.localhost", "tauri://evil/", "file:///C:/Windows/win.ini", "data:text/html,x", "javascript:alert(1)", "about:srcdoc", "ms-settings:", "http://192.168.0.1/"] {
+            assert!(!go(out, false), "{out}");
+        }
+        assert!(go("http://localhost:1420/", true), "개발 서버는 개발 빌드에서만");
+        assert!(!go("http://localhost:8080/", true));
+        assert!(!go("https://example.com/", true));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 화면(웹뷰)은 NetX 자기 화면 밖의 주소로 옮겨 가지 못한다. 바깥 글자에 링크가 섞여 들어와도 따라가지 않는다.
+        .plugin(tauri::plugin::Builder::<tauri::Wry>::new("stay-home").on_navigation(|_webview, url| may_navigate(url, cfg!(debug_assertions))).build())
         // 창을 하나만 띄운다. 다시 실행하면 이미 떠 있는 창을 앞으로 가져온다.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             use tauri::Manager;

@@ -153,11 +153,26 @@ fn unwrap_base64(text: &str) -> Option<String> {
 
 /// `data`가 `public_key`의 짝인 개인 키로 서명된 것인지 확인한다.
 /// `sig_file`은 Tauri 서명 도구가 만든 `.sig` 파일의 내용, `public_key`는 Tauri 형식 공개 키다.
-pub fn verify_signature(data: &[u8], sig_file: &str, public_key: &str) -> Result<(), String> {
+pub fn verify_signature(data: &[u8], sig_file: &str, public_key: &str) -> Result<String, String> {
     const BAD: &str = "설치 파일의 서명을 확인하지 못했습니다. 설치하지 않았습니다.";
     let key = unwrap_base64(public_key).and_then(|k| minisign_verify::PublicKey::decode(&k).ok()).ok_or("업데이트 공개 키가 올바르지 않습니다.")?;
     let sig = unwrap_base64(sig_file).and_then(|s| minisign_verify::Signature::decode(&s).ok()).ok_or(BAD)?;
-    key.verify(data, &sig, true).map_err(|_| BAD.to_string())
+    key.verify(data, &sig, true).map_err(|_| BAD.to_string())?;
+    Ok(sig.trusted_comment().to_string())
+}
+
+/// 서명 안에 든 글(서명 도구가 적고 서명으로 묶인 "trusted comment": `timestamp:<초>\tfile:<이름>`)로
+/// 이 설치 파일이 **이 채널의 것이고 내 빌드보다 나중에 서명된 것**인지 본다.
+/// manifest.txt는 서명되지 않으므로, 빌드 가지에 쓸 수 있게 된 공격자가 예전에 정식으로 서명된 옛 설치 파일을
+/// "새 빌드"라고 적어 올리거나(되돌리기) 다른 채널의 설치 파일을 올리는 것을 여기서 막는다.
+pub fn check_fresh(trusted: &str, name: &str, my_built: u64) -> Result<(), String> {
+    const STALE: &str = "올라온 설치 파일이 이 채널의 새 빌드가 아닙니다(서명에 적힌 이름이나 시각이 맞지 않음). 설치하지 않았습니다.";
+    let field = |key: &str| trusted.split('\t').find_map(|part| part.trim().strip_prefix(key)?.strip_prefix(':'));
+    let signed_at: u64 = field("timestamp").and_then(|v| v.parse().ok()).ok_or(STALE)?;
+    if field("file") != Some(name) || signed_at <= my_built {
+        return Err(STALE.into());
+    }
+    Ok(())
 }
 
 /// 설치 파일과 서명을 내려받아 SHA-256과 서명이 모두 맞을 때만 `dir`에 저장한다.
@@ -168,7 +183,8 @@ pub async fn download(m: &Manifest, dir: &Path) -> Result<PathBuf, String> {
         return Err("내려받은 설치 파일이 올라온 것과 다릅니다(SHA-256 불일치). 설치하지 않았습니다.".into());
     }
     let sig = fetch(&format!("{name}.sig"), MAX_SIG_BYTES).await.map_err(|e| format!("설치 파일의 서명을 받지 못했습니다. 설치하지 않았습니다. ({e})"))?;
-    verify_signature(&data, &String::from_utf8_lossy(&sig), PUBLIC_KEY)?;
+    let trusted = verify_signature(&data, &String::from_utf8_lossy(&sig), PUBLIC_KEY)?;
+    check_fresh(&trusted, name, BUILT_UNIX.parse().unwrap_or(u64::MAX))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("업데이트 폴더를 만들지 못했습니다: {e}"))?;
     let path = dir.join(name);
     // 앞서 잡아 둔 파일이 있으면 놓는다(같은 이름으로 다시 쓰기 위해).
@@ -307,9 +323,24 @@ mod tests {
     const TEST_DATA: &[u8] = b"netx signature test payload\n";
 
     #[test]
+    fn only_a_newer_build_of_this_channel_is_fresh() {
+        let dev = "timestamp:1795183095\tfile:NetX-dev-setup.exe";
+        assert!(check_fresh(dev, "NetX-dev-setup.exe", 1795183000).is_ok());
+        // 내 빌드보다 먼저(또는 같은 때) 서명된 것: 옛 빌드를 새 빌드라고 올린 경우
+        assert!(check_fresh(dev, "NetX-dev-setup.exe", 1795183095).is_err());
+        assert!(check_fresh(dev, "NetX-dev-setup.exe", 1795999999).is_err());
+        // 다른 채널의 설치 파일
+        assert!(check_fresh(dev, "NetX-setup.exe", 1795183000).is_err());
+        // 서명 글이 없거나 모양이 다르면 거절(통과로 치지 않는다)
+        for bad in ["", "file:NetX-dev-setup.exe", "timestamp:abc\tfile:NetX-dev-setup.exe", "timestamp:-1\tfile:NetX-dev-setup.exe", "timestamp:1795183095", "timestamp:1795183095 file:NetX-dev-setup.exe", "timestamp:99999999999999999999999\tfile:NetX-dev-setup.exe"] {
+            assert!(check_fresh(bad, "NetX-dev-setup.exe", 1795183000).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn signature_must_match_data_and_key() {
-        assert_eq!(verify_signature(TEST_DATA, TEST_SIG, TEST_PUB), Ok(()));
-        assert_eq!(verify_signature(TEST_DATA, &format!("  {TEST_SIG}\r\n"), TEST_PUB), Ok(()), "앞뒤 공백과 줄바꿈은 괜찮다");
+        assert!(verify_signature(TEST_DATA, TEST_SIG, TEST_PUB).is_ok());
+        assert!(verify_signature(TEST_DATA, &format!("  {TEST_SIG}\r\n"), TEST_PUB).is_ok(), "앞뒤 공백과 줄바꿈은 괜찮다");
         // 내용이 한 글자라도 다르면 거절
         assert!(verify_signature(b"netx signature test payloae\n", TEST_SIG, TEST_PUB).is_err());
         assert!(verify_signature(b"", TEST_SIG, TEST_PUB).is_err());
