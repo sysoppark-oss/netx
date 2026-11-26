@@ -7,6 +7,14 @@ name: Windows 빌드
 # 설치된 NetX는 자기 채널의 manifest.txt를 보고 새 빌드가 올라오면 스스로 업데이트한다(src-tauri/src/updater.rs).
 # manifest.txt의 형식과 파일 이름을 바꾸면 updater.rs도 함께 바꿔야 한다.
 # 설치 파일에는 업데이트 서명(<설치 파일>.sig)을 함께 올린다. 서명 키는 저장소 비밀값 TAURI_SIGNING_PRIVATE_KEY(와 _PASSWORD).
+#
+# 지키는 것 (2026-11-26 취약점 검사 A1~A3):
+#  - 남이 만든 액션은 꼬리표가 아니라 커밋(40자)으로 고정한다. 올릴 때는 그 저장소의 꼬리표가 가리키는 커밋을 다시 확인한다.
+#  - 작업을 둘로 나눈다. "짓기"에는 비밀값이 없고 저장소를 읽기만 한다. 서명 키와 쓰기 권한은 "서명해서 올리기"에만 있다.
+#    짓기 작업의 액션·빌드 스크립트·라이브러리가 나쁜 코드로 바뀌어도 서명 키를 볼 수 없다.
+#    (그래도 그 한 번의 빌드 결과는 바꿀 수 있다 — 이것은 이 구조로 막지 못한다.)
+#  - npm은 설치 스크립트를 돌리지 않는다(--ignore-scripts). 잠금 파일의 무결성 값과 맞는 것만 깔린다.
+#  - 서명해서 올리기 작업은 캐시를 받지 않는다(다른 실행이 넣은 것이 섞이지 않게).
 on:
   push:
     branches: [main, dev]
@@ -18,27 +26,34 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    name: 짓기
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Rust는 실행기에 깔려 있는 rustup으로 맞춘다(남이 만든 액션을 하나 덜 쓴다).
+      - name: Rust 안정판
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
 
       - name: 프론트엔드 의존성 설치
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: 백엔드 단위 테스트
         working-directory: src-tauri
@@ -48,7 +63,7 @@ jobs:
         run: npm run tauri build
 
       - name: 설치 파일 업로드
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: NetX-windows-${{ github.sha }}
           path: |
@@ -57,14 +72,42 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  publish:
+    name: 서명해서 올리기
+    needs: build
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # 서명 도구(@tauri-apps/cli)만 쓴다. 잠금 파일대로, 설치 스크립트 없이.
+      - name: 서명 도구 설치
+        run: npm ci --ignore-scripts
+
+      - name: 지은 설치 파일 받기
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: NetX-windows-${{ github.sha }}
+          path: built
+
       - name: 설치 파일을 <브랜치>-builds 브랜치에 게시
-        if: github.event_name == 'push' && (github.ref_name == 'dev' || github.ref_name == 'main')
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          PUSH_TOKEN: ${{ github.token }}
         run: |
-          $setup = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe | Select-Object -First 1
+          $found = @(Get-ChildItem built -Recurse -Filter *-setup.exe)
+          if ($found.Count -ne 1) { throw "설치 파일이 하나여야 합니다(찾은 수: $($found.Count))." }
+          $setup = $found[0]
           $d = Join-Path $env:RUNNER_TEMP "devbuilds"
           New-Item -ItemType Directory -Force $d | Out-Null
           $branch = "$env:GITHUB_REF_NAME-builds"
@@ -84,6 +127,8 @@ jobs:
           git -C $d checkout -q --orphan $branch
           git -C $d add -A
           git -C $d -c user.name="devbuild" -c user.email="devbuild@users.noreply.github.com" commit -q -m "$env:GITHUB_REF_NAME build $env:GITHUB_SHA"
-          $url = "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git -C $d push -q -f $url $branch
+          # 토큰은 주소에 적지 않고 이 한 번의 push에만 머리글로 넘긴다.
+          $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:PUSH_TOKEN"))
+          git -C $d -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic" push -q -f "https://github.com/$env:GITHUB_REPOSITORY.git" $branch
+          if ($LASTEXITCODE -ne 0) { throw "빌드 가지에 올리지 못했습니다." }
           Get-Content (Join-Path $d "manifest.txt")

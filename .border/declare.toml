@@ -3,6 +3,10 @@
 
 [[declare]]
 what = "고침"
+where = ".github/workflows/build-windows.yml"
+
+[[declare]]
+what = "고침"
 where = "docs/DEV_PLAN_v0.1.md"
 
 [[declare]]
